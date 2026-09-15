@@ -10,3 +10,14 @@ test-results
 playwright-report
 .wrangler
 cloudflare/.wrangler
+mobile/ios
+mobile/android
+mobile/.expo
+mobile/.credentials
+mobile/artifacts
+mobile/dist
+.tools
+*.ipa
+*.apk
+*.keystore
+*.jks

@@ -1,0 +1,26 @@
+appId: com.asidefm.app.dev
+---
+- launchApp:
+    permissions:
+      all: deny
+- tapOn:
+    id: public-library
+    waitToSettleTimeoutMs: 1000
+- tapOn:
+    id: episode-mobile-sample
+    waitToSettleTimeoutMs: 1000
+- tapOn:
+    id: hold-to-talk
+    waitToSettleTimeoutMs: 1000
+- extendedWaitUntil:
+    visible:
+      id: microphone-settings
+    timeout: 10000
+- assertVisible: Play
+- assertVisible: "Microphone access is off.*"
+- takeScreenshot: microphone-denied
+- tapOn:
+    id: microphone-settings
+    waitToSettleTimeoutMs: 1000
+- waitForAnimationToEnd
+- takeScreenshot: microphone-system-settings

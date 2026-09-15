@@ -1,0 +1,15 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    "../player-runtime/src/**/*.ts",
+    "../engine/src/core.ts",
+    "../engine/src/contracts.ts"
+  ],
+  "exclude": ["node_modules", "tests", "ios", "android"]
+}

@@ -39,6 +39,16 @@ for (const path of [
   const source = await readFile(path, "utf8");
   if (/from\s+['"]node:(?:fs|path)/.test(source)) errors.push(path);
 }
+for (const path of await files("player-runtime/src")) {
+  const source = await readFile(path, "utf8");
+  if (
+    /from\s+['"](?:react|expo|node:|.*frontend|.*backend|.*mobile)/.test(
+      source,
+    ) ||
+    /\b(?:window\.|document\.|MediaStream|HTMLAudioElement)\b/.test(source)
+  )
+    errors.push(path);
+}
 if (errors.length)
   throw Error(`Forbidden module dependency: ${errors.join(", ")}`);
 console.log("Module boundaries passed");

@@ -1,0 +1,45 @@
+
+> test:cloudflare
+> node --import tsx --test tests/cloudflare/*.test.mjs
+
+✔ email login creates a stable owner, claims visitor episodes, and protects profile (850.665542ms)
+✔ parallel guesses cannot exceed the email code attempt limit (95.300458ms)
+✔ Google callback validates state and links a verified email to one account (47.318958ms)
+✔ third-party Google email requires current email proof before linking (84.9555ms)
+✔ real Worker + D1/R2 isolate private episodes, public checkpoints and byte ranges (166.655959ms)
+✔ signed sessions cannot be forged; quota reservations are atomic under concurrency (247.397167ms)
+✔ multipart upload validates size/ownership and completes idempotently into a real Workflow (222.296333ms)
+✔ upload quota allows 100 active or completed files per account per UTC month and frees cancellations (237.058833ms)
+✔ parallel upload starts cannot exceed an account's storage cap (95.444792ms)
+✔ personal Space isolates accounts and deletion removes private data without refunding a completed upload (222.992625ms)
+✔ question stream, Live ownership and server-reserved quotas use network-only adapter (103.202458ms)
+✔ analysis retries reuse durable transcript/audio, survive temporary media loss and persist evidence (945.037917ms)
+✔ segments analyze concurrently up to ANALYSIS_CONCURRENCY and assemble in timeline order (2267.171834ms)
+✔ actual FFmpeg service probes, segments, rejects invalid media and reports an unprepared source (241.867834ms)
+✔ actual FFmpeg service cuts contiguous segments at pauses from one speech track (1289.449834ms)
+✔ real media probe accepts exactly five hours and rejects one second more before analysis (83.172875ms)
+✔ actual FFmpeg service extracts embedded artwork only when the file has one (313.717625ms)
+✔ analysis stores extracted artwork and never fails over a lost cover (1086.604208ms)
+✔ production Workflow orchestrates R2, model adapters, D1 and container binding (223.712875ms)
+✔ admission failure blocks an upload and removes its original before any model request (97.00325ms)
+✔ repeated upload completion cannot restart failed analysis without a quota reservation (15.65ms)
+✔ trial proof is mandatory, bound to visitor/IP/hostname/action, and tokens cannot replay (110.143084ms)
+✔ signed-in accounts skip Turnstile but retain paid question quotas (133.601458ms)
+✔ five question reservations are enforced before providers; kill switch preserves playback (125.277833ms)
+✔ parallel lease acquisition has one winner and stale releases cannot unlock another request (323.806917ms)
+✔ voice deadline sends server-side session.close without browser cooperation (76.993458ms)
+✔ unconfirmed voice close retains lease and trips breaker despite browser finalization (115.603166ms)
+✔ oversized history and malformed/long WAV are rejected before any model call (50.081375ms)
+Aside API request failed { path: '/api/episodes/public/live' }
+✔ definitively rejected Live request consumes quota but releases concurrency without global breaker (71.965708ms)
+✔ D1 stores large Unicode artifacts atomically and keeps structured data out of R2 (400.452083ms)
+✔ mobile bearer session shares the website account, enforces isolation, and revokes on logout (111.47625ms)
+✔ checkpoint writes use compare-and-swap and cannot overwrite a newer device (109.749916ms)
+ℹ tests 32
+ℹ suites 0
+ℹ pass 32
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 11229.31725

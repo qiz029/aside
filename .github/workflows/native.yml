@@ -1,0 +1,79 @@
+name: Native validation builds
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Native platform to validate
+        type: choice
+        options: [both, ios, android]
+        default: both
+permissions:
+  contents: read
+concurrency:
+  group: native-${{ github.ref }}-${{ inputs.platform }}
+  cancel-in-progress: true
+jobs:
+  ios-simulator:
+    if: inputs.platform != 'android'
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+          working-directory: mobile
+      - run: npx expo prebuild --platform ios --no-install
+        working-directory: mobile
+        env:
+          APP_VARIANT: local
+      - run: bundle exec pod install
+        working-directory: mobile/ios
+        env:
+          LANG: en_US.UTF-8
+      - run: >-
+          xcodebuild -jobs 2 -workspace AsideDev.xcworkspace -scheme AsideDev
+          -configuration Release -sdk iphonesimulator
+          -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath build CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-
+        working-directory: mobile/ios
+      - run: ditto -c -k --keepParent mobile/ios/build/Build/Products/Release-iphonesimulator/AsideDev.app AsideDev-simulator.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-simulator-validation
+          path: AsideDev-simulator.zip
+  android:
+    if: inputs.platform != 'ios'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;27.1.12297006'
+      - run: npm ci
+      # This ephemeral CI key is for build validation only. Distribution uses
+      # the backed-up local key or the persistent EAS project credentials.
+      - run: npm run build:apk:local -w @aside/mobile
+        env:
+          APP_VARIANT: local
+          ASIDE_ANDROID_ARCHITECTURES: arm64-v8a
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-validation-only
+          path: mobile/android/app/build/outputs/apk/release/app-release.apk

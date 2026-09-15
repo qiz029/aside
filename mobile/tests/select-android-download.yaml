@@ -1,0 +1,30 @@
+# The Android system picker may consume its first navigation tap while opening.
+# Re-enter Downloads if its list is still absent; never select the file twice.
+appId: com.asidefm.app.dev
+---
+- repeat:
+    times: 2
+    commands:
+      - runFlow:
+          when:
+            notVisible: Aside-upload.wav
+          commands:
+            - tapOn:
+                text: Show roots
+                waitToSettleTimeoutMs: 1000
+                retryTapIfNoChange: false
+            - extendedWaitUntil:
+                visible: Open from
+                timeout: 5000
+            - waitForAnimationToEnd
+            - tapOn:
+                text: Downloads
+                waitToSettleTimeoutMs: 1000
+                retryTapIfNoChange: false
+            - waitForAnimationToEnd
+- extendedWaitUntil:
+    visible: Aside-upload.wav
+    timeout: 5000
+- tapOn:
+    text: Aside-upload.wav
+    waitToSettleTimeoutMs: 1000

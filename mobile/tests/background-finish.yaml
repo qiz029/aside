@@ -1,0 +1,10 @@
+appId: com.asidefm.app.dev
+---
+- launchApp:
+    stopApp: false
+- assertVisible: Pause
+- takeScreenshot: background-finish
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: play-toggle
+- assertVisible: Play

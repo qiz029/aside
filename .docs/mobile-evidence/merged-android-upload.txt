@@ -1,0 +1,16 @@
+Running on emulator-5554
+ > Flow upload-android
+Launch app "com.asidefm.app.dev" without stopping app... COMPLETED
+Tap on id: tab-upload... COMPLETED
+Tap on id: choose-audio... COMPLETED
+Run select-android-download.yaml...
+  Repeat 2 times...
+    Run flow when "Aside-upload.wav" is not visible...
+    Run flow when "Aside-upload.wav" is not visible... SKIPPED
+  Repeat 2 times... COMPLETED
+  Assert that "Aside-upload.wav" is visible... COMPLETED
+  Tap on "Aside-upload.wav"... COMPLETED
+Run select-android-download.yaml... COMPLETED
+Assert that id: transcript is visible... COMPLETED
+Assert that "Aside-upload.wav" is visible... COMPLETED
+Take screenshot uploaded-episode... COMPLETED

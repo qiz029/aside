@@ -1,0 +1,7 @@
+Running on iPhone 16 Pro - iOS 18.3 - 738E7FBC-4993-4B79-8ECD-3B22759F4A7A
+ > Flow upload-retry
+Tap on (Optional) id: dismiss-error... COMPLETED
+Tap on id: retry-upload... COMPLETED
+Assert that id: transcript is visible... COMPLETED
+Assert that "Aside-upload.wav" is visible... COMPLETED
+Take screenshot retry-completed... COMPLETED

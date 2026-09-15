@@ -1,3 +1,4 @@
+import { normalizeQuestion } from "../question-audio.js";
 import Fastify from "fastify";
 import { createReadStream, createWriteStream } from "node:fs";
 import { mkdir, rm, stat, rename, readFile, writeFile } from "node:fs/promises";
@@ -35,10 +36,48 @@ export function mediaApp(root: string) {
   );
   app.setErrorHandler((error, _req, reply) =>
     reply
-      .code(error instanceof AdmissionError ? 422 : error instanceof z.ZodError ? 400 : 500)
-      .send({ error: error instanceof AdmissionError ? error.message : "Media operation failed" }),
+      .code(
+        error instanceof AdmissionError
+          ? 422
+          : error instanceof z.ZodError
+            ? 400
+            : 500,
+      )
+      .send({
+        error:
+          error instanceof AdmissionError
+            ? error.message
+            : "Media operation failed",
+      }),
   );
   app.get("/health", async () => ({ ok: true }));
+  let questionBusy = false;
+  app.post("/question", async (req, reply) => {
+    if (questionBusy)
+      return reply.code(429).send({ error: "Question decoder busy" });
+    questionBusy = true;
+    try {
+      const chunks: Buffer[] = [];
+      let total = 0;
+      for await (const chunk of req.raw) {
+        total += chunk.length;
+        if (total > 2 * 1024 * 1024)
+          throw new AdmissionError("Question size limit");
+        chunks.push(Buffer.from(chunk));
+      }
+      let audio: Uint8Array;
+      try {
+        audio = await normalizeQuestion(Buffer.concat(chunks));
+      } catch {
+        throw new AdmissionError(
+          "Question must contain valid audio of at most 30 seconds",
+        );
+      }
+      return reply.type("audio/wav").send(Buffer.from(audio));
+    } finally {
+      questionBusy = false;
+    }
+  });
   app.post<{ Querystring: { id: string } }>("/prepare", async (req, reply) => {
     const id = idSchema.parse(req.query.id);
     if (busy) return reply.code(429).send({ error: "Media processor busy" });
@@ -54,7 +93,8 @@ export function mediaApp(root: string) {
         async function* (source) {
           for await (const chunk of source) {
             size += chunk.length;
-            if (size > MAX_UPLOAD_BYTES) throw new AdmissionError("文件超过 1 GiB 上限");
+            if (size > MAX_UPLOAD_BYTES)
+              throw new AdmissionError("文件超过 1 GiB 上限");
             yield chunk;
           }
         },

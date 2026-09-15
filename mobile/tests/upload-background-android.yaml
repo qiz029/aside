@@ -1,0 +1,29 @@
+appId: com.asidefm.app.dev
+---
+- launchApp:
+    stopApp: false
+- tapOn:
+    id: tab-upload
+    waitToSettleTimeoutMs: 1000
+- tapOn:
+    id: choose-audio
+    waitToSettleTimeoutMs: 1000
+- waitForAnimationToEnd
+- runFlow: select-android-download.yaml
+- extendedWaitUntil:
+    visible:
+      id: cancel-upload
+    timeout: 10000
+- pressKey: Home
+- waitForAnimationToEnd
+- launchApp:
+    stopApp: false
+- waitForAnimationToEnd
+- extendedWaitUntil:
+    visible:
+      id: retry-upload
+    timeout: 15000
+- assertNotVisible:
+    id: cancel-upload
+- assertVisible: "Upload cancelled.*"
+- takeScreenshot: upload-background-cancelled

@@ -70,6 +70,7 @@ const episodes: Episode[] = ["a", "b"].map((id) => ({
 }));
 
 async function mockPlayer(page: Page) {
+  const checkpoints = new Map<string, Record<string, unknown>>();
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/api/health")
@@ -84,7 +85,16 @@ async function mockPlayer(page: Page) {
     if (path === "/api/auth/session")
       return route.fulfill({ json: { user: null } });
     if (path === "/api/episodes") return route.fulfill({ json: episodes });
-    if (path.endsWith("/checkpoint")) return route.fulfill({ json: null });
+    if (path.endsWith("/checkpoint")) {
+      if (route.request().method() === "PUT") {
+        const value = route.request().postDataJSON();
+        const current = checkpoints.get(path);
+        if (value.version !== (current?.version ?? 0))
+          return route.fulfill({ status: 409, json: { error: "Conflict" } });
+        checkpoints.set(path, { ...value, version: value.version + 1 });
+      }
+      return route.fulfill({ json: checkpoints.get(path) ?? null });
+    }
     if (path.endsWith("/audio")) {
       const range = /bytes=(\d+)-(\d*)/.exec(
         route.request().headers().range ?? "",

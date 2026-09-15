@@ -1,0 +1,7 @@
+Running on emulator-5554
+ > Flow upload-retry
+Tap on (Optional) id: dismiss-error... COMPLETED
+Tap on id: retry-upload... COMPLETED
+Assert that id: transcript is visible... COMPLETED
+Assert that "Aside-upload.wav" is visible... COMPLETED
+Take screenshot retry-completed... COMPLETED

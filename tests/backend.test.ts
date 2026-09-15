@@ -164,7 +164,7 @@ test("upload keeps embedded artwork as a bounded JPEG cover; plain audio gets no
       "-v", "error",
       "-f", "lavfi", "-t", "1", "-i", "anullsrc=r=24000:cl=mono",
       ...(picture
-        ? ["-f", "lavfi", "-i", "color=c=red:s=1200x800:d=1", "-map", "0:a", "-map", "1:v", "-frames:v", "1", "-c:v", "png", "-disposition:v", "attached_pic"]
+        ? ["-f", "lavfi", "-i", "color=c=red:s=1200x800:d=1", "-map", "0:a", "-map", "1:v", "-c:v", "png", "-disposition:v", "attached_pic"]
         : []),
       "-c:a", "libmp3lame", "-id3v2_version", "3", path,
     ]);

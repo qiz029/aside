@@ -1,0 +1,12 @@
+Running on iPhone 16 Pro - iOS 18.3 - 738E7FBC-4993-4B79-8ECD-3B22759F4A7A
+ > Flow upload-background-ios
+Tap on point (18%, 27%)... COMPLETED
+Assert that id: cancel-upload is visible... COMPLETED
+Press Home key... COMPLETED
+Wait for animation to end... COMPLETED
+Launch app "com.asidefm.app.dev" without stopping app... COMPLETED
+Wait for animation to end... COMPLETED
+Assert that id: retry-upload is visible... COMPLETED
+Assert that id: cancel-upload is not visible... COMPLETED
+Assert that "Upload cancelled.*" is visible... COMPLETED
+Take screenshot upload-background-cancelled... COMPLETED

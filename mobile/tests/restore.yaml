@@ -1,0 +1,11 @@
+appId: com.asidefm.app.dev
+---
+- tapOn:
+    id: public-library
+- tapOn:
+    id: episode-mobile-sample
+- tapOn:
+    text: Conversation
+- assertVisible: Question
+- assertVisible: A short answer
+- takeScreenshot: restored-conversation

@@ -1,0 +1,10 @@
+Running on Aside Acceptance SE - iOS 18.3 - 50B3B7F3-0ECF-4976-83A0-6F764A6810A9
+ > Flow aside-se-cap-verify
+Tap on id: seek-back... COMPLETED
+Swipe from (50%, 86%) to (50%, 86%) in 32000 ms... COMPLETED
+Assert that "Release to send.*" is not visible... COMPLETED
+Assert that "Pause" is visible... COMPLETED
+Press Home key... COMPLETED
+Launch app "com.asidefm.app.dev" without stopping app... COMPLETED
+Wait for animation to end... COMPLETED
+Take screenshot capped-followup... COMPLETED

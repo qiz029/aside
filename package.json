@@ -5,12 +5,14 @@
   "workspaces": [
     "engine",
     "backend",
-    "frontend"
+    "frontend",
+    "player-runtime",
+    "mobile"
   ],
   "scripts": {
     "dev": "concurrently -k -n api,web \"npm run dev -w @aside/backend\" \"npm run dev -w @aside/frontend\"",
     "build": "npm run check && npm run build -w @aside/frontend",
-    "check": "tsc --noEmit && node scripts/check-boundaries.mjs && npm run check:cloudflare",
+    "check": "tsc --noEmit && node scripts/check-boundaries.mjs && npm run check:cloudflare && npm run check:mobile",
     "test": "node --import tsx --test tests/*.test.ts",
     "test:player-coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-include='engine/src/player.ts' --test-coverage-include='frontend/src/podcast-audio.ts' --test-coverage-include='frontend/src/player-preferences.ts' --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-functions=80 tests/player-config.test.ts tests/podcast-audio.test.ts tests/player-preferences.test.ts",
     "demo": "node --import tsx scripts/create-demo.ts",
@@ -26,7 +28,9 @@
     "migrate:storage": "node --import tsx scripts/migrate-storage.ts",
     "deploy:cloudflare": "npm run build && wrangler deploy --config wrangler.production.jsonc",
     "db:cloudflare:production": "wrangler d1 migrations apply DB --remote --config wrangler.production.jsonc",
-    "export:demo": "node --import tsx scripts/export-public-demo.ts"
+    "export:demo": "node --import tsx scripts/export-public-demo.ts",
+    "check:mobile": "npm run check -w @aside/mobile",
+    "postinstall": "node mobile/scripts/patch-audio.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260911.1",
@@ -34,8 +38,11 @@
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "@types/react-native-webrtc": "^1.75.9",
     "concurrently": "^9.0.0",
     "esbuild": "^0.28.2",
+    "ffmpeg-static": "^5.3.0",
+    "ffprobe-static": "^3.1.0",
     "miniflare": "^5.20260911.0-alpha",
     "prettier": "^3.9.6",
     "tsx": "^4.0.0",
@@ -44,5 +51,9 @@
   },
   "dependencies": {
     "@cloudflare/containers": "^0.3.7"
+  },
+  "volta": {
+    "node": "24.14.1",
+    "npm": "11.11.0"
   }
 }

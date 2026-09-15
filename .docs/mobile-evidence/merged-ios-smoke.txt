@@ -1,0 +1,34 @@
+Running on iPhone 16 Pro - iOS 18.3 - 738E7FBC-4993-4B79-8ECD-3B22759F4A7A
+ > Flow smoke
+Launch app "com.asidefm.app.dev" with clear state... COMPLETED
+Assert that id: episode-mobile-sample is visible... COMPLETED
+Tap on id: tab-account... COMPLETED
+Tap on id: locale-en... COMPLETED
+Tap on id: email... COMPLETED
+Input text ${EMAIL}... COMPLETED
+Tap on id: send-code... COMPLETED
+Tap on id: code... COMPLETED
+Input text 12345678... COMPLETED
+Wait for animation to end... COMPLETED
+Tap on id: sign-in... COMPLETED
+Assert that id: public-library is visible... COMPLETED
+Tap on id: public-library... COMPLETED
+Tap on id: episode-mobile-sample... COMPLETED
+Assert that id: transcript is visible... COMPLETED
+Tap on id: play-toggle... COMPLETED
+Assert that "Pause" is visible... COMPLETED
+Tap on id: seek-forward... COMPLETED
+Tap on id: speed... COMPLETED
+Tap on id: play-toggle... COMPLETED
+Tap on id: question... COMPLETED
+Input text What is curiosity?... COMPLETED
+Tap on id: send-question... COMPLETED
+Assert that "A short answer" is visible... COMPLETED
+Assert that "Pause" is visible... COMPLETED
+Tap on id: tab-account... COMPLETED
+Assert that "${EMAIL}" is visible... COMPLETED
+Tap on id: locale-zh... COMPLETED
+Assert that "???" is visible... COMPLETED
+Tap on id: locale-en... COMPLETED
+Tap on id: sign-out... COMPLETED
+Assert that id: email is visible... COMPLETED

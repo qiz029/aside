@@ -5,6 +5,7 @@ export interface AnalysisJob {
 export interface Env {
   LIVE: DurableObjectNamespace<import("./live-supervisor.js").LiveSupervisor>;
   AI_ENABLED?: string;
+  MOBILE_AUDIO_ENABLED?: string;
   TURNSTILE_SITE_KEY?: string;
   TURNSTILE_SECRET_KEY?: string;
   DB: D1Database;

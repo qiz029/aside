@@ -5,7 +5,9 @@ COPY package.json package-lock.json tsconfig.json ./
 COPY engine/package.json ./engine/package.json
 COPY backend/package.json ./backend/package.json
 COPY frontend/package.json ./frontend/package.json
-RUN npm ci --ignore-scripts
+COPY player-runtime/package.json ./player-runtime/package.json
+COPY mobile/package.json ./mobile/package.json
+RUN npm ci --ignore-scripts --workspace @aside/backend --workspace @aside/engine --include-workspace-root
 COPY engine ./engine
 COPY backend ./backend
 USER node

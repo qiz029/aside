@@ -176,13 +176,26 @@ export function createApp(store: Store, services?: BackendServices) {
   );
   app.put<{ Params: { id: string } }>(
     "/api/episodes/:id/checkpoint",
-    async (req) => {
+    async (req, reply) => {
       const e = get(req.params.id);
       const data = checkpointSchema.parse(req.body);
       data.positionMs = Math.min(data.positionMs, e.durationMs);
       if (data.resumeMs !== undefined)
         data.resumeMs = Math.min(data.resumeMs, e.durationMs);
-      return store.checkpoint(req.params.id, data);
+      const current = store.checkpoint(req.params.id) as {
+        version?: number;
+      } | null;
+      if ((data.version ?? 0) !== (current?.version ?? 0))
+        return reply
+          .code(409)
+          .send({
+            error: "其他设备已更新收听进度",
+            code: "checkpoint_conflict",
+          });
+      return store.checkpoint(req.params.id, {
+        ...data,
+        version: (current?.version ?? 0) + 1,
+      });
     },
   );
   app.post<{ Params: { id: string } }>(

@@ -13,7 +13,7 @@ test("guest can listen first; enabling the microphone requests permission before
   });
   await page.route("**/api/health", async (route) => {
     const response = await route.fetch();
-    await route.fulfill({ json: { ...(await response.json()), trial: true } });
+    await route.fulfill({ json: { ...(await response.json()), trial: true, liveConfigured: true } });
   });
   await page.route("**/api/trial", async (route) => {
     if (route.request().method() === "POST") {
@@ -56,7 +56,7 @@ test("signed-in listener enables the microphone without a Turnstile dialog", asy
   });
   await page.route("**/api/health", async (route) => {
     const response = await route.fetch();
-    await route.fulfill({ json: { ...(await response.json()), trial: true } });
+    await route.fulfill({ json: { ...(await response.json()), trial: true, liveConfigured: true } });
   });
   await page.route("**/api/auth/session", (route) => route.fulfill({ json: { user: { id: "signed-in", alias: "Listener", description: "", avatarUrl: null }, emailEnabled: true, googleEnabled: true } }));
   await page.route("**/api/trial", (route) => {
@@ -85,7 +85,7 @@ for (const locale of ["zh-CN", "en-US"]) {
       await page.route("**/api/health", async (route) => {
         const response = await route.fetch();
         await route.fulfill({
-          json: { ...(await response.json()), trial: true },
+          json: { ...(await response.json()), trial: true, liveConfigured: true },
         });
       });
       await page.route("**/api/trial", async (route) => {

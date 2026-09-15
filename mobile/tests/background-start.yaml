@@ -1,0 +1,22 @@
+appId: com.asidefm.app.dev
+---
+- launchApp
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: tab-library
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: back-library
+    optional: true
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: public-library
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: episode-mobile-long
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: play-toggle
+- assertVisible: Pause
+- takeScreenshot: background-start
+- pressKey: Home

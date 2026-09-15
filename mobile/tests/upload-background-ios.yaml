@@ -1,0 +1,22 @@
+# iPhone 16 Pro, Files open to Aside Dev's Documents folder with Aside-upload.wav.
+appId: com.asidefm.app.dev
+---
+- tapOn:
+    point: 18%, 27%
+- extendedWaitUntil:
+    visible:
+      id: cancel-upload
+    timeout: 10000
+- pressKey: Home
+- waitForAnimationToEnd
+- launchApp:
+    stopApp: false
+- waitForAnimationToEnd
+- extendedWaitUntil:
+    visible:
+      id: retry-upload
+    timeout: 15000
+- assertNotVisible:
+    id: cancel-upload
+- assertVisible: "Upload cancelled.*"
+- takeScreenshot: upload-background-cancelled

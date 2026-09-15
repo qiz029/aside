@@ -1,0 +1,15 @@
+appId: com.asidefm.app.dev
+---
+- launchApp
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: public-library
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: episode-mobile-sample
+- longPressOn:
+    id: hold-to-talk
+- extendedWaitUntil:
+    visible: A short answer
+    timeout: 45000
+- takeScreenshot: voice-answer

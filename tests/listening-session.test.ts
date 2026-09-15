@@ -242,6 +242,21 @@ function setup(
   };
 }
 
+test("loading a checkpoint publishes only its complete state to persistence subscribers", () => {
+  const s = setup();
+  s.session.start();
+  const observed: ReturnType<typeof s.session.checkpoint>[] = [];
+  s.session.subscribe(() => observed.push(s.session.checkpoint()));
+  const history = [
+    { role: "user" as const, text: "Restored question" },
+    { role: "assistant" as const, text: "Restored answer" },
+  ];
+  s.session.load({ ...episode, id: "another" }, { positionMs: 5000, history });
+  assert.equal(observed.length, 1);
+  assert.equal(observed[0].positionMs, 5000);
+  assert.deepEqual(observed[0].history, history);
+});
+
 test("complete text action cancels older work and resumes at the fixed semantic anchor", async () => {
   const s = setup();
   s.session.start();
@@ -407,6 +422,48 @@ test("a late failure from an old play promise cannot stop a newer manual recordi
   assert.equal(s.captures, 1);
   assert.equal(s.session.getSnapshot().manualHeld, true);
   assert.equal(s.session.getSnapshot().error, "");
+  s.session.dispose();
+});
+
+test("background keeps native podcast playback but cancels an unfinished question", async () => {
+  const s = setup("manual");
+  s.session.start();
+  await flush();
+  s.session.background();
+  assert.equal(s.audio.playing, true);
+  s.session.submitQuestion("An unfinished question");
+  assert.equal(s.requests.length, 1);
+  s.session.background();
+  assert.equal(s.audio.playing, false);
+  assert.equal(s.requests[0].signal.aborted, true);
+  assert.deepEqual(s.session.checkpoint().history, []);
+  assert.equal(s.session.checkpoint().resumeMs, 20000);
+  s.clock.advance(60000);
+  await flush();
+  assert.equal(s.audio.playing, false);
+  s.session.dispose();
+});
+
+test("a native asynchronous seek finishes before resumption starts the player", async () => {
+  const s = setup();
+  let finish!: () => void;
+  Object.assign(s.audio, {
+    seek: (positionMs: number) =>
+      new Promise<void>((resolve) => {
+        finish = () => {
+          s.audio.positionMs = positionMs;
+          resolve();
+        };
+      }),
+  });
+  s.session.seek(45000);
+  s.session.start();
+  await flush();
+  assert.equal(s.audio.playing, false);
+  finish();
+  await flush();
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.audio.positionMs, 45000);
   s.session.dispose();
 });
 

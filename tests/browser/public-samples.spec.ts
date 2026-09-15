@@ -10,6 +10,16 @@ test("English samples show attribution, timed transcripts, and playable audio", 
       throw new DOMException("denied", "NotAllowedError");
     };
   });
+  // The local synthetic regression fixture is not a published recording.
+  await page.route("**/api/episodes", async (route) => {
+    const response = await route.fetch();
+    const episodes = await response.json();
+    await route.fulfill({
+      json: episodes.filter(
+        (episode: { id: string }) => episode.id !== "demo-natural-resume",
+      ),
+    });
+  });
   await page.goto("/");
   // The English page publishes the six English recordings: the Chinese sample
   // declares languageVisibility ["zh-cn"] and is filtered out. A broken filter
@@ -28,12 +38,13 @@ test("English samples show attribution, timed transcripts, and playable audio", 
   await expect(
     page.locator(".source-credit").getByRole("link", { name: /Reuse terms/ }),
   ).toHaveAttribute("href", "https://www.usa.gov/government-works");
+  // Export links are shown for CC BY recordings; this sample is a government work.
   await expect(
     page.getByRole("link", { name: "Download excerpt" }),
-  ).toHaveAttribute("download", "jfk-rice-moon.mp3");
+  ).toHaveCount(0);
   await expect(
     page.getByRole("link", { name: "Download transcript" }),
-  ).toHaveAttribute("href", "/api/episodes/jfk-rice-moon");
+  ).toHaveCount(0);
   for (const title of [
     "We Choose to Go to the Moon",
     "Tear Down This Wall",

@@ -15,6 +15,11 @@ test("entry stays listen-only until the user enables the microphone", async ({
     localStorage.setItem("aside.listeningMode", "manual");
     localStorage.setItem("aside.followupMs", "0");
   });
+  // Exercise permission ordering without requiring a real provider key.
+  await page.route("**/api/health", async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({ json: { ...(await response.json()), liveConfigured: true } });
+  });
   let paid = 0;
   await page.route(
     /\/api\/episodes\/[^/]+\/(live|question|transcribe-question)$/,

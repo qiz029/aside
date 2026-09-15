@@ -1,0 +1,16 @@
+appId: com.asidefm.app.dev
+---
+- swipe:
+    from:
+      id: hold-to-talk
+    direction: UP
+    duration: 2500
+- assertVisible: Play
+- assertNotVisible: "Recording.*|Connecting.*|Transcribing.*"
+- takeScreenshot: capture-cancelled
+- pressKey: Home
+- launchApp:
+    stopApp: false
+- waitForAnimationToEnd
+- assertVisible: Play
+- takeScreenshot: cancelled-foreground

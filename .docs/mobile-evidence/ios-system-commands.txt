@@ -1,0 +1,21 @@
+2026-09-15T20:05:13.499809+00:00 command 1
+{
+  "kMRMediaRemoteNowPlayingInfoTitle" : "A quiet half hour",
+  "kMRMediaRemoteNowPlayingInfoPlaybackRate" : 1,
+  "kMRMediaRemoteNowPlayingInfoElapsedTime" : 1843.030414582,
+  "kMRMediaRemoteNowPlayingInfoDuration" : 1859.9773333333333
+}
+2026-09-15T20:05:17.173087+00:00 command 0
+{
+  "kMRMediaRemoteNowPlayingInfoTitle" : "A quiet half hour",
+  "kMRMediaRemoteNowPlayingInfoPlaybackRate" : 1,
+  "kMRMediaRemoteNowPlayingInfoElapsedTime" : 1843.030414582,
+  "kMRMediaRemoteNowPlayingInfoDuration" : 1859.9773333333333
+}
+2026-09-15T20:05:21.576376+00:00 command 1
+{
+  "kMRMediaRemoteNowPlayingInfoTitle" : "A quiet half hour",
+  "kMRMediaRemoteNowPlayingInfoPlaybackRate" : 1,
+  "kMRMediaRemoteNowPlayingInfoElapsedTime" : 1843.030414582,
+  "kMRMediaRemoteNowPlayingInfoDuration" : 1859.9773333333333
+}

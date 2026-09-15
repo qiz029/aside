@@ -1,3 +1,4 @@
+import { getContainer } from "@cloudflare/containers";
 import {
   authorize,
   trialRoute,
@@ -29,7 +30,11 @@ import { CloudStore } from "./store.js";
 import { HttpError, json, readBody, readJson } from "./http.js";
 import { startAnalysis, uploadRoute } from "./uploads.js";
 import { accountFromRequest, authRoute } from "./auth.js";
-import { cleanupDeletedEpisode, cleanupStaleUploads, spaceRoute } from "./space.js";
+import {
+  cleanupDeletedEpisode,
+  cleanupStaleUploads,
+  spaceRoute,
+} from "./space.js";
 
 async function audio(request: Request, env: Env, id: string, mime: string) {
   const key = `episodes/${id}/original`;
@@ -132,7 +137,10 @@ async function route(
   const metadata = JSON.parse(row.metadata);
   if (!action && method === "GET") return json(await store.episode(row));
   if (action === "audio" && ["GET", "HEAD"].includes(method)) {
-    if (row.public !== 1 && (metadata.durationMs <= 0 || metadata.status === "blocked"))
+    if (
+      row.public !== 1 &&
+      (metadata.durationMs <= 0 || metadata.status === "blocked")
+    )
       throw new HttpError(409, "音频仍在检查中或未通过检查");
     return audio(request, env, id, metadata.mimeType ?? "audio/mpeg");
   }
@@ -151,23 +159,42 @@ async function route(
   if (action === "checkpoint") {
     if (method === "GET") {
       const result = await env.DB.prepare(
-        "SELECT value FROM checkpoints WHERE owner_id=? AND episode_id=?",
+        "SELECT value,version FROM checkpoints WHERE owner_id=? AND episode_id=?",
       )
         .bind(owner, id)
-        .first<{ value: string }>();
-      return json(result ? JSON.parse(result.value) : null);
+        .first<{ value: string; version: number }>();
+      return json(
+        result
+          ? { ...JSON.parse(result.value), version: result.version }
+          : null,
+      );
     }
     if (method === "PUT") {
       const value = checkpointSchema.parse(await readJson(request));
       value.positionMs = Math.min(value.positionMs, metadata.durationMs);
       if (value.resumeMs !== undefined)
         value.resumeMs = Math.min(value.resumeMs, metadata.durationMs);
-      await env.DB.prepare(
-        "INSERT INTO checkpoints VALUES(?,?,?) ON CONFLICT(owner_id,episode_id) DO UPDATE SET value=excluded.value",
+      const expected = value.version ?? 0;
+      const saved = await env.DB.prepare(
+        "INSERT INTO checkpoints(owner_id,episode_id,value,version) SELECT ?,?,?,1 WHERE ?=0 OR EXISTS(SELECT 1 FROM checkpoints WHERE owner_id=? AND episode_id=? AND version=?) ON CONFLICT(owner_id,episode_id) DO UPDATE SET value=excluded.value,version=checkpoints.version+1 WHERE checkpoints.version=? RETURNING version",
       )
-        .bind(owner, id, JSON.stringify(value))
-        .run();
-      return json(value);
+        .bind(
+          owner,
+          id,
+          JSON.stringify(value),
+          expected,
+          owner,
+          id,
+          expected,
+          expected,
+        )
+        .first<{ version: number }>();
+      if (!saved)
+        return json(
+          { error: "其他设备已更新收听进度", code: "checkpoint_conflict" },
+          409,
+        );
+      return json({ ...value, version: saved.version });
     }
   }
   if (action === "retry" && method === "POST") {
@@ -179,14 +206,8 @@ async function route(
     if (!env.OPENAI_API_KEY) throw new HttpError(503, "分析服务尚未配置");
     await startAnalysis(env, id, async () => {
       const day = new Date().toISOString().slice(0, 10);
-      await store.reserve(
-        `analysis-retry:${day}:${owner}`,
-        2,
-      );
-      await store.reserve(
-        `analysis-retry:${day}:global`,
-        10,
-      );
+      await store.reserve(`analysis-retry:${day}:${owner}`, 2);
+      await store.reserve(`analysis-retry:${day}:global`, 10);
     });
     return json(metadata);
   }
@@ -207,6 +228,7 @@ async function route(
           sessionId: z.string().min(1).max(200),
           seconds: z.number().finite().min(0).max(86400),
           finalized: z.boolean(),
+          closed: z.boolean().optional(),
         })
         .parse(await readJson(request));
       const result = await env.DB.prepare(
@@ -215,7 +237,7 @@ async function route(
         .bind(Math.min(data.seconds, 120), data.sessionId, owner, id)
         .first();
       if (!result) throw new HttpError(404, "语音会话不存在");
-      if (data.finalized)
+      if (data.finalized || data.closed)
         await env.LIVE.get(env.LIVE.idFromName(owner)).close(data.sessionId);
       return json({ ok: true });
     }
@@ -245,11 +267,45 @@ async function route(
     const file = form.get("audio");
     if (!file || typeof file === "string" || file.size > 12 * 1024 * 1024)
       throw new HttpError(400, "无效问题录音");
-    const wav = Buffer.from(await file.arrayBuffer());
-    validateWav(wav);
+    let wav = Buffer.from(await file.arrayBuffer());
+    const m4a = ["audio/mp4", "audio/m4a", "audio/x-m4a"].includes(file.type);
+    if (m4a) {
+      if (!accountId) throw new HttpError(401, "请先登录");
+      if (env.MOBILE_AUDIO_ENABLED !== "true")
+        throw new HttpError(503, "手机语音服务尚未启用");
+      if (file.size > 2 * 1024 * 1024)
+        throw new HttpError(413, "问题录音超过 2 MiB");
+    } else validateWav(wav);
     const token = await acquire(env, owner, "operation");
     try {
       await budget(env, owner, "transcribe", request);
+      if (m4a) {
+        const response = await getContainer(
+          env.MEDIA,
+          "mobile-questions",
+        ).fetch(
+          new Request("http://media/question", {
+            method: "POST",
+            headers: { "Content-Type": "application/octet-stream" },
+            body: wav,
+            signal: AbortSignal.timeout(30000),
+          }),
+        );
+        if (!response.ok)
+          throw new HttpError(
+            response.status === 422 ? 400 : 503,
+            "录音无法处理，请重试",
+          );
+        const converted = await readBody(
+          new Request("http://media/result", {
+            method: "POST",
+            body: response.body,
+          }),
+          3 * 1024 * 1024,
+        );
+        wav = Buffer.from(converted);
+        validateWav(wav);
+      }
       return json({
         text: await provider.transcribeQuestion(
           wav,
@@ -361,26 +417,44 @@ export default {
     ctx: ExecutionContext,
   ): Promise<Response> {
     const path = new URL(request.url).pathname;
-    if (!path.startsWith("/api/"))
-      return env.ASSETS.fetch(request);
+    if (!path.startsWith("/api/")) return env.ASSETS.fetch(request);
     try {
       const origin = request.headers.get("origin");
-      const googleCallback = path === "/api/auth/google/callback" && request.method === "GET";
+      const bearer = request.headers.get("authorization");
+      const account = await accountFromRequest(request, env);
+      if (bearer && !account)
+        throw new HttpError(401, "登录已过期，请重新登录");
+      const mobileLogin = /^\/api\/auth\/mobile\/email\/(start|verify)$/.test(
+        path,
+      );
+      const googleCallback =
+        path === "/api/auth/google/callback" && request.method === "GET";
       if (origin && origin !== env.APP_ORIGIN)
         throw new HttpError(403, "Unexpected origin");
-      if (!googleCallback && request.headers.get("sec-fetch-site") === "cross-site")
+      if (
+        !googleCallback &&
+        request.headers.get("sec-fetch-site") === "cross-site"
+      )
         throw new HttpError(403, "Cross-site request rejected");
       // Mutations require the browser origin, while CLI clients must explicitly supply it.
       if (
         !["GET", "HEAD"].includes(request.method) &&
-        origin !== env.APP_ORIGIN
+        origin !== env.APP_ORIGIN &&
+        !(bearer && account) &&
+        !mobileLogin
       )
         throw new HttpError(403, "Origin required");
       const identity = await session(request, env.SESSION_SECRET);
-      const account = await accountFromRequest(request, env);
-      const result = path.startsWith("/api/auth/") || path.startsWith("/api/profile")
-        ? await authRoute(request, env, identity.id, account)
-        : await route(request, env, ctx, account?.id ?? identity.id, account?.id ?? null);
+      const result =
+        path.startsWith("/api/auth/") || path.startsWith("/api/profile")
+          ? await authRoute(request, env, identity.id, account)
+          : await route(
+              request,
+              env,
+              ctx,
+              account?.id ?? identity.id,
+              account?.id ?? null,
+            );
       const response = new Response(result.body, result);
       response.headers.set("Cache-Control", "no-store");
       if (identity.cookie)
@@ -415,15 +489,24 @@ export default {
       env.DB.prepare(
         "DELETE FROM trial_leases WHERE kind!='live' AND expires<?",
       ).bind(Date.now()),
-      env.DB.prepare("DELETE FROM auth_sessions WHERE expires<?").bind(Date.now()),
+      env.DB.prepare("DELETE FROM auth_sessions WHERE expires<?").bind(
+        Date.now(),
+      ),
       env.DB.prepare("DELETE FROM auth_codes WHERE expires<?").bind(Date.now()),
-      env.DB.prepare("DELETE FROM auth_oauth_states WHERE expires<?").bind(Date.now()),
-      env.DB.prepare("DELETE FROM budgets WHERE bucket LIKE 'auth:%' AND CAST(substr(bucket,6,10) AS INTEGER)<?").bind(Math.floor(Date.now() / 3600000) - 2),
-      env.DB.prepare("DELETE FROM budgets WHERE bucket LIKE 'upload-init:%' AND substr(bucket,13,10)<?").bind(cutoff),
+      env.DB.prepare("DELETE FROM auth_oauth_states WHERE expires<?").bind(
+        Date.now(),
+      ),
+      env.DB.prepare(
+        "DELETE FROM budgets WHERE bucket LIKE 'auth:%' AND CAST(substr(bucket,6,10) AS INTEGER)<?",
+      ).bind(Math.floor(Date.now() / 3600000) - 2),
+      env.DB.prepare(
+        "DELETE FROM budgets WHERE bucket LIKE 'upload-init:%' AND substr(bucket,13,10)<?",
+      ).bind(cutoff),
     ]);
     await cleanupStaleUploads(env);
-    const deleted = await env.DB.prepare("SELECT id FROM episodes WHERE deleted_at IS NOT NULL LIMIT 10")
-      .all<{ id: string }>();
+    const deleted = await env.DB.prepare(
+      "SELECT id FROM episodes WHERE deleted_at IS NOT NULL LIMIT 10",
+    ).all<{ id: string }>();
     for (const row of deleted.results) {
       await cleanupDeletedEpisode(env, row.id).catch(() => {});
     }

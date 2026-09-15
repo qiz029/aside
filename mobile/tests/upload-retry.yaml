@@ -1,0 +1,14 @@
+appId: com.asidefm.app.dev
+---
+- tapOn:
+    id: dismiss-error
+    optional: true
+- tapOn:
+    id: retry-upload
+    waitToSettleTimeoutMs: 1000
+- extendedWaitUntil:
+    visible:
+      id: transcript
+    timeout: 90000
+- assertVisible: Aside-upload.wav
+- takeScreenshot: retry-completed

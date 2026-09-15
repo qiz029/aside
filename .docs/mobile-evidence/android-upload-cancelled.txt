@@ -1,0 +1,11 @@
+Running on emulator-5554
+ > Flow aside-android-file-cancel
+Tap on "Aside-upload.wav"... COMPLETED
+Assert that id: cancel-upload is visible... COMPLETED
+Press Home key... COMPLETED
+Wait for animation to end... COMPLETED
+Launch app "com.asidefm.app.dev" without stopping app... COMPLETED
+Wait for animation to end... COMPLETED
+Assert that id: retry-upload is visible... COMPLETED
+Assert that "Upload cancelled.*" is visible... COMPLETED
+Take screenshot upload-background-cancelled... COMPLETED

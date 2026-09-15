@@ -1,0 +1,28 @@
+appId: com.asidefm.app.dev
+---
+- launchApp
+- tapOn:
+    id: tab-account
+    waitToSettleTimeoutMs: 1000
+- tapOn:
+    id: locale-en
+    waitToSettleTimeoutMs: 1000
+- tapOn:
+    id: email
+    waitToSettleTimeoutMs: 1000
+- inputText: ${EMAIL}
+- tapOn:
+    id: send-code
+    waitToSettleTimeoutMs: 1000
+- tapOn:
+    id: code
+    waitToSettleTimeoutMs: 1000
+- inputText: "12345678"
+- waitForAnimationToEnd
+- tapOn:
+    id: sign-in
+    waitToSettleTimeoutMs: 1000
+- extendedWaitUntil:
+    visible:
+      id: private-library
+    timeout: 15000

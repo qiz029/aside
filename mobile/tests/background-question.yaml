@@ -1,0 +1,15 @@
+appId: com.asidefm.app.dev
+---
+- tapOn:
+    id: dismiss-error
+    optional: true
+- longPressOn:
+    id: hold-to-talk
+- pressKey: Home
+- waitForAnimationToEnd
+- launchApp:
+    stopApp: false
+- waitForAnimationToEnd
+- assertVisible: Play
+- assertNotVisible: "Release to send.*|Thinking.*"
+- takeScreenshot: question-background-cancelled

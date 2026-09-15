@@ -93,6 +93,10 @@ tests/        单元/API 测试与浏览器集成测试
 - [ADR 0002 · 按需 Live 会话](.docs/adr/0002-on-demand-live-sessions.md)
 - [ADR 0003 · 收听与问答状态归属](.docs/adr/0003-listening-and-question-ownership.md)
 
+## 📱 手机端
+
+iPhone 与 Android 原生工程位于 `mobile/`，与网站共享播放和问答运行时。支持本地 Release 安装、Ad Hoc 和 TestFlight 构建配置。环境、签名、后端迁移、模拟器验收及尚需真机验证的边界见[手机端开发与分发](.docs/mobile.md)。
+
 ## 🛠️ 验证
 
 ```bash

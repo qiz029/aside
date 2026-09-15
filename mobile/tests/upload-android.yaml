@@ -1,0 +1,17 @@
+appId: com.asidefm.app.dev
+---
+- launchApp:
+    stopApp: false
+- tapOn:
+    id: tab-upload
+    waitToSettleTimeoutMs: 1000
+- tapOn:
+    id: choose-audio
+    waitToSettleTimeoutMs: 1000
+- runFlow: select-android-download.yaml
+- extendedWaitUntil:
+    visible:
+      id: transcript
+    timeout: 90000
+- assertVisible: Aside-upload.wav
+- takeScreenshot: uploaded-episode

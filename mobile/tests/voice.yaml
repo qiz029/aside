@@ -1,0 +1,63 @@
+appId: com.asidefm.app.dev
+---
+- launchApp
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "tab-account"
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "locale-en"
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "email"
+- inputText: "${EMAIL}"
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "send-code"
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "code"
+- inputText: "12345678"
+- waitForAnimationToEnd
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "sign-in"
+- extendedWaitUntil:
+    visible:
+      id: private-library
+    timeout: 15000
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "public-library"
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "episode-mobile-sample"
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "hold-to-talk"
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    text: "Allow|While using the app|Only this time|OK"
+    optional: true
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "dismiss-error"
+    optional: true
+- longPressOn:
+    id: "hold-to-talk"
+- extendedWaitUntil:
+    visible: "A short answer"
+    timeout: 45000
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "hold"
+    optional: true
+- takeScreenshot: "voice-answer"
+- tapOn:
+    waitToSettleTimeoutMs: 1000
+    id: "resume"
+- assertVisible: "Pause"
+- pressKey: Home
+- launchApp:
+    stopApp: false
+- assertVisible: "Pause"

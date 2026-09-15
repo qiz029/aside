@@ -74,12 +74,15 @@ async function userById(env: Env, id: string) {
     .first<UserRow>();
 }
 export async function accountFromRequest(request: Request, env: Env) {
-  const token = cookieValue(request, authCookie);
+  const bearer = request.headers.get("authorization");
+  const token = bearer
+    ? /^Bearer ([a-f0-9]{64})$/.exec(bearer)?.[1]
+    : cookieValue(request, authCookie);
   if (!token || !/^[a-f0-9]{64}$/.test(token)) return null;
   const row = await env.DB.prepare(
-    "SELECT u.* FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires>?",
+    "SELECT u.* FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires>? AND s.kind=?",
   )
-    .bind(await hash(token), Date.now())
+    .bind(await hash(token), Date.now(), bearer ? "mobile" : "web")
     .first<UserRow>();
   return row;
 }
@@ -87,14 +90,26 @@ function requireUser(user: UserRow | null): UserRow {
   if (!user) throw new HttpError(401, "请先登录");
   return user;
 }
-async function issueSession(request: Request, env: Env, userId: string) {
+async function issueSession(
+  request: Request,
+  env: Env,
+  userId: string,
+  mobile = false,
+) {
   const token = randomHex(32);
   await env.DB.prepare(
-    "INSERT INTO auth_sessions(token_hash,user_id,expires) VALUES(?,?,?)",
+    "INSERT INTO auth_sessions(token_hash,user_id,expires,kind) VALUES(?,?,?,?)",
   )
-    .bind(await hash(token), userId, Date.now() + sessionLifetime)
+    .bind(
+      await hash(token),
+      userId,
+      Date.now() + sessionLifetime,
+      mobile ? "mobile" : "web",
+    )
     .run();
-  return cookie(request, authCookie, token, sessionLifetime / 1000);
+  return mobile
+    ? token
+    : cookie(request, authCookie, token, sessionLifetime / 1000);
 }
 async function claimVisitor(env: Env, visitor: string, userId: string) {
   // Only content owned by this signed anonymous visitor is transferred.
@@ -255,11 +270,16 @@ async function verifyCode(request: Request, env: Env, visitor: string) {
     data.email.split("@")[0],
   );
   await claimVisitor(env, visitor, user.id);
-  const response = json({ user: publicUser(user) });
-  response.headers.append(
-    "Set-Cookie",
-    await issueSession(request, env, user.id),
-  );
+  const mobile =
+    new URL(request.url).pathname === "/api/auth/mobile/email/verify";
+  const credential = await issueSession(request, env, user.id, mobile);
+  const response = json({
+    user: publicUser(user),
+    ...(mobile
+      ? { token: credential, expiresAt: Date.now() + sessionLifetime }
+      : {}),
+  });
+  if (!mobile) response.headers.append("Set-Cookie", credential);
   return response;
 }
 function googleCallbackUrl(env: Env) {
@@ -457,16 +477,27 @@ export async function authRoute(
       emailEnabled: !!env.EMAIL && !!env.AUTH_EMAIL_FROM,
       googleEnabled: !!env.GOOGLE_CLIENT_ID && !!env.GOOGLE_CLIENT_SECRET,
     });
-  if (path === "/api/auth/email/start" && method === "POST")
+  if (
+    ["/api/auth/email/start", "/api/auth/mobile/email/start"].includes(path) &&
+    method === "POST"
+  )
     return sendCode(request, env);
-  if (path === "/api/auth/email/verify" && method === "POST")
+  if (
+    ["/api/auth/email/verify", "/api/auth/mobile/email/verify"].includes(
+      path,
+    ) &&
+    method === "POST"
+  )
     return verifyCode(request, env, visitor);
   if (path === "/api/auth/google" && method === "GET")
     return googleStart(request, env, visitor, user);
   if (path === "/api/auth/google/callback" && method === "GET")
     return googleCallback(request, env);
   if (path === "/api/auth/logout" && method === "POST") {
-    const token = cookieValue(request, authCookie);
+    const token =
+      /^Bearer ([a-f0-9]{64})$/.exec(
+        request.headers.get("authorization") ?? "",
+      )?.[1] ?? cookieValue(request, authCookie);
     if (token && /^[a-f0-9]{64}$/.test(token))
       await env.DB.prepare("DELETE FROM auth_sessions WHERE token_hash=?")
         .bind(await hash(token))

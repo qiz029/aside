@@ -92,6 +92,9 @@ export function useLocale() {
   return useSyncExternalStore(subscribe, getLocale, getLocale);
 }
 export const english: Record<string, string> = {
+  另一台设备更新了进度: "Another device updated your progress",
+  继续本机: "Keep this device",
+  接着另一设备听: "Use other device",
   中文: "Chinese",
   英文: "English",
   收起详情: "Close details",

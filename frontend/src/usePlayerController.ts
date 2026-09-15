@@ -1,3 +1,4 @@
+import { CheckpointSync } from "@aside/player-runtime/checkpoint-sync";
 import { requestMicrophonePermission } from "./microphone";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Episode } from "@aside/engine/core";
@@ -31,6 +32,27 @@ export function usePlayerController() {
     return { audio, session };
   });
   const { session, audio } = runtime;
+  const [, syncChanged] = useState(0);
+  const [sync] = useState(
+    () =>
+      new CheckpointSync(
+        {
+          read: episodeLibrary.checkpoint,
+          write: episodeLibrary.save,
+          cache: async (id, value) => {
+            try {
+              localStorage.setItem(
+                `aside.checkpoint.${id}`,
+                JSON.stringify(value),
+              );
+            } catch {}
+          },
+        },
+        () => syncChanged((n) => n + 1),
+      ),
+  );
+  const save = () =>
+    selected.current ? sync.save(session.checkpoint()) : Promise.resolve();
   const snapshot = useSyncExternalStore(session.subscribe, session.getSnapshot);
   useEffect(() => {
     savePlayerConfig(snapshot.playerConfig);
@@ -51,12 +73,14 @@ export function usePlayerController() {
     }
   };
   async function load(id: string, autoplay = false) {
+    const version = ++loadVersion.current;
     autoplayVersion.current = null;
     session.stop();
-    const version = ++loadVersion.current;
+    await save();
+    if (version !== loadVersion.current) return;
     const [next, checkpoint] = await Promise.all([
       episodeLibrary.get(id),
-      episodeLibrary.checkpoint(id),
+      sync.load(id),
     ]);
     if (version !== loadVersion.current) return;
     selected.current = next;
@@ -87,7 +111,15 @@ export function usePlayerController() {
           session.setError(error.message);
         }
       });
-    const pagehide = () => session.stop();
+    const pagehide = () => {
+      void save().catch(() => {});
+      session.stop();
+    };
+    const visible = () => {
+      if (document.visibilityState === "visible")
+        void sync.refresh().catch(() => {});
+    };
+    document.addEventListener("visibilitychange", visible);
     window.addEventListener("pagehide", pagehide);
     const poll = window.setInterval(() => {
       void episodeLibrary
@@ -112,22 +144,44 @@ export function usePlayerController() {
           .catch(() => {});
     }, 2500);
     const checkpoint = window.setInterval(() => {
-      if (selected.current)
-        void episodeLibrary
-          .save(selected.current.id, session.checkpoint())
-          .catch(() => {});
-    }, 2000);
+      void save().catch(() => {});
+    }, 15000);
+    let previous = session.getSnapshot();
+    const unsubscribe = session.subscribe(() => {
+      const next = session.getSnapshot();
+      if (
+        next.state.mode !== previous.state.mode ||
+        next.history !== previous.history
+      )
+        void save().catch(() => {});
+      previous = next;
+    });
     return () => {
       disposed = true;
       loadVersion.current++;
       clearInterval(poll);
       clearInterval(checkpoint);
       window.removeEventListener("pagehide", pagehide);
+      document.removeEventListener("visibilitychange", visible);
+      unsubscribe();
       session.dispose();
     };
   }, [session]);
   return {
     ...snapshot,
+    checkpointConflict: sync.conflict !== undefined,
+    keepLocalCheckpoint: () => {
+      void sync
+        .keepLocal(session.checkpoint())
+        .catch((error) => session.setError(String(error)));
+    },
+    useRemoteCheckpoint: () => {
+      const cp = sync.useRemote();
+      if (cp !== undefined && selected.current) {
+        session.load(selected.current, cp);
+        session.metadataLoaded();
+      }
+    },
     episodes,
     episodesLoading,
     episode,
@@ -166,6 +220,11 @@ export function usePlayerController() {
     load,
     async authChanged() {
       session.stop();
+      sync.reset();
+      try {
+        for (const key of Object.keys(localStorage))
+          if (key.startsWith("aside.checkpoint.")) localStorage.removeItem(key);
+      } catch {}
       selected.current = undefined;
       setEpisode(undefined);
       await refresh();

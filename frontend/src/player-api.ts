@@ -1,3 +1,4 @@
+import { CheckpointConflict } from "@aside/player-runtime/checkpoint-sync";
 import { configureTrial, trialFetch } from "./trial-access";
 import type {
   Episode,
@@ -29,7 +30,11 @@ export interface UploadOptions {
   title: string;
   signal?: AbortSignal;
   onStarted?: (id: string) => void;
-  onProgress?: (bytes: number, total: number, phase: "uploading" | "processing") => void;
+  onProgress?: (
+    bytes: number,
+    total: number,
+    phase: "uploading" | "processing",
+  ) => void;
 }
 export interface PlayerBackend {
   question(
@@ -63,6 +68,8 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     /\/(question|live|transcribe-question|retry)$/.test(path) ||
     (path.startsWith("/uploads") && init?.method === "POST");
   const response = await (paid ? trialFetch : fetch)("/api" + path, init);
+  if (response.status === 409 && path.endsWith("/checkpoint"))
+    throw new CheckpointConflict();
   if (!response.ok) {
     const error = errorSchema.safeParse(
       await response.json().catch(() => null),
@@ -105,16 +112,24 @@ export const playerBackend: PlayerBackend = {
 };
 export const episodeLibrary = {
   list: () => api<Episode[]>("/episodes"),
-  space: (cursor?: string) => api<SpacePage>(`/space/episodes${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`),
-  delete: (id: string) => api<{ ok: boolean }>(`/space/episodes/${id}`, { method: "DELETE" }),
-  cancelUpload: (id: string) => api<{ ok: boolean }>(`/uploads/${id}`, { method: "DELETE" }),
+  space: (cursor?: string) =>
+    api<SpacePage>(
+      `/space/episodes${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`,
+    ),
+  delete: (id: string) =>
+    api<{ ok: boolean }>(`/space/episodes/${id}`, { method: "DELETE" }),
+  cancelUpload: (id: string) =>
+    api<{ ok: boolean }>(`/uploads/${id}`, { method: "DELETE" }),
   get: (id: string) => api<Episode>(`/episodes/${id}`),
   async checkpoint(id: string) {
     const data = await api<unknown>(`/episodes/${id}/checkpoint`);
     return data === null ? null : checkpointSchema.parse(data);
   },
   save: (id: string, checkpoint: Checkpoint) =>
-    api(`/episodes/${id}/checkpoint`, json(checkpoint, "PUT")),
+    api<Checkpoint>(`/episodes/${id}/checkpoint`, {
+      ...json(checkpoint, "PUT"),
+      keepalive: true,
+    }),
   health: async () => {
     const health = await api<PlayerHealth>("/health");
     configureTrial(health.trial === true);
@@ -126,16 +141,15 @@ export const episodeLibrary = {
     const health = await episodeLibrary.health();
     if (health.uploadsEnabled === false) throw Error("当前仅开放示例节目试听");
     if (health.uploadMode === "multipart") {
-      const upload = await api<{ id: string; partSize: number }>(
-        "/uploads",
-        {
-          ...json({
-            title: (options?.title || file.name.replace(/\.[^.]+$/, "")).trim().slice(0, 200),
-            size: file.size,
-          }),
-          signal: options?.signal,
-        },
-      );
+      const upload = await api<{ id: string; partSize: number }>("/uploads", {
+        ...json({
+          title: (options?.title || file.name.replace(/\.[^.]+$/, ""))
+            .trim()
+            .slice(0, 200),
+          size: file.size,
+        }),
+        signal: options?.signal,
+      });
       options?.onStarted?.(upload.id);
       const parts: { partNumber: number; etag: string }[] = [];
       try {
@@ -148,7 +162,11 @@ export const episodeLibrary = {
               signal: options?.signal,
             }),
           );
-          options?.onProgress?.(Math.min(offset + upload.partSize, file.size), file.size, "uploading");
+          options?.onProgress?.(
+            Math.min(offset + upload.partSize, file.size),
+            file.size,
+            "uploading",
+          );
         }
         options?.signal?.throwIfAborted();
       } catch (error) {

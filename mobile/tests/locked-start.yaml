@@ -1,0 +1,10 @@
+appId: com.asidefm.app.dev
+---
+- launchApp:
+    stopApp: false
+- tapOn:
+    text: ".*A quiet audio fixture for uninterrupted background listening.*"
+- assertVisible: Pause
+- takeScreenshot: locked-playback-start
+- pressKey: Lock
+- takeScreenshot: lock-screen
