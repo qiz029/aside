@@ -12,3 +12,7 @@ GOOGLE_CLIENT_SECRET=
 
 # Shared secret for /api/admin/usage; unset leaves the route unmounted.
 ADMIN_KEY=
+
+# Optional test network exemption: comma-separated trial_proofs.ip HMAC values.
+# Production: wrangler secret put TRIAL_TEST_IP_HASHES --config wrangler.production.jsonc
+TRIAL_TEST_IP_HASHES=

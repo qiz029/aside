@@ -4,7 +4,7 @@ import { readFile, readdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { build } from "esbuild";
 import {
   Miniflare,
@@ -16,6 +16,7 @@ import { CloudStore } from "../../cloudflare/src/store.ts";
 import { analyzeEpisode } from "../../cloudflare/src/pipeline.ts";
 import { admitAudio, mediaApp } from "../../backend/src/container/app.ts";
 import { rollupDailyStats } from "../../cloudflare/src/stats.ts";
+import { budget } from "../../cloudflare/src/trial.ts";
 let mf, db, bucket;
 let networkCalls = [];
 let acknowledgeClose = true;
@@ -33,6 +34,8 @@ let googleIdentity = {
 const controlEvents = [];
 const usedProofs = new Set();
 const origin = "https://aside.test";
+const testerIp = "192.0.2.10";
+const testerIpHash = createHmac("sha256", "local-test-secret-at-least-32-characters").update(testerIp).digest("hex");
 before(async () => {
   const shell = await readFile("frontend/index.html", "utf8");
   const bundle = await build({
@@ -76,6 +79,7 @@ before(async () => {
         TURNSTILE_SITE_KEY: "test-site",
         TURNSTILE_SECRET_KEY: "test-secret",
         SESSION_SECRET: "local-test-secret-at-least-32-characters",
+        TRIAL_TEST_IP_HASHES: testerIpHash,
         OPENAI_API_KEY: "test-placeholder",
         ALLOW_UPLOADS: "true",
         AUTH_EMAIL_FROM: "login@auth.asidefm.com",
@@ -1367,6 +1371,55 @@ test("signed-in accounts skip Turnstile but retain paid question quotas", async 
   assert.equal((await account.request(`/api/episodes/${id}/question`, "POST", payload)).status, 429);
   assert.equal(networkCalls.filter((path) => path.endsWith("/siteverify")).length, verifications);
 });
+test("allowlisted IP bypasses exhausted daily pools without consuming them", async () => {
+  const bindings = await mf.getBindings();
+  const a = await visitor();
+  const day = new Date().toISOString().slice(0, 10);
+  const snapshots = await db.prepare("SELECT bucket,used FROM budgets WHERE bucket LIKE 'trial:%'").all();
+  const request = new Request(origin, { headers: { "cf-connecting-ip": testerIp } });
+  try {
+    for (const kind of ["live", "question", "transcribe"]) {
+      for (const [scope, limit] of [[a.id, 5], [`ip:${testerIpHash}`, kind === "live" ? 10 : 20], ["global", kind === "live" ? 10 : 100]]) {
+        await db.prepare("INSERT INTO budgets VALUES(?,?) ON CONFLICT(bucket) DO UPDATE SET used=excluded.used").bind(`trial:${day}:${kind}:${scope}`, limit).run();
+      }
+    }
+    const before = (await db.prepare("SELECT bucket,used FROM budgets ORDER BY bucket").all()).results;
+    for (const kind of ["live", "question", "transcribe"]) {
+      await budget(bindings, a.id, kind, request);
+      await budget(bindings, a.id, kind, request);
+      await assert.rejects(budget(bindings, a.id, kind, new Request(origin, { headers: { "cf-connecting-ip": "192.0.2.11" } })), /今日体验额度已用完/);
+      await assert.rejects(budget(bindings, a.id, kind), /今日体验额度已用完/);
+    }
+    assert.deepEqual((await db.prepare("SELECT bucket,used FROM budgets ORDER BY bucket").all()).results, before);
+    assert.equal((await (await a.request("/api/trial", "GET", undefined, { "cf-connecting-ip": testerIp })).json()).dailyLimitExempt, true);
+    assert.equal((await (await a.request("/api/trial")).json()).dailyLimitExempt, false);
+
+    const headers = { "cf-connecting-ip": testerIp };
+    const payload = { atMs: 0, revision: 1, history: [{ role: "user", text: "Explain" }] };
+    // An exemption does not grant guest verification.
+    assert.equal((await a.request("/api/episodes/public/question", "POST", payload, headers)).status, 403);
+    const verified = await a.request("/api/trial", "POST", { token: JSON.stringify({ cdata: a.id, nonce: crypto.randomUUID() }) }, headers);
+    assert.equal(verified.status, 200);
+    for (let i = 0; i < 6; i++) {
+      const answer = await a.request("/api/episodes/public/question", "POST", payload, headers);
+      assert.equal(answer.status, 200, await answer.text());
+    }
+    await db.prepare("UPDATE trial_control SET enabled=0 WHERE id=1").run();
+    assert.equal((await a.request("/api/episodes/public/question", "POST", payload, headers)).status, 503);
+    await db.prepare("UPDATE trial_control SET enabled=1 WHERE id=1").run();
+    // Existing per-minute guard still applies to testers.
+    await db.prepare("INSERT INTO budgets VALUES(?,12) ON CONFLICT(bucket) DO UPDATE SET used=12").bind(`burst:${Math.floor(Date.now() / 60000)}:${a.id}`).run();
+    const limited = await a.request("/api/episodes/public/question", "POST", payload, headers);
+    assert.equal(limited.status, 429);
+    assert.match((await limited.json()).error, /一分钟/);
+  } finally {
+    await db.prepare("UPDATE trial_control SET enabled=1 WHERE id=1").run();
+    await db.prepare("DELETE FROM budgets WHERE bucket LIKE 'trial:%'").run();
+    for (const row of snapshots.results)
+      await db.prepare("INSERT INTO budgets VALUES(?,?)").bind(row.bucket, row.used).run();
+  }
+});
+
 test("five question reservations are enforced before providers; kill switch preserves playback", async () => {
   const a = await visitor();
   const payload = {

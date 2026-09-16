@@ -1,6 +1,7 @@
 import type { Env } from "./env.js";
 import { HttpError, json, readJson } from "./http.js";
 import { CloudStore } from "./store.js";
+import { ipKey, isTrialTester } from "./trial-allowlist.js";
 
 // Covers the longest supported audio (five hours) while quotas remain server-side.
 const guestProofMs = 6 * 60 * 60 * 1000;
@@ -15,25 +16,6 @@ export async function enabled(env: Pick<Env, "DB" | "AI_ENABLED">) {
     )?.enabled &&
     !(await env.DB.prepare("SELECT owner FROM trial_breakers LIMIT 1").first())
   );
-}
-async function ipKey(request: Request, env: Env) {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(env.SESSION_SECRET),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const bytes = await crypto.subtle.sign(
-    "HMAC",
-    key,
-    new TextEncoder().encode(
-      request.headers.get("cf-connecting-ip") ?? "local",
-    ),
-  );
-  return Array.from(new Uint8Array(bytes), (x) =>
-    x.toString(16).padStart(2, "0"),
-  ).join("");
 }
 async function burst(request: Request, env: Env, owner: string) {
   const minute = Math.floor(Date.now() / 60000);
@@ -59,6 +41,7 @@ export async function trialRoute(request: Request, env: Env, owner: string, acco
       siteKey: env.TURNSTILE_SITE_KEY,
       challenge: owner,
       enabled: await enabled(env),
+      dailyLimitExempt: await isTrialTester(request, env),
     });
   }
   if (request.method !== "POST") throw new HttpError(405, "Method not allowed");
@@ -150,6 +133,9 @@ export async function budget(
   kind: string,
   request?: Request,
 ) {
+  // Test traffic must not consume the public pool or be blocked by its exhaustion.
+  // authorize() and acquire() still enforce verification, rate limits and safety.
+  if (request && await isTrialTester(request, env)) return;
   const store = new CloudStore(env.DB, env.AUDIO),
     day = new Date().toISOString().slice(0, 10);
   await store.reserve(`trial:${day}:${kind}:${owner}`, 5);

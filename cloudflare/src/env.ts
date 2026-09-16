@@ -13,6 +13,8 @@ export interface Env {
   ANALYSIS: Workflow<AnalysisJob>;
   MEDIA: DurableObjectNamespace<MediaContainer>;
   SESSION_SECRET: string;
+  /** Comma-separated HMAC IP keys exempt from daily voice/question trial quotas. */
+  TRIAL_TEST_IP_HASHES?: string;
   EMAIL?: SendEmail;
   AUTH_EMAIL_FROM?: string;
   GOOGLE_CLIENT_ID?: string;
