@@ -23,6 +23,7 @@ export interface CloudPort {
   interrupt(): void;
   close(): Promise<void>;
   levels?(levels: Float32Array): boolean;
+  diagnostics?(): Promise<unknown>;
 }
 export interface VoiceCallbacks extends Omit<
   LiveCallbacks,
@@ -89,6 +90,18 @@ export class OnDemandVoice {
   }
   get isEnabled() {
     return this.enabled;
+  }
+  async diagnostics() {
+    return {
+      status: this.status,
+      enabled: this.enabled,
+      microphoneReady: this.microphoneReady,
+      cold: this.cold,
+      speaking: this.speaking,
+      suppressUntilSpeechEnd: this.suppressUntilSpeechEnd,
+      microphone: this.mic.diagnostics?.(),
+      live: await this.cloud?.diagnostics?.(),
+    };
   }
   private setStatus(status: VoiceStatus) {
     this.status = status;
@@ -170,6 +183,9 @@ export class OnDemandVoice {
       let sessionId = "";
       let intentional = false;
       const cloud = this.deps.cloud({
+        onDiagnostic: (message) => {
+          if (this.cloud === cloud) this.cb.onDiagnostic?.(message);
+        },
         onUsage: (seconds) => this.cb.onUsage?.(seconds, sessionId),
         onReady: () => {
           if (this.cloud !== cloud || version !== this.version) return;

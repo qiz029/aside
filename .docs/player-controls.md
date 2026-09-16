@@ -110,3 +110,16 @@ npx playwright test tests/browser/voice-remote.spec.ts tests/browser/player-conf
 ```
 
 浏览器用真实 AudioWorklet、WebRTC 回环和 `<audio>`，只模拟云端转写/委派事件与后端 NDJSON。测试不会调用付费模型；实际 GPT-Live 委派时机、对话对象判断、否定/改口、回声以及端到端延迟需要真实音频评测。
+# Voice debugging
+
+Open `/episodes/<id>?debug`, then expand **开发观察 / Developer view** below the player. The debug flag survives canonical URL replacement and episode selection. Opening diagnostics never starts playback or requests microphone access.
+
+The panel polls local metadata once a second while expanded:
+
+- `bundle`: the exact frontend asset loaded by the browser.
+- `session.status`, `error`: whether voice is off, arming, connecting or on, and the current failure.
+- `voice.microphone`: selected device label, track/context state, processed frame count, last frame age, RMS and VAD speech probability. Frames must advance; speech should change RMS. Frame processing alone does not prove the signal contains speech.
+- `voice.live`: WebRTC/ICE/data-channel state, outgoing track enablement, bytes/packets sent and source audio energy. Byte counts can increase for silence; compare audio energy and local RMS too.
+- `events`: local speech start/end, Live event types, transcript character counts, delegation and backend intent results. Diagnostics do not add transcript text, recording uploads or server-side telemetry.
+
+Reproduce with the listener explicitly starting playback/voice and saying “Wait, wait” once. Leave the panel open to inspect the changing counters. Local input without transmitted energy points to the transport/input path; transmitted energy without Live input events points further downstream. Synthetic browser tests verify the measurement path and NDJSON controls, not real provider recognition accuracy.

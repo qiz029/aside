@@ -8,6 +8,7 @@ export interface LiveCallbacks {
   onError(message: string): void;
   onClose(finalized: boolean, seconds: number): void;
   onUsage?(seconds: number): void;
+  onDiagnostic?(message: string): void;
 }
 export class LiveConnection {
   private peer?: RTCPeerConnection;
@@ -69,6 +70,8 @@ export class LiveConnection {
       this.channel.onmessage = (e) => {
         try {
           const m = JSON.parse(e.data);
+          if (typeof m.type === "string" && m.type !== "session.usage.updated")
+            this.callbacks.onDiagnostic?.(`Live event: ${m.type.slice(0, 100)}`);
           if (m.type === "session.started") {
             this.ready = true;
             clearTimeout(this.startTimer);
@@ -109,6 +112,7 @@ export class LiveConnection {
         }
       };
       this.peer.onconnectionstatechange = () => {
+        this.callbacks.onDiagnostic?.(`WebRTC: ${this.peer?.connectionState}`);
         if (this.peer?.connectionState === "failed") {
           this.callbacks.onError("语音连接中断");
           void this.close();
@@ -196,6 +200,35 @@ export class LiveConnection {
     this.mic
       ?.getTracks()
       .forEach((t) => (t.enabled = enabled && !this.closing));
+    this.callbacks.onDiagnostic?.(`Live microphone sending: ${enabled && !this.closing}`);
+  }
+  /** On-demand metadata only. Never reads or records microphone samples. */
+  async diagnostics() {
+    const track = this.mic?.getAudioTracks()[0];
+    const state = {
+      ready: this.ready,
+      closing: this.closing,
+      connection: this.peer?.connectionState,
+      ice: this.peer?.iceConnectionState,
+      dataChannel: this.channel?.readyState,
+      inputEnabled: track?.enabled,
+      inputMuted: track?.muted,
+      inputState: track?.readyState,
+    };
+    const audio: Record<string, unknown>[] = [];
+    try {
+      const stats = await this.peer?.getStats();
+      stats?.forEach((report) => {
+        if (report.kind !== "audio") return;
+        if (report.type === "outbound-rtp")
+          audio.push({ type: report.type, bytesSent: report.bytesSent, packetsSent: report.packetsSent });
+        if (report.type === "media-source")
+          audio.push({ type: report.type, audioLevel: report.audioLevel, totalAudioEnergy: report.totalAudioEnergy, totalSamplesDuration: report.totalSamplesDuration });
+      });
+      return { ...state, audio };
+    } catch {
+      return { ...state, statsUnavailable: true };
+    }
   }
   close(): Promise<void> {
     if (this.closedPromise) return this.closedPromise;

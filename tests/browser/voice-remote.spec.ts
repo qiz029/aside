@@ -3,7 +3,7 @@ import { mockPlayer } from "./remote-fixture";
 
 test.use({ locale: "en-US" });
 
-async function setupRemote(page: Page) {
+async function setupRemote(page: Page, debug = false) {
   await mockPlayer(page);
   let transcriptions = 0;
   const inputs: any[] = [];
@@ -118,7 +118,7 @@ async function setupRemote(page: Page) {
       json: { session: { id: "test-live" }, transport: { sdp: answer } },
     });
   });
-  await page.goto("/?episode=remote-a");
+  await page.goto(`/?episode=remote-a${debug ? "&debug" : ""}`);
   await page.getByRole("button", { name: "Play", exact: true }).click();
   await expect
     .poll(() => page.evaluate(() => (window as any).remoteChannel?.readyState))
@@ -130,6 +130,46 @@ async function setupRemote(page: Page) {
     .toBe(false);
   return { audio, inputs, errors, transcriptions: () => transcriptions };
 }
+
+for (const url of ["/episodes/remote-a?debug", "/?episode=remote-a&debug"])
+  test(`diagnostics preserves its entry and stays passive at ${url}`, async ({ page }) => {
+    await mockPlayer(page);
+    let micRequests = 0;
+    await page.exposeFunction("unexpectedMicrophone", () => { micRequests++; });
+    await page.addInitScript(() => {
+      navigator.mediaDevices.getUserMedia = async () => {
+        await (window as any).unexpectedMicrophone();
+        throw Error("Debug must not start a microphone");
+      };
+    });
+    await page.goto(url);
+    await expect(page).toHaveURL(/\/episodes\/remote-a\?debug$/);
+    await page.locator(".debug-toggle").click();
+    const panel = page.getByRole("region", { name: "Voice diagnostics" });
+    await expect(panel).toContainText('"status": "off"');
+    expect(micRequests).toBe(0);
+    expect(await page.locator("audio").evaluate((a: HTMLAudioElement) => a.paused)).toBe(true);
+  });
+
+test("diagnostics shows real local input frames, sending state and WebRTC byte counters", async ({ page }) => {
+  const { errors } = await setupRemote(page, true);
+  await page.locator(".debug-toggle").click();
+  const panel = page.getByRole("region", { name: "Voice diagnostics" }).locator("pre");
+  const snapshot = async () => JSON.parse((await panel.textContent())!).session?.voice;
+  await expect.poll(async () => (await snapshot())?.microphone?.frames ?? 0).toBeGreaterThan(0);
+  await expect.poll(async () => (await snapshot())?.live?.inputEnabled).toBe(true);
+  await expect.poll(async () => (await snapshot())?.live?.connection).toBe("connected");
+  await page.evaluate(() => {
+    const { gain, ctx } = (window as any).remoteMic;
+    gain.gain.setValueAtTime(0.12, ctx.currentTime);
+  });
+  await expect.poll(async () => (await snapshot())?.microphone?.rms ?? 0).toBeGreaterThan(0.05);
+  await expect.poll(async () => (await snapshot())?.live?.audio?.find((r: any) => r.type === "outbound-rtp")?.bytesSent ?? 0).toBeGreaterThan(0);
+  await expect(page.locator("pre.debug").last()).toContainText("Live microphone sending: true");
+  await expect(page.locator("pre.debug").last()).toContainText("Local speech started");
+  expect(errors).toEqual([]);
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+});
 
 test("short Live input pauses through NDJSON without local onset or delegation", async ({
   page,

@@ -7,6 +7,7 @@ export interface MicrophonePort {
   snapshot(): Blob;
   discard(): void;
   stop(): void;
+  diagnostics?(): unknown;
 }
 export class LocalMicrophone implements MicrophonePort {
   stream!: MediaStream;
@@ -17,6 +18,31 @@ export class LocalMicrophone implements MicrophonePort {
   private sink?: GainNode;
   private buffer?: MicrophoneBuffer;
   private stopped = false;
+  private frames = 0;
+  private lastFrameAt = 0;
+  private rms = 0;
+  private speechProbability?: number;
+  private observe(frame: Float32Array, probability?: number) {
+    this.frames++;
+    this.lastFrameAt = Date.now();
+    this.rms = Math.sqrt(frame.reduce((sum, value) => sum + value * value, 0) / frame.length);
+    this.speechProbability = probability;
+  }
+  diagnostics() {
+    const track = this.stream?.getAudioTracks()[0];
+    return {
+      device: track?.label,
+      trackState: track?.readyState,
+      enabled: track?.enabled,
+      muted: track?.muted,
+      audioContext: this.context?.state,
+      frames: this.frames,
+      lastFrameAgeMs: this.lastFrameAt ? Date.now() - this.lastFrameAt : null,
+      rms: this.rms,
+      speechProbability: this.speechProbability,
+      stopped: this.stopped,
+    };
+  }
   constructor(
     private config: MicrophoneConfig,
     private preRollMs: number,
@@ -65,6 +91,7 @@ export class LocalMicrophone implements MicrophonePort {
           resumeStream: async () => stream,
           onFrameProcessed: (probabilities, frame) => {
             if (this.stopped) return;
+            this.observe(frame, probabilities.isSpeech);
             const event = this.buffer!.push(frame, probabilities.isSpeech);
             if (event === "overflow")
               this.onError(
@@ -93,6 +120,7 @@ export class LocalMicrophone implements MicrophonePort {
       this.node = new AudioWorkletNode(context, "aside-capture");
       this.node.port.onmessage = (e) => {
         if (this.stopped) return;
+        this.observe(e.data);
         const event = this.buffer!.push(e.data);
         if (event === "overflow")
           this.onError(

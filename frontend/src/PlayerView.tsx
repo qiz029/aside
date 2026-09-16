@@ -13,6 +13,7 @@ import { AccountControl, type User } from "./AccountControl";
 import { LanguageSelect } from "./LanguageSelect";
 import { SpeedSelect } from "./SpeedSelect";
 import { Transcript } from "./Transcript";
+import { VoiceDiagnostics } from "./VoiceDiagnostics";
 import { message, resumeLabel, t } from "./i18n";
 import { names, type PlayerController } from "./usePlayerController";
 
@@ -925,6 +926,8 @@ export function PlayerView({
         {debug ? "−" : "+"}
       </button>
       {debugAllowed && debug && (
+        <>
+        <VoiceDiagnostics read={player.voiceDiagnostics} />
         <pre className="debug">
           {JSON.stringify(
             {
@@ -937,6 +940,7 @@ export function PlayerView({
             2,
           )}
         </pre>
+        </>
       )}
       <footer className="player-footer">
         ASIDE <span>{t("随时聊两句，再接着听。")}</span>

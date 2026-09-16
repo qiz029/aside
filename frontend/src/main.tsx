@@ -10,6 +10,9 @@ import { createRoot } from "react-dom/client";
 import { usePlayerController } from "./usePlayerController";
 import "./style.css";
 import "./components.css";
+const debugRequested = new URLSearchParams(location.search).has("debug");
+const debugHref = (href: string) =>
+  debugRequested ? `${href}${href.includes("?") ? "&" : "?"}debug` : href;
 function App() {
   const locale = useLocale();
   const player = usePlayerController();
@@ -47,7 +50,7 @@ function App() {
       (fromQuery && /^[a-zA-Z0-9-]+$/.test(fromQuery) ? fromQuery : undefined);
     if (selected) {
       if (location.pathname !== "/space")
-        window.history.replaceState(null, "", episodeHref(selected));
+        window.history.replaceState(null, "", debugHref(episodeHref(selected)));
       void load(selected).catch((cause) => setError(cause.message));
     }
   }, []);
@@ -80,7 +83,7 @@ function App() {
           window.history.replaceState(
             null,
             "",
-            `/space?episode=${encodeURIComponent(id)}`,
+            debugHref(`/space?episode=${encodeURIComponent(id)}`),
           );
           void (userInitiated ? playEpisode(id) : load(id)).catch((cause) =>
             setError(cause.message),
@@ -100,7 +103,7 @@ function App() {
           <AccountControl onAuthChanged={accountUpdated} enterSpace />
         }
         open={(id) => {
-          window.history.replaceState(null, "", episodeHref(id));
+          window.history.replaceState(null, "", debugHref(episodeHref(id)));
           void enter(id).catch((error) => setError(error.message));
         }}
       />
@@ -127,7 +130,7 @@ function App() {
               items={libraryFor(episodes, locale).map(audioCard)}
               label={t("公共音频库")}
               onOpen={(id) => {
-                window.history.replaceState(null, "", episodeHref(id));
+                window.history.replaceState(null, "", debugHref(episodeHref(id)));
                 void playEpisode(id).catch((error) => setError(error.message));
               }}
             />

@@ -137,6 +137,7 @@ export function usePlayerController() {
     audio: audio.attach,
     audioLevels: (levels: Float32Array) => audio.levels(levels),
     voiceLevels: (levels: Float32Array) => session.voiceLevels(levels),
+    voiceDiagnostics: () => session.voiceDiagnostics(),
     metadataLoaded: () => session.metadataLoaded(),
     audioTick: () => session.audioTick(),
     configurePlayer: (config: Partial<PlayerConfig>) =>

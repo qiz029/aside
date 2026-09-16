@@ -51,7 +51,7 @@ export type VoicePort = Pick<
   | "activity"
   | "setWorking"
 > &
-  Partial<Pick<OnDemandVoice, "outputLevels">>;
+  Partial<Pick<OnDemandVoice, "outputLevels" | "diagnostics">>;
 type VoiceFactory = (
   microphone: MicrophoneConfig,
   config: VoiceLifecycleConfig,
@@ -171,7 +171,7 @@ export class ListeningSession {
     this.events = [
       `${new Date(this.clock.now()).toLocaleTimeString()} ${message}`,
       ...this.events,
-    ].slice(0, 30);
+    ].slice(0, 100);
     this.publish();
   }
   private dispatch(event: PlaybackEvent) {
@@ -233,6 +233,17 @@ export class ListeningSession {
   }
   voiceLevels(levels: Float32Array) {
     return this.voice?.outputLevels?.(levels) ?? false;
+  }
+  async voiceDiagnostics() {
+    return {
+      mode: this.mode,
+      active: this.active,
+      status: this.status,
+      configured: this.configured,
+      error: this.error,
+      microphoneConfig: this.microphone,
+      voice: await this.voice?.diagnostics?.(),
+    };
   }
   setQuestion(text: string) {
     this.conversation.setDraft(text);
@@ -647,8 +658,11 @@ export class ListeningSession {
         onStatus: (status) => {
           if (valid()) {
             this.status = status;
-            this.publish();
+            this.log(`Voice status: ${status}`);
           }
+        },
+        onDiagnostic: (message) => {
+          if (valid()) this.log(message);
         },
         onFirstQuestion: (text) => {
           if (acceptsInput()) {
