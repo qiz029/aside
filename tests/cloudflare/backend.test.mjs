@@ -588,6 +588,29 @@ test("real Worker + D1/R2 isolate private episodes, public checkpoints and byte 
     403,
   );
 });
+test("checkpoint writes tolerate the production version column and preserve its value", async () => {
+  const a = await visitor(), b = await visitor();
+  const id = `checkpoint-schema-${crypto.randomUUID()}`;
+  await seed(id, "curator", true);
+  // Production applied 0006_mobile.sql, which is absent from current main.
+  await db.prepare("ALTER TABLE checkpoints ADD COLUMN version INTEGER NOT NULL DEFAULT 0").run();
+  try {
+    const path = `/api/episodes/${id}/checkpoint`;
+    const created = await a.request(path, "PUT", { positionMs: 1000, history: [] });
+    assert.equal(created.status, 200, await created.clone().text());
+    assert.equal((await (await a.request(path)).json()).positionMs, 1000);
+    assert.equal((await db.prepare("SELECT version FROM checkpoints WHERE owner_id=? AND episode_id=?").bind(a.id, id).first()).version, 0);
+    await db.prepare("UPDATE checkpoints SET version=42 WHERE owner_id=? AND episode_id=?").bind(a.id, id).run();
+    const updated = await a.request(path, "PUT", { positionMs: 2000, history: [] });
+    assert.equal(updated.status, 200, await updated.clone().text());
+    assert.equal((await (await a.request(path)).json()).positionMs, 2000);
+    assert.equal((await db.prepare("SELECT version FROM checkpoints WHERE owner_id=? AND episode_id=?").bind(a.id, id).first()).version, 42);
+    assert.equal(await (await b.request(path)).json(), null);
+  } finally {
+    await db.prepare("ALTER TABLE checkpoints DROP COLUMN version").run();
+  }
+});
+
 test("signed sessions cannot be forged; quota reservations are atomic under concurrency", async () => {
   const a = await visitor();
   await seed("secret", a.id);

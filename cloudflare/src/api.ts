@@ -169,7 +169,7 @@ async function route(
       if (value.resumeMs !== undefined)
         value.resumeMs = Math.min(value.resumeMs, metadata.durationMs);
       await env.DB.prepare(
-        "INSERT INTO checkpoints VALUES(?,?,?) ON CONFLICT(owner_id,episode_id) DO UPDATE SET value=excluded.value",
+        "INSERT INTO checkpoints(owner_id,episode_id,value) VALUES(?,?,?) ON CONFLICT(owner_id,episode_id) DO UPDATE SET value=excluded.value",
       )
         .bind(owner, id, JSON.stringify(value))
         .run();
