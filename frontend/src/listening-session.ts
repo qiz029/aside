@@ -60,6 +60,7 @@ type VoiceFactory = (
   manual?: boolean,
 ) => VoicePort;
 interface SessionOptions {
+  debugRecognition?: boolean;
   playerConfig?: Partial<PlayerConfig>;
   mode?: ListeningMode;
   followupMs?: number;
@@ -88,6 +89,10 @@ export class ListeningSession {
   private customWait: boolean;
   private error = "";
   private events: string[] = [];
+  private debugRecognition: boolean;
+  private liveInputText = "";
+  private liveInputDeltas: { atMs: number; text: string }[] = [];
+  private lastInputDisposition = "No input received";
   private contextAt = -1;
   private resumeTimer?: () => void;
   private heartbeat?: () => void;
@@ -102,6 +107,7 @@ export class ListeningSession {
     private backend: PlayerBackend,
     options: SessionOptions = {},
   ) {
+    this.debugRecognition = options.debugRecognition ?? false;
     this.playerConfig = createPlayerConfig(options.playerConfig);
     this.audio.configure(this.playerConfig);
     this.clock = options.clock ?? systemClock;
@@ -200,6 +206,7 @@ export class ListeningSession {
   }
   load(episode: Episode, checkpoint: Checkpoint | null) {
     this.stop();
+    this.resetRecognitionDiagnostics();
     this.episode = episode;
     this.playback = initialPlayback(
       clampPlayerPosition(
@@ -242,8 +249,19 @@ export class ListeningSession {
       configured: this.configured,
       error: this.error,
       microphoneConfig: this.microphone,
+      recognition: this.debugRecognition ? {
+        liveInputText: this.liveInputText,
+        recentDeltas: this.liveInputDeltas,
+        lastInputDisposition: this.lastInputDisposition,
+        ...this.conversation.inputDiagnostics(),
+      } : undefined,
       voice: await this.voice?.diagnostics?.(),
     };
+  }
+  private resetRecognitionDiagnostics() {
+    this.liveInputText = "";
+    this.liveInputDeltas = [];
+    this.lastInputDisposition = "No input received";
   }
   setQuestion(text: string) {
     this.conversation.setDraft(text);
@@ -628,6 +646,7 @@ export class ListeningSession {
     )
       return;
     this.status = "connecting";
+    this.resetRecognitionDiagnostics();
     this.setError("");
     const generation = ++this.voiceGeneration,
       episodeId = this.episode.id;
@@ -655,6 +674,14 @@ export class ListeningSession {
       this.microphone,
       this.lifecycle,
       {
+        onInputTranscript: (text) => {
+          if (!valid() || !this.debugRecognition) return;
+          this.liveInputText = (this.liveInputText + text).slice(-4000);
+          this.liveInputDeltas = [...this.liveInputDeltas, {
+            atMs: this.clock.now(), text: text.slice(-500),
+          }].slice(-30);
+          this.lastInputDisposition = "Received from Live; awaiting input gate";
+        },
         onStatus: (status) => {
           if (valid()) {
             this.status = status;
@@ -733,15 +760,25 @@ export class ListeningSession {
           }
         },
         onTranscript: (role, text) => {
-          if (role === "user" && !text.trim()) return;
+          if (role === "user" && !text.trim()) {
+            if (valid() && this.debugRecognition)
+              this.lastInputDisposition = "Whitespace delta skipped by input gate";
+            return;
+          }
           if (role === "user" && text.trim() && valid())
             this.log(
               `Live input transcript received (${text.length} characters)`,
             );
-          if (
+          const accepted =
             (role === "user" ? acceptLiveInput() : acceptsInput()) &&
-            (role === "user" || !!this.playback.interruption)
-          )
+            (role === "user" || !!this.playback.interruption);
+          if (role === "user" && valid() && this.debugRecognition)
+            this.lastInputDisposition = accepted
+              ? "Forwarded to conversation; see submittedText for backend dispatch"
+              : this.playback.resumeRequested
+                ? "Skipped while playback resumes"
+                : "Skipped: no active input";
+          if (accepted)
             this.conversation.transcript(role, text);
         },
         onDelegation: (id) => {

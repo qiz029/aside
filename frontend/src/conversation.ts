@@ -110,6 +110,19 @@ export class Conversation {
       shortPauseRequest(this.submittedText)
     );
   }
+  /** Read only: observing this must never submit or accept an utterance. */
+  inputDiagnostics() {
+    const input = this.turns.find((turn) => turn.id === this.streamIds.user);
+    return {
+      conversationInput: input?.text ?? "",
+      submittedText: this.submittedText,
+      requestPending: !!this.pending && !this.pending.signal.aborted,
+      delegationReceived: !!this.delegation,
+      shortPauseCandidate: shortPauseRequest(input?.text ?? ""),
+      settled: this.settled,
+      acceptedInput: this.acceptedInput,
+    };
+  }
   reset(history: Turn[] = []) {
     this.cancel();
     this.turns = history.slice(-100);

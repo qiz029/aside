@@ -183,6 +183,10 @@ export class OnDemandVoice {
       let sessionId = "";
       let intentional = false;
       const cloud = this.deps.cloud({
+        onInputTranscript: (text) => {
+          if (this.cloud === cloud && version === this.version)
+            this.cb.onInputTranscript?.(text);
+        },
         onDiagnostic: (message) => {
           if (this.cloud === cloud) this.cb.onDiagnostic?.(message);
         },

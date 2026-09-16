@@ -27,6 +27,7 @@ export function usePlayerController() {
     const audio = new BrowserPodcastAudio();
     const session = new ListeningSession(audio, playerBackend, {
       playerConfig: loadPlayerConfig(),
+      debugRecognition: new URLSearchParams(location.search).has("debug"),
     });
     return { audio, session };
   });

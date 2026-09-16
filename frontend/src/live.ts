@@ -9,6 +9,8 @@ export interface LiveCallbacks {
   onClose(finalized: boolean, seconds: number): void;
   onUsage?(seconds: number): void;
   onDiagnostic?(message: string): void;
+  /** Raw recognition deltas for opt-in local diagnostics, before input gating. */
+  onInputTranscript?(text: string): void;
 }
 export class LiveConnection {
   private peer?: RTCPeerConnection;
@@ -85,8 +87,10 @@ export class LiveConnection {
           if (
             m.type === "session.input_transcript.delta" &&
             typeof m.delta === "string"
-          )
+          ) {
+            this.callbacks.onInputTranscript?.(m.delta);
             this.callbacks.onTranscript("user", m.delta);
+          }
           if (
             m.type === "session.output_transcript.delta" &&
             typeof m.delta === "string"

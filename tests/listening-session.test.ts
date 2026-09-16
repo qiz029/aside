@@ -93,6 +93,7 @@ function setup(
   mode: ListeningMode = "off",
   permission?: Promise<void>,
   playerConfig?: Partial<PlayerConfig>,
+  debugRecognition = false,
 ) {
   const clock = new Clock();
   const audio = {
@@ -187,6 +188,7 @@ function setup(
     },
   };
   const session = new ListeningSession(audio, backend, {
+    debugRecognition,
     mode,
     playerConfig,
     clock,
@@ -241,6 +243,66 @@ function setup(
     },
   };
 }
+
+test("recognition diagnostics are opt-in and never turn raw deltas into a question", async () => {
+  const s = setup("auto");
+  s.session.start();
+  await flush();
+  s.callbacks.onInputTranscript?.("Private background speech");
+  assert.equal((await s.session.voiceDiagnostics()).recognition, undefined);
+  assert.equal(s.requests.length, 0);
+  assert.deepEqual(s.session.checkpoint().history, []);
+  s.session.dispose();
+});
+
+test("debug recognition preserves raw fragments and distinguishes backend dispatch", async () => {
+  const s = setup("auto", undefined, undefined, true);
+  s.session.start();
+  await flush();
+  s.warm();
+  s.callbacks.onInputTranscript?.("Wait, wait!");
+  let trace = (await s.session.voiceDiagnostics()).recognition!;
+  assert.equal(trace.liveInputText, "Wait, wait!");
+  assert.equal(trace.conversationInput, "");
+  assert.equal(trace.submittedText, "");
+  s.callbacks.onTranscript("user", "Wait, wait!");
+  s.clock.advance(120);
+  await flush();
+  trace = (await s.session.voiceDiagnostics()).recognition!;
+  assert.equal(trace.conversationInput, "Wait, wait!");
+  assert.equal(trace.submittedText, s.requests[0].data.history.at(-1)?.text);
+  assert.equal(trace.requestPending, true);
+  assert.equal(trace.shortPauseCandidate, true);
+  assert.deepEqual(s.session.checkpoint().history, []);
+  assert.ok(s.session.getSnapshot().events.every((event) => !event.includes("Wait, wait!")));
+  s.session.stop();
+  assert.equal((await s.session.voiceDiagnostics()).recognition?.liveInputText, "Wait, wait!");
+  s.session.dispose();
+});
+
+test("debug recognition is bounded, preserves whitespace and clears on a new connection or episode", async () => {
+  const s = setup("auto", undefined, undefined, true);
+  s.session.start();
+  await flush();
+  for (const text of ["Hello", " ", "there!"]) s.callbacks.onInputTranscript?.(text);
+  assert.equal((await s.session.voiceDiagnostics()).recognition?.liveInputText, "Hello there!");
+  for (let i = 0; i < 40; i++) s.callbacks.onInputTranscript?.("x".repeat(600));
+  const trace = (await s.session.voiceDiagnostics()).recognition!;
+  assert.equal(trace.liveInputText.length, 4000);
+  assert.equal(trace.recentDeltas.length, 30);
+  assert.ok(trace.recentDeltas.every((delta) => delta.text.length === 500));
+  const old = s.callbacks;
+  s.session.stop();
+  old.onInputTranscript?.("stale");
+  assert.equal((await s.session.voiceDiagnostics()).recognition?.liveInputText, trace.liveInputText);
+  s.session.start();
+  await flush();
+  assert.equal((await s.session.voiceDiagnostics()).recognition?.liveInputText, "");
+  s.callbacks.onInputTranscript?.("new episode must not inherit this");
+  s.session.load(episode, null);
+  assert.equal((await s.session.voiceDiagnostics()).recognition?.liveInputText, "");
+  s.session.dispose();
+});
 
 test("complete text action cancels older work and resumes at the fixed semantic anchor", async () => {
   const s = setup();

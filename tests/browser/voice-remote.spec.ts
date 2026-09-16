@@ -171,6 +171,29 @@ test("diagnostics shows real local input frames, sending state and WebRTC byte c
   await page.getByRole("button", { name: "Pause", exact: true }).click();
 });
 
+test("debug shows raw recognition before delegation and the exact text dispatched to the backend", async ({ page }) => {
+  const { inputs, errors } = await setupRemote(page, true);
+  await page.locator(".debug-toggle").click();
+  const panel = page.getByRole("region", { name: "Voice diagnostics" });
+  const recognition = async () => JSON.parse((await panel.locator("pre").textContent())!).session?.recognition;
+  await page.evaluate(() => {
+    for (const delta of ["Honey,", " ", "what's for dinner?"])
+      (window as any).remoteChannel.send(JSON.stringify({ type: "session.input_transcript.delta", delta }));
+  });
+  await expect.poll(async () => (await recognition())?.liveInputText).toBe("Honey, what's for dinner?");
+  expect((await recognition()).submittedText).toBe("");
+  expect(inputs).toHaveLength(0);
+  await expect(page.getByRole("log")).not.toContainText("dinner");
+  await page.evaluate(() => (window as any).remoteChannel.send(JSON.stringify({ type: "session.delegation.created", delegation: { id: "debug-test", target: "client" } })));
+  await expect.poll(() => inputs.length).toBe(1);
+  await expect.poll(async () => (await recognition())?.submittedText).toBe(inputs[0].history.at(-1).text);
+  await expect.poll(async () => (await recognition())?.settled).toBe(true);
+  await expect(page.getByRole("log")).not.toContainText("dinner");
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+  await expect.poll(async () => (await recognition())?.liveInputText).toBe("Honey, what's for dinner?");
+  expect(errors).toEqual([]);
+});
+
 test("short Live input pauses through NDJSON without local onset or delegation", async ({
   page,
 }) => {
