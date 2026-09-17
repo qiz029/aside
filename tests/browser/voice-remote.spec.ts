@@ -1,4 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { mockPlayer } from "./remote-fixture";
 import { LiveIntent } from "../../backend/src/live-intent";
 import type {
@@ -12,6 +14,8 @@ async function setupRemote(
   page: Page,
   debug = false,
   respond?: (q: QuestionRequest) => QuestionResult,
+  acknowledgeClose = true,
+  origin = "",
 ) {
   await mockPlayer(page);
   let transcriptions = 0,
@@ -177,41 +181,47 @@ async function setupRemote(
       },
       debug,
     );
-    const answer = await page.evaluate(async (offer) => {
-      const peer = new RTCPeerConnection();
-      Object.assign(window, { remotePeer: peer });
-      const ctx = new AudioContext(),
-        osc = ctx.createOscillator(),
-        gain = ctx.createGain(),
-        dest = ctx.createMediaStreamDestination();
-      gain.gain.value = 0;
-      osc.connect(gain).connect(dest);
-      osc.start();
-      await ctx.resume();
-      for (const track of dest.stream.getTracks())
-        peer.addTrack(track, dest.stream);
-      Object.assign(window, { remoteOutput: { ctx, gain } });
-      peer.ondatachannel = ({ channel }) => {
-        Object.assign(window, { remoteChannel: channel });
-        channel.onopen = () =>
-          channel.send(JSON.stringify({ type: "session.started" }));
-        channel.onmessage = ({ data }) => {
-          if (JSON.parse(data).type === "session.close")
-            channel.send(
-              JSON.stringify({ type: "session.closed", usage: { seconds: 3 } }),
-            );
+    const answer = await page.evaluate(
+      async ({ offer, acknowledgeClose }) => {
+        const peer = new RTCPeerConnection();
+        Object.assign(window, { remotePeer: peer });
+        const ctx = new AudioContext(),
+          osc = ctx.createOscillator(),
+          gain = ctx.createGain(),
+          dest = ctx.createMediaStreamDestination();
+        gain.gain.value = 0;
+        osc.connect(gain).connect(dest);
+        osc.start();
+        await ctx.resume();
+        for (const track of dest.stream.getTracks())
+          peer.addTrack(track, dest.stream);
+        Object.assign(window, { remoteOutput: { ctx, gain } });
+        peer.ondatachannel = ({ channel }) => {
+          Object.assign(window, { remoteChannel: channel });
+          channel.onopen = () =>
+            channel.send(JSON.stringify({ type: "session.started" }));
+          channel.onmessage = ({ data }) => {
+            if (acknowledgeClose && JSON.parse(data).type === "session.close")
+              channel.send(
+                JSON.stringify({
+                  type: "session.closed",
+                  usage: { seconds: 3 },
+                }),
+              );
+          };
         };
-      };
-      await peer.setRemoteDescription({ type: "offer", sdp: offer });
-      await peer.setLocalDescription(await peer.createAnswer());
-      if (peer.iceGatheringState !== "complete")
-        await new Promise<void>((resolve) =>
-          peer.addEventListener("icegatheringstatechange", () => {
-            if (peer.iceGatheringState === "complete") resolve();
-          }),
-        );
-      return peer.localDescription!.sdp;
-    }, sdp);
+        await peer.setRemoteDescription({ type: "offer", sdp: offer });
+        await peer.setLocalDescription(await peer.createAnswer());
+        if (peer.iceGatheringState !== "complete")
+          await new Promise<void>((resolve) =>
+            peer.addEventListener("icegatheringstatechange", () => {
+              if (peer.iceGatheringState === "complete") resolve();
+            }),
+          );
+        return peer.localDescription!.sdp;
+      },
+      { offer: sdp, acknowledgeClose },
+    );
     await route.fulfill({
       json: {
         session: { id: "test-live" },
@@ -220,7 +230,7 @@ async function setupRemote(
       },
     });
   });
-  await page.goto(`/?episode=remote-a${debug ? "&debug" : ""}`);
+  await page.goto(`${origin}/?episode=remote-a${debug ? "&debug" : ""}`);
   await page.getByRole("button", { name: "Play", exact: true }).click();
   await expect
     .poll(() => page.evaluate(() => (window as any).remoteChannel?.readyState))
@@ -310,6 +320,52 @@ async function setupRemote(
     questionRequests: () => questionRequests,
   };
 }
+
+test("reloading sends a server close even when the voice never acknowledges closing", async ({
+  page,
+}) => {
+  const received: unknown[] = [];
+  // Unload keepalive requests outlive the page's interception callbacks. Use a
+  // real same-origin HTTP receiver to prove the close survives page destruction.
+  const server = createServer(async (request, response) => {
+    if (request.url?.endsWith("/usage")) {
+      let body = "";
+      for await (const chunk of request) body += chunk;
+      received.push(JSON.parse(body));
+      response
+        .writeHead(200, { "Content-Type": "application/json" })
+        .end('{"ok":true}');
+    } else if (request.url?.startsWith("/api/")) {
+      response
+        .writeHead(404, { "Content-Type": "application/json" })
+        .end('{"error":"Test endpoint"}');
+    } else {
+      const upstream = await fetch(
+        new URL(request.url!, "http://127.0.0.1:5173"),
+      );
+      response.writeHead(upstream.status, {
+        "Content-Type": upstream.headers.get("Content-Type") ?? "text/plain",
+      });
+      response.end(Buffer.from(await upstream.arrayBuffer()));
+    }
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    await setupRemote(page, false, undefined, false, origin);
+    await page.unroute("**/api/episodes/*/usage");
+    await page.unroute("**/api/**");
+    await page.reload();
+    await expect
+      .poll(() => received, { timeout: 1500 })
+      .toEqual([
+        { sessionId: "test-live", seconds: 0, finalized: false, closed: true },
+      ]);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
 
 for (const url of ["/episodes/remote-a?debug", "/?episode=remote-a&debug"])
   test(`diagnostics preserves its entry and stays passive at ${url}`, async ({

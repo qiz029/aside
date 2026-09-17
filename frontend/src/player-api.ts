@@ -62,7 +62,12 @@ export interface PlayerBackend {
   transcribe(id: string, audio: Blob, signal: AbortSignal): Promise<string>;
   usage(
     id: string,
-    data: { sessionId: string; seconds: number; finalized: boolean },
+    data: {
+      sessionId: string;
+      seconds: number;
+      finalized: boolean;
+      closed?: boolean;
+    },
   ): Promise<void>;
 }
 export interface PlayerHealth {

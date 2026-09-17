@@ -70,6 +70,7 @@ export const attention = {
 export class ListeningSession {
   private controlAbort?: AbortController;
   private controlSession = "";
+  private liveSession?: { id: string; episodeId: string };
   private controlVersion = 0;
   private controlSequence = 0;
   private controlLastSync = -Infinity;
@@ -787,6 +788,8 @@ export class ListeningSession {
     this.publish();
   }
   private closeVoice() {
+    const live = this.liveSession;
+    this.liveSession = undefined;
     this.answerWindow = false;
     this.spokenSync?.();
     this.spokenSync = undefined;
@@ -798,6 +801,18 @@ export class ListeningSession {
     this.voiceGeneration++;
     const voice = this.voice;
     this.voice = undefined;
+    // pagehide cannot wait for the WebRTC close acknowledgement or its timer.
+    // The web backend uses keepalive for this owner/session-bound close request;
+    // the supervisor still confirms closure before releasing its lease.
+    if (live)
+      void this.backend
+        .usage(live.episodeId, {
+          sessionId: live.id,
+          seconds: 0,
+          finalized: false,
+          closed: true,
+        })
+        .catch(() => {});
     void voice?.close();
     this.status = "off";
     this.publish();
@@ -1297,6 +1312,8 @@ export class ListeningSession {
         },
         onUsage: (seconds, sessionId) => usage(seconds, sessionId, false),
         onClose: (finalized, seconds, sessionId, intentional) => {
+          if (valid() && this.liveSession?.id === sessionId)
+            this.liveSession = undefined;
           usage(seconds, sessionId, finalized, true);
           this.log(
             finalized
@@ -1332,6 +1349,7 @@ export class ListeningSession {
           // only voice slot. Its own close can take half a minute to reach the
           // server, so ask now; otherwise the replacement is refused as busy.
           if (!valid()) usage(0, result.session.id, false, true);
+          else this.liveSession = { id: result.session.id, episodeId };
           if (this.serverVoice && valid()) {
             if (!result.control)
               throw Error(

@@ -148,6 +148,7 @@ function setup(
   let createLive: (() => Promise<unknown>) | undefined;
   const updates: LiveControlUpdate[] = [];
   const usages: Parameters<PlayerBackend["usage"]>[1][] = [];
+  const usageEpisodes: string[] = [];
   let liveGate: Promise<void> | undefined;
   const backend: PlayerBackend = {
     question(_id, data, signal, progress, preview) {
@@ -188,7 +189,8 @@ function setup(
     async transcribe() {
       throw Error("Unexpected transcription");
     },
-    async usage(_id, data) {
+    async usage(id, data) {
+      usageEpisodes.push(id);
       usages.push(data);
     },
   };
@@ -313,6 +315,7 @@ function setup(
       return event;
     },
     usages,
+    usageEpisodes,
     /** Keeps the next session start pending until the returned release runs. */
     holdLive() {
       let release!: () => void;
@@ -1892,11 +1895,52 @@ test("given a failed buffered reply, the next request can prepare a fresh audio 
   await flush();
   s.push(s.decision("answer"));
   await flush();
-  s.callbacks.onError("Voice reply buffer exceeded 30 seconds. Please ask again.");
+  s.callbacks.onError(
+    "Voice reply buffer exceeded 30 seconds. Please ask again.",
+  );
   await flush();
   assert.equal(s.serverState.assistant?.state, "interrupted");
   s.commands.length = 0;
   s.callbacks.onInputTranscript?.("Could you say that again?");
   assert.ok(s.commands.includes("prepareOutput"));
+  s.session.dispose();
+});
+
+test("given page teardown, notify the server immediately without waiting for a voice close callback", async () => {
+  const s = setup("auto", undefined, undefined, false, true);
+  s.session.start();
+  await flush();
+  s.session.stop();
+  assert.deepEqual(s.usages, [
+    { sessionId: "test-session", seconds: 0, finalized: false, closed: true },
+  ]);
+  s.session.stop();
+  assert.equal(
+    s.usages.length,
+    1,
+    "repeated teardown must not re-send the close request",
+  );
+  s.session.dispose();
+});
+
+test("given an episode switch, close the established session against its original episode", async () => {
+  const s = setup("auto", undefined, undefined, false, true);
+  s.session.start();
+  await flush();
+  s.session.load({ ...episode, id: "another" }, null);
+  assert.deepEqual(s.usageEpisodes, [episode.id]);
+  assert.equal(s.usages[0]?.closed, true);
+  s.session.dispose();
+});
+
+test("given a confirmed close, later teardown does not request another server close", async () => {
+  const s = setup("auto", undefined, undefined, false, true);
+  s.session.start();
+  await flush();
+  s.callbacks.onClose(true, 12, "test-session", true);
+  s.session.stop();
+  assert.deepEqual(s.usages, [
+    { sessionId: "test-session", seconds: 12, finalized: true, closed: true },
+  ]);
   s.session.dispose();
 });
