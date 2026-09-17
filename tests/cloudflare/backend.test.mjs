@@ -2708,13 +2708,14 @@ test("Live sideband pushes multiple decisions on one owner-bound NDJSON stream w
     assert.equal(answer.result.action, "answer");
     const spokenPlayer = { ...update.player, sequence: 3, revision: 3,
       playback: { mode: "awaiting_followup", interrupted: true, resumeMs: 900 },
-      assistant: { decisionId: answer.decisionId, text: "Shall I resume the podcast?", state: "finished" },
+      assistant: { decisionId: answer.decisionId, text: "Shall I resume the podcast?", state: "quiet" },
     };
     assert.equal((await a.request(path, "PUT", { sessionId, player: spokenPlayer, acknowledgement: { decisionId: answer.decisionId, applied: true } })).status, 200);
     liveReply = async body => {
       const context = JSON.parse(body.input[0].content); requests.push(context);
       assert.deepEqual(context.history.slice(-2), [{ role: "assistant", text: "Shall I resume the podcast?" }, { role: "user", text: "Yes" }]);
       assert.equal(context.conversation.playback.playback.interrupted, true);
+      assert.equal(context.conversation.assistant.state, "quiet");
       return Response.json({ id: crypto.randomUUID(), output: [{ type: "function_call", call_id: "resume", name: "resume_podcast", arguments: "{}" }] });
     };
     sidebands.get(sessionId).send(JSON.stringify({ type: "session.input_transcript.delta", delta: "Yes", start_ms: 8000, end_ms: 8100 }));

@@ -307,7 +307,8 @@ export class Conversation {
     }
     this.followup.cancel();
   }
-  outputEnded() {
+  /** A played segment stopped; this is not a semantic Live reply boundary. */
+  outputQuiet() {
     if (this.outputIsAnswer) {
       this.committed = this.snapshot.history;
       this.answerQueued = false;
@@ -421,6 +422,10 @@ export class Conversation {
     const voice = this.host.voice();
     if ((delegationId || speak) && voice) {
       this.answerQueued = true;
+      // GPT-Live may pause to think or fetch information, then speak again.
+      // Audio inactivity cannot authorize podcast playback; wait for an
+      // explicit resume request throughout this spoken conversation.
+      this.hold();
       voice.append("commentary", result.answer, delegationId ?? null);
       voice.activity();
       if (this.delegation === delegationId) this.delegation = undefined;

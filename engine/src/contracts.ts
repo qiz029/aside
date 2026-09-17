@@ -36,7 +36,8 @@ const playbackContextSchema = z.object({
 export const spokenReplySchema = z.object({
   decisionId: z.string().min(1).max(100),
   text: z.string().max(12000),
-  state: z.enum(["queued", "speaking", "finished", "interrupted"]),
+  // Quiet is only observed audio inactivity; GPT-Live has no per-reply done event.
+  state: z.enum(["queued", "speaking", "quiet", "finished", "interrupted"]),
 });
 export type SpokenReply = z.infer<typeof spokenReplySchema>;
 /** Browser-owned playback state, not a transcript or an intent request. */

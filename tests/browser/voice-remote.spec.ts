@@ -53,7 +53,7 @@ async function setupRemote(
           preRollMs: 750,
           graceMs: 100,
           idleCloseMs: 60000,
-          autoResumeMs: 0,
+          autoResumeMs: 3000,
         },
       },
     }),
@@ -326,13 +326,62 @@ async function setupRemote(
                 .textContent())!,
             ).session?.spokenReply?.state,
         )
-        .toBe("finished");
+        .toBe("quiet");
     },
     acknowledgements,
     transcriptions: () => transcriptions,
     questionRequests: () => questionRequests,
   };
 }
+
+test("a progress sentence, thinking pause and ignored bystander speech keep the podcast paused until requested", async ({
+  page,
+}) => {
+  const s = await setupRemote(page, true, (q) => {
+    const text = q.history.at(-1)!.text;
+    return {
+      action: text.includes("dinner")
+        ? "ignore"
+        : text.includes("resume")
+          ? "resume"
+          : "answer",
+      revision: q.revision,
+      answer: "The actual explanation",
+      sources: [],
+      tools: [],
+    };
+  });
+  await page.locator(".debug-toggle").click();
+  await s.speak(["Can you explain that?"]);
+  await expect.poll(() => s.acknowledgements.length).toBe(1);
+  await s.reply("Let me check that.");
+  // Longer than the old three-second automatic-resume deadline. Media and
+  // AudioWorklet clocks run in real time, so this gap is part of the scenario.
+  await page.waitForTimeout(4000);
+  expect(await s.audio.evaluate((a: HTMLAudioElement) => a.paused)).toBe(true);
+  await s.speak(["Honey, what should we have for dinner?"]);
+  await expect.poll(() => s.inputs.length).toBe(2);
+  expect(s.inputs[1].conversation?.assistant?.state).toBe("quiet");
+  await s.reply(" Here is what I found.");
+  await expect
+    .poll(
+      async () =>
+        JSON.parse(
+          (await page
+            .getByRole("region", { name: "Voice diagnostics" })
+            .locator("pre")
+            .textContent())!,
+        ).session?.spokenReply?.text,
+    )
+    .toBe("Let me check that. Here is what I found.");
+  expect(await s.audio.evaluate((a: HTMLAudioElement) => a.paused)).toBe(true);
+  await s.speak(["Please resume the podcast"]);
+  await expect
+    .poll(() => s.audio.evaluate((a: HTMLAudioElement) => a.paused))
+    .toBe(false);
+  expect(s.questionRequests()).toBe(0);
+  expect(s.errors).toEqual([]);
+});
 
 test("expiry during a spoken answer clears Answering and leaves podcast resume usable", async ({
   page,
@@ -714,7 +763,7 @@ for (const scenario of [
           text: scenario.offer,
         });
         expect(q.history.at(-1)?.text).toBe("Yes");
-        expect(q.conversation?.assistant?.state).toBe("finished");
+        expect(q.conversation?.assistant?.state).toBe("quiet");
         expect(q.conversation?.playback.playback?.interrupted).toBe(true);
       }
       return {

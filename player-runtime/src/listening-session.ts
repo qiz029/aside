@@ -545,7 +545,7 @@ export class ListeningSession {
   private silenceVoice() {
     if (
       this.spokenReply &&
-      ["queued", "speaking"].includes(this.spokenReply.state)
+      ["queued", "speaking", "quiet"].includes(this.spokenReply.state)
     )
       this.reportSpoken("interrupted");
     this.answerWindow = false;
@@ -1023,8 +1023,8 @@ export class ListeningSession {
   }
   private prepareLiveOutput() {
     if (!this.serverVoice) return;
-    if (this.answerWindow && this.spokenReply?.state === "finished")
-      this.silenceVoice();
+    // A quiet gap does not close the accepted reply's audio window. Background
+    // input during a lookup must not discard the continuation of that reply.
     if (!this.answerWindow) this.voice?.prepareOutput?.();
   }
   private receiveControl(event: LiveControlEvent) {
@@ -1077,7 +1077,7 @@ export class ListeningSession {
       if (event.result.action === "answer") {
         if (
           this.spokenReply &&
-          ["queued", "speaking"].includes(this.spokenReply.state)
+          ["queued", "speaking", "quiet"].includes(this.spokenReply.state)
         )
           this.reportSpoken("interrupted");
         this.spokenReply = {
@@ -1248,9 +1248,10 @@ export class ListeningSession {
               type: "assistant_end",
               revision: this.playback.revision,
             });
-            this.conversation.outputEnded();
+            this.conversation.outputQuiet();
           }
-          this.reportSpoken(active ? "speaking" : "finished");
+          // Playback silence can be a thinking gap, never a Live turn boundary.
+          this.reportSpoken(active ? "speaking" : "quiet");
         },
         onTranscript: (role, text) => {
           if (this.serverVoice && role === "user") {

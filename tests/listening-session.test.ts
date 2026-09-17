@@ -533,7 +533,7 @@ test("manual permission resolving after release or mode change cannot begin capt
     s.session.dispose();
   }
 });
-test("voice progress is excluded from latency and countdown starts after the answer audio", async () => {
+test("voice progress is excluded from latency and silence after the answer does not start a countdown", async () => {
   const s = setup("auto");
   s.session.start();
   await flush();
@@ -556,7 +556,10 @@ test("voice progress is excluded from latency and countdown starts after the ans
   ]);
   s.clock.advance(1000);
   s.callbacks.onOutput(false);
-  assert.equal(s.session.getSnapshot().resumeSeconds, 3);
+  assert.equal(s.session.getSnapshot().resumeSeconds, null);
+  s.clock.advance(10000);
+  await flush();
+  assert.equal(s.audio.playing, false);
   s.session.dispose();
 });
 test("warm transcript and delegation cancel countdown, then resume survives cloud failure", async () => {
@@ -1486,7 +1489,7 @@ test("a pushed answer pauses only when accepted and mixed questions never submit
   s.session.dispose();
 });
 
-test("an in-flight server interpretation holds the previous answer's auto-resume timer", async () => {
+test("an ignored server interpretation cannot resume the podcast after voice output goes quiet", async () => {
   const s = setup("auto", undefined, undefined, false, true);
   s.session.start();
   await flush();
@@ -1502,7 +1505,8 @@ test("an in-flight server interpretation holds the previous answer's auto-resume
   s.push(s.decision("ignore"));
   s.clock.advance(3000);
   await flush();
-  assert.equal(s.audio.playing, true);
+  assert.equal(s.audio.playing, false);
+  assert.equal(s.session.getSnapshot().resumeSeconds, null);
   s.session.dispose();
 });
 
@@ -1735,15 +1739,26 @@ test("under server voice control only a backend answer is heard or recorded", as
   s.callbacks.onTranscript("assistant", "An answer");
   assert.equal(s.session.getSnapshot().state.assistantSpeaking, true);
   assert.equal(s.session.getSnapshot().history.at(-1)?.text, "An answer");
-  // ...which new listener input does not cut off mid-answer, but closes after it.
+  // New listener input cannot cut off the accepted answer, even in a quiet gap.
   s.push({ type: "observing", version: s.serverState.version });
   assert.equal(lastMute(), "mute:false");
   s.callbacks.onOutput(false);
   s.push({ type: "observing", version: s.serverState.version });
-  assert.equal(lastMute(), "mute:true");
+  assert.equal(lastMute(), "mute:false");
   s.callbacks.onOutput(true);
-  s.callbacks.onTranscript("assistant", " and an aside of its own");
-  assert.equal(s.session.getSnapshot().history.at(-1)?.text, "An answer");
+  s.callbacks.onTranscript("assistant", " with a continuation");
+  assert.equal(
+    s.session.getSnapshot().history.at(-1)?.text,
+    "An answer with a continuation",
+  );
+  s.push(s.decision("player_control"));
+  await flush();
+  s.callbacks.onTranscript("assistant", " muted after an accepted control");
+  assert.equal(lastMute(), "mute:true");
+  assert.equal(
+    s.session.getSnapshot().history.some((t) => t.text.includes("muted after")),
+    false,
+  );
   s.session.dispose();
 });
 
@@ -1770,7 +1785,7 @@ test("one voice conversation reports delivered replies and playback state withou
   assert.equal(s.serverState.assistant?.state, "speaking");
   s.callbacks.onOutput(false);
   await flush();
-  assert.equal(s.serverState.assistant?.state, "finished");
+  assert.equal(s.serverState.assistant?.state, "quiet");
   assert.equal(s.serverState.playback?.mode, "awaiting_followup");
   s.push(s.decision("resume"));
   s.clock.advance(0);
@@ -1836,7 +1851,7 @@ test("recognition notifications before answer audio starts cannot swallow its fi
   s.push(s.decision("ignore"));
   s.callbacks.onOutput(false);
   await flush();
-  assert.equal(s.serverState.assistant?.state, "finished");
+  assert.equal(s.serverState.assistant?.state, "quiet");
   assert.equal(
     s.serverState.assistant?.text,
     "因为这些名目都不合，作者就用了正传。",
@@ -1891,7 +1906,8 @@ test("given a pending voice request, arm audio before classification even with d
   s.callbacks.onInputTranscript?.("And then?");
   assert.deepEqual(
     s.commands.filter((c) => c === "mute:true" || c === "prepareOutput"),
-    ["mute:true", "prepareOutput"],
+    [],
+    "a quiet gap is still part of the accepted answer",
   );
   s.session.dispose();
 });
@@ -2005,4 +2021,46 @@ test("given a control failure after an explicit resume, the pending resume still
   await flush();
   assert.equal(s.audio.playing, true);
   assert.equal(s.session.getSnapshot().state.mode, "playing");
+});
+
+test("a Live progress sentence and a long quiet gap do not finish the answer or resume the podcast", async (t) => {
+  const s = setup("auto", undefined, undefined, true, true);
+  t.after(() => s.session.dispose());
+  s.session.start();
+  await flush();
+  s.push(s.decision("answer"));
+  await flush();
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", "Let me check that.");
+  s.callbacks.onOutput(false);
+  s.clock.advance(10000);
+  await flush();
+  assert.equal(s.audio.playing, false);
+  assert.equal(s.session.getSnapshot().resumeSeconds, null);
+  assert.equal(s.serverState.assistant?.state, "quiet");
+  // Background input must not close the answer window during the pause.
+  s.push({ type: "observing", version: s.serverState.version });
+  s.push({ type: "classifying", version: s.serverState.version });
+  s.push(s.decision("ignore"));
+  s.clock.advance(10000);
+  await flush();
+  assert.equal(s.audio.playing, false);
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", " Here is what I found.");
+  s.callbacks.onOutput(false);
+  await flush();
+  assert.equal(
+    s.serverState.assistant?.text,
+    "Let me check that. Here is what I found.",
+  );
+  assert.equal(
+    s.session.getSnapshot().history.at(-1)?.text,
+    "Let me check that. Here is what I found.",
+  );
+  assert.equal(s.serverState.assistant?.state, "quiet");
+  s.push(s.decision("resume"));
+  s.clock.advance(0);
+  await flush();
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.serverState.assistant?.state, "interrupted");
 });

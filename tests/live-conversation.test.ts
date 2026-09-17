@@ -6,6 +6,7 @@ import type {
   LiveControlEvent,
   LivePlayerState,
 } from "@aside/engine/contracts";
+import { livePlayerStateSchema } from "@aside/engine/contracts";
 const player: LivePlayerState = {
   version: 0,
   sequence: 1,
@@ -162,4 +163,35 @@ test("session memory is bounded, omits queued speech, and can be cleared", () =>
     { role: "user", text: "New" },
   ]);
   assert.deepEqual(conversation.context(player).recentActions, []);
+});
+
+test("quiet output preserves the heard prefix without claiming the reply is finished", () => {
+  const conversation = new LiveConversation([]);
+  conversation.accept(decision("lookup"), true, player);
+  const quiet = livePlayerStateSchema.parse({
+    ...player,
+    assistant: {
+      decisionId: "lookup",
+      text: "Let me check that.",
+      state: "quiet",
+    },
+  });
+  conversation.observe(quiet);
+  assert.deepEqual(conversation.context(quiet).assistant, {
+    decisionId: "lookup",
+    state: "quiet",
+  });
+  assert.equal(conversation.history("Wait").at(-2)?.text, "Let me check that.");
+  conversation.observe({
+    ...quiet,
+    assistant: {
+      ...quiet.assistant!,
+      text: "Let me check that. Here is the result.",
+      state: "speaking",
+    },
+  });
+  const history = conversation.history("OK");
+  assert.equal(history.filter((t) => t.role === "assistant").length, 1);
+  assert.equal(history.at(-2)?.text, "Let me check that. Here is the result.");
+  assert.deepEqual(conversation.context(quiet).recentActions, []);
 });
