@@ -96,6 +96,9 @@ export interface VoicePort {
   close(): Promise<void>;
   cancelCapture(): void;
   mute(value: boolean): void;
+  /** Browser PCM gate: keep pending reply audio until the backend admits it. */
+  prepareOutput?(): void;
+  discardPendingOutput?(): void;
   interrupt(): void;
   playbackResumed(): void;
   append(

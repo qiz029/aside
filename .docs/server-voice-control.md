@@ -60,6 +60,14 @@ Cloudflare 通过已认证身份选择对应的 LiveSupervisor，再核对节目
 
 纯空白、标点和符号片段不单独形成发言，不触发 observing/classifying，也不会撤销已排队的回答。分隔符保留到同一输入的后续文字中，例如独立的空格或分片数字 `0` / `.` / `5`；新一轮开始时清空上轮尾部符号。前端收到识别通知时，只关闭已经结束的回答窗口，不会因为声音尚未开始就把排队中的回答静音。
 
+### Web 回答音频缓冲
+
+WebRTC 音轨在 `<audio muted>` 时仍然前进。只等 NDJSON `answer` 到达后取消静音，会跳过已传来的开头。Web 客户端现在通过 `MediaStreamSource → AudioWorklet PCM 队列 → Analyser → destination` 播放回答；静音的媒体元素仅保持 Chromium 的远端音轨接收，不承担可听播放。
+
+本地语音起点、Live 输入文字和后端 observing/classifying 都能提前进入 hold，重复通知不清空队首，也不代表允许暂停播客。后端 answer 放行后按 FIFO 播放，正在播放的回答不会被旁人识别通知切断。ignore 和纯播放器决定清掉尚未获准的音频；暂停、恢复、跳转、关闭连接清掉被取消的输出。队列最多 30 秒，等待声音前只保留 200ms 静音前滚；溢出会拒绝整段并报错，不丢掉头部继续播放尾部。缓冲仅在浏览器内存中，不落盘、不额外上传。
+
+speaking/finished 从队列后的实际 PCM 计算。字幕前缀同样保留，并参考已接收/已播放的音频位置分批释放；WebRTC 音频与字幕没有共同的逐字 ID，这仍是近似同步。debug 的连接信息增加 `outputGate`、`output.bufferedMs`、`receivedFrames`、`playedFrames`、`discardedFrames`、`overflows` 和 `pendingTranscriptChars`，可区分“收到了但在等待决定”和“已经播出”。原生移动端的音轨实现保持现有行为，尚未接入这套 Web Audio 缓冲。
+
 识别时间戳间隔超过 1.2 秒形成新输入快照；没有时间戳时使用接收时间。重复带时间戳的识别帧去重。重播参考收到本轮首片段时最后同步的播放位置，播放中通常有最多约一秒的状态采样误差，另加网络和识别延迟。
 
 有动作的决定等待执行回报，回报前不再发出下一动作。已经处理的文本通过 `handledText` 交给后端，防止追加礼貌用语或迟到委派重复执行相对调速。混合控制与问题先推送操作，收到回报后由后端继续回答 `followUpQuestion`。
@@ -77,7 +85,9 @@ npm test
 npm run test:voice-control-coverage
 npm run test:cloudflare
 npm run build
-npx playwright test tests/browser/voice-remote.spec.ts
+npx playwright test tests/browser/voice-remote.spec.ts tests/browser/voice-output.spec.ts
 ```
+
+`voice-output.spec.ts` 使用合成麦克风和 WebRTC 对端，把 440Hz 前缀完整传完后才放行，随后验证真实输出 PCM 仍先包含 440Hz、再包含 880Hz 后缀，并检查放行前无音频/字幕/说话状态。Chrome 使用 `--mute-audio`，不产生实际扬声器声音。这验证音频传输与门控，不代表已验证真实模型的措辞和听感。
 
 `npm run eval:voice-conversation` 是需要 `OPENAI_API_KEY` 的可选真实模型语义检查，覆盖恢复、确认继续解释、旁人聊天和混合指令。只使用合成对话，不开麦克风、不实际操作播放器；它会产生模型调用费用。普通单元/集成/浏览器测试使用模型替身，不能据此声称真实识别或语义准确率。

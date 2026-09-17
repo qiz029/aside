@@ -232,6 +232,12 @@ function setup(
     mute(value) {
       commands.push(`mute:${value}`);
     },
+    prepareOutput() {
+      commands.push("prepareOutput");
+    },
+    discardPendingOutput() {
+      commands.push("discardPendingOutput");
+    },
     interrupt() {
       commands.push("interrupt");
     },
@@ -1830,5 +1836,52 @@ test("recognition notifications before answer audio starts cannot swallow its fi
     "因为这些名目都不合，作者就用了正传。",
   );
   assert.equal(s.requests.length, 0);
+  s.session.dispose();
+});
+
+test("given a pending voice request, arm audio before classification even with debug disabled", async () => {
+  const s = setup("auto", undefined, undefined, false, true);
+  s.session.start();
+  await flush();
+  s.commands.length = 0;
+  s.callbacks.onSpeech(true);
+  assert.ok(s.commands.includes("prepareOutput"));
+  assert.equal(
+    s.audio.playing,
+    true,
+    "buffering alone does not pause the podcast",
+  );
+  s.commands.length = 0;
+  s.callbacks.onInputTranscript?.("Tell me more");
+  assert.ok(s.commands.includes("prepareOutput"));
+  s.push(s.decision("wait"));
+  assert.equal(s.commands.includes("discardPendingOutput"), false);
+  s.push(s.decision("ignore"));
+  assert.equal(s.commands.at(-1), "discardPendingOutput");
+  s.commands.length = 0;
+  s.push({ type: "observing", version: s.serverState.version });
+  assert.ok(
+    s.commands.includes("prepareOutput"),
+    "sideband also arms when local VAD/captions are absent",
+  );
+  s.push(s.decision("answer"));
+  await flush();
+  assert.ok(s.commands.includes("mute:false"));
+  s.callbacks.onOutput(true);
+  s.commands.length = 0;
+  s.callbacks.onSpeech(true);
+  s.callbacks.onInputTranscript?.("Honey, dinner?");
+  assert.equal(
+    s.commands.includes("prepareOutput"),
+    false,
+    "do not clear/rearm an audible answer",
+  );
+  s.callbacks.onOutput(false);
+  s.commands.length = 0;
+  s.callbacks.onInputTranscript?.("And then?");
+  assert.deepEqual(
+    s.commands.filter((c) => c === "mute:true" || c === "prepareOutput"),
+    ["mute:true", "prepareOutput"],
+  );
   s.session.dispose();
 });

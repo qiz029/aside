@@ -78,6 +78,12 @@ function setup(manual = false, continuous = false) {
           events.push(t + ":" + c);
         },
         mute() {},
+        prepareOutput() {
+          events.push("prepareOutput");
+        },
+        discardPendingOutput() {
+          events.push("discardPendingOutput");
+        },
         input(v) {
           events.push("input:" + v);
         },
@@ -339,6 +345,12 @@ test("continuous automatic listening warms Live before speech and retains it dur
   s.ready();
   await tick();
   assert.equal(s.voice.isWarm, true);
+  s.voice.prepareOutput();
+  s.voice.discardPendingOutput();
+  assert.deepEqual(s.events.slice(-2), [
+    "prepareOutput",
+    "discardPendingOutput",
+  ]);
   s.speech(true);
   s.speech(false);
   assert.equal(s.captures, 0);
@@ -374,7 +386,10 @@ test("continuous listening: a detector that keeps firing after the connection ca
   await tick();
   assert.deepEqual(s.questions, ["wait"]);
   assert.equal(s.voice.isCold, false);
-  assert.equal(s.events.at(-1) === "input:true" || s.events.includes("input:true"), true);
+  assert.equal(
+    s.events.at(-1) === "input:true" || s.events.includes("input:true"),
+    true,
+  );
   // From here on speech belongs to the open session.
   s.speech(false);
   s.speech(true);
@@ -397,7 +412,10 @@ test("continuous listening: noise or a failed transcription before the connectio
   assert.equal(s.voice.isCold, false);
   assert.equal(s.closed, 0);
   assert.ok(s.events.includes("input:true"));
-  assert.equal(s.events.some((x) => x.startsWith("error:")), false);
+  assert.equal(
+    s.events.some((x) => x.startsWith("error:")),
+    false,
+  );
   await s.voice.close();
 });
 
@@ -415,4 +433,3 @@ test("on-demand listening still waits for the listener to finish before answerin
   assert.equal(s.captures, 2);
   await s.voice.close();
 });
-

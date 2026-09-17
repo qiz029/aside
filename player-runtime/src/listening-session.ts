@@ -1000,13 +1000,18 @@ export class ListeningSession {
         });
     });
   }
+  private prepareLiveOutput() {
+    if (!this.serverVoice) return;
+    if (this.answerWindow && this.spokenReply?.state === "finished")
+      this.silenceVoice();
+    if (!this.answerWindow) this.voice?.prepareOutput?.();
+  }
   private receiveControl(event: LiveControlEvent) {
     if (event.type === "observing" || event.type === "classifying") {
       if (event.version !== this.controlVersion) return;
       // A queued answer may deliver text before audio starts. Recognition alone
       // cannot revoke it; only a new accepted decision can replace that answer.
-      if (this.answerWindow && this.spokenReply?.state === "finished")
-        this.silenceVoice();
+      this.prepareLiveOutput();
       this.conversation.liveInputPending(true);
       if (event.type === "classifying") this.attend();
       if (this.debugRecognition && event.text !== undefined) {
@@ -1039,9 +1044,13 @@ export class ListeningSession {
       return;
     }
     this.conversation.liveInputPending(event.result.action === "wait");
-    if (event.result.action === "ignore") this.release();
+    if (event.result.action === "ignore") {
+      this.voice?.discardPendingOutput?.();
+      this.release();
+    }
     if (event.result.action === "ignore" || event.result.action === "wait")
       return;
+    if (event.result.action !== "answer") this.voice?.discardPendingOutput?.();
     this.input = event.player;
     try {
       if (event.result.action === "answer") {
@@ -1110,7 +1119,9 @@ export class ListeningSession {
       this.lifecycle,
       {
         onInputTranscript: (text) => {
-          if (!valid() || !this.debugRecognition) return;
+          if (!valid()) return;
+          if (/[\p{L}\p{N}]/u.test(text)) this.prepareLiveOutput();
+          if (!this.debugRecognition) return;
           this.liveInputText = (this.liveInputText + text).slice(-4000);
           this.liveInputDeltas = [
             ...this.liveInputDeltas,
@@ -1144,7 +1155,7 @@ export class ListeningSession {
           if (valid()) {
             this.log("Live session started");
             this.sendContext(true);
-            voice.mute(this.playback.mode === "playing");
+            voice.mute(this.serverVoice || this.playback.mode === "playing");
           }
         },
         onSpeech: (active) => {
@@ -1152,6 +1163,7 @@ export class ListeningSession {
           this.inputSpeaking = active;
           this.log(active ? "Local speech started" : "Local speech ended");
           if (this.serverVoice && voice.isWarm && !voice.isCold) {
+            if (active) this.prepareLiveOutput();
             // VAD never segments turns or pauses: the sideband owns that. It
             // only makes room for the listener's voice before any transcript.
             if (active) this.attend(attention.speechLevel);

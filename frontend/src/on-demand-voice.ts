@@ -19,6 +19,8 @@ export interface CloudPort {
     id?: string | null,
   ): void;
   mute(value: boolean): void;
+  prepareOutput?(): void;
+  discardPendingOutput?(): void;
   input(value: boolean): void;
   interrupt(): void;
   close(): Promise<void>;
@@ -330,8 +332,7 @@ export class OnDemandVoice {
       )
         return;
       if (!text.trim()) {
-        if (!this.continuous)
-          throw Error("没有识别到完整问题，请再说一次");
+        if (!this.continuous) throw Error("没有识别到完整问题，请再说一次");
         // Noise before the connection is not a failed question.
         this.leaveCold();
         return;
@@ -440,6 +441,12 @@ export class OnDemandVoice {
   mute(value: boolean) {
     this.desiredMuted = value;
     this.cloud?.mute(value || this.cold);
+  }
+  prepareOutput() {
+    this.cloud?.prepareOutput?.();
+  }
+  discardPendingOutput() {
+    this.cloud?.discardPendingOutput?.();
   }
   interrupt() {
     this.outputActive = false;

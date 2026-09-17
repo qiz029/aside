@@ -1,5 +1,9 @@
 import type { Turn } from "@aside/engine/core";
 import { readSpeechLevels } from "./audio-levels";
+import type {
+  OutputBufferState,
+  OutputCommand,
+} from "./voice-output-worklet.js";
 export interface LiveCallbacks {
   onReady(): void;
   onOutput(active: boolean): void;
@@ -18,13 +22,20 @@ export class LiveConnection {
   private mic?: MediaStream;
   private ctx?: AudioContext;
   private output?: AnalyserNode;
-  private audio = new Audio();
-  private timer?: number;
+  // Chromium needs an attached, playing media element to pull the remote track.
+  // It is permanently silent; only the worklet connects to the audible output.
+  private receiver = new Audio();
+  private outputQueue?: AudioWorkletNode;
+  private outputMode: "hold" | "play" | "discard" | "overflow" = "discard";
+  private outputEpoch = 0;
+  private outputBuffer?: OutputBufferState;
+  private pendingTranscript: { text: string; frame: number }[] = [];
+  private pendingTranscriptChars = 0;
+  private transcriptOpen = false;
   private closeTimer?: number;
   private ready = false;
   private closing = false;
   private outputActive = false;
-  private lastOutput = 0;
   private startTimer?: number;
   private resolveStart?: () => void;
   private rejectStart?: (error: Error) => void;
@@ -32,8 +43,6 @@ export class LiveConnection {
   private closedPromise?: Promise<void>;
   private resolveClose?: () => void;
   private seconds = 0;
-  private blockedUntilQuiet = false;
-  private desiredMuted = false;
   constructor(private callbacks: LiveCallbacks) {}
   async connect(
     source: MediaStream,
@@ -54,17 +63,60 @@ export class LiveConnection {
       }, 30000);
       this.ctx = new AudioContext();
       await this.ctx.resume();
+      // The media track advances even when muted. Gate PCM before the speaker,
+      // retaining the prefix while the NDJSON answer decision is in flight.
+      await this.ctx.audioWorklet.addModule(
+        new URL("./voice-output-worklet.js", import.meta.url).href,
+      );
+      this.outputQueue = new AudioWorkletNode(this.ctx, "aside-voice-output", {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [1],
+        channelCount: 1,
+        channelCountMode: "explicit",
+      });
+      this.outputQueue.onprocessorerror = () => {
+        this.callbacks.onError(
+          "Voice audio playback failed. Please reconnect the microphone.",
+        );
+        void this.close();
+      };
+      this.outputQueue.port.onmessage = ({ data }) => {
+        if (this.closing || data.epoch !== this.outputEpoch) return;
+        this.outputBuffer = data;
+        if (data.mode === "overflow" && this.outputMode !== "overflow") {
+          this.outputMode = "overflow";
+          this.pendingTranscript = [];
+          this.pendingTranscriptChars = 0;
+          this.transcriptOpen = false;
+          this.callbacks.onError(
+            "Voice reply buffer exceeded 30 seconds. Please ask again.",
+          );
+        }
+        if (data.active && !this.outputActive) {
+          this.outputActive = true;
+          this.callbacks.onOutput(true);
+          this.transcriptOpen = this.outputMode === "play";
+        }
+        this.flushOutputTranscript();
+        if (!data.active && this.outputActive) {
+          this.outputActive = false;
+          this.callbacks.onOutput(false);
+        }
+      };
+      this.output = this.ctx.createAnalyser();
+      this.output.fftSize = 1024;
+      this.outputQueue.connect(this.output).connect(this.ctx.destination);
+      this.setOutput(this.outputMode === "hold" ? "hold" : "discard");
       this.peer = new RTCPeerConnection();
-      this.audio.autoplay = true;
       this.peer.ontrack = (e) => {
         const stream = e.streams[0] ?? new MediaStream([e.track]);
-        this.audio.srcObject = stream;
-        void this.audio
+        this.receiver.muted = true;
+        this.receiver.srcObject = stream;
+        void this.receiver
           .play()
           .catch(() => this.callbacks.onError("请点击页面允许音频播放"));
-        const output = (this.output = this.ctx!.createAnalyser());
-        output.fftSize = 1024;
-        this.ctx!.createMediaStreamSource(stream).connect(output);
+        this.ctx!.createMediaStreamSource(stream).connect(this.outputQueue!);
       };
       for (const track of this.mic.getTracks())
         this.peer.addTrack(track, this.mic);
@@ -73,7 +125,9 @@ export class LiveConnection {
         try {
           const m = JSON.parse(e.data);
           if (typeof m.type === "string" && m.type !== "session.usage.updated")
-            this.callbacks.onDiagnostic?.(`Live event: ${m.type.slice(0, 100)}`);
+            this.callbacks.onDiagnostic?.(
+              `Live event: ${m.type.slice(0, 100)}`,
+            );
           if (m.type === "session.started") {
             this.ready = true;
             clearTimeout(this.startTimer);
@@ -95,7 +149,7 @@ export class LiveConnection {
             m.type === "session.output_transcript.delta" &&
             typeof m.delta === "string"
           )
-            this.callbacks.onTranscript("assistant", m.delta);
+            this.outputTranscript(m.delta);
           if (
             m.type === "session.delegation.created" &&
             m.delegation?.target === "client"
@@ -130,33 +184,6 @@ export class LiveConnection {
         type: "answer",
         sdp: result.transport.sdp,
       });
-      const rms = (a: AnalyserNode) => {
-        const data = new Float32Array(a.fftSize);
-        a.getFloatTimeDomainData(data);
-        return Math.sqrt(data.reduce((n, x) => n + x * x, 0) / data.length);
-      };
-      this.timer = window.setInterval(() => {
-        if (!this.ready || this.closing) return;
-        const now = performance.now();
-        const output = this.output;
-        const loud = output && rms(output) > 0.008;
-        if (loud) {
-          this.lastOutput = now;
-          if (!this.outputActive && !this.blockedUntilQuiet) {
-            this.outputActive = true;
-            this.callbacks.onOutput(true);
-          }
-        } else if (now - this.lastOutput > 900) {
-          if (this.blockedUntilQuiet) {
-            this.blockedUntilQuiet = false;
-            this.audio.muted = this.desiredMuted;
-          }
-          if (this.outputActive) {
-            this.outputActive = false;
-            this.callbacks.onOutput(false);
-          }
-        }
-      }, 40);
       await started;
     } catch (err) {
       this.rejectStart?.(err instanceof Error ? err : Error(String(err)));
@@ -166,7 +193,12 @@ export class LiveConnection {
   }
   /** Fills `levels` with the answer voice's speech bands; false unless it is audible. */
   levels(levels: Float32Array) {
-    if (!this.output || !this.ready || this.closing || this.audio.muted)
+    if (
+      !this.output ||
+      !this.ready ||
+      this.closing ||
+      this.outputMode !== "play"
+    )
       return false;
     readSpeechLevels(this.output, levels);
     return true;
@@ -187,14 +219,64 @@ export class LiveConnection {
           }),
         );
   }
+  /** Arm once per pending turn; partial recognition must never reset its prefix. */
+  prepareOutput() {
+    if (this.outputMode === "discard") this.setOutput("hold");
+  }
+  /** Ignored bystander speech must not interrupt an already accepted reply. */
+  discardPendingOutput() {
+    if (this.outputMode === "hold" || this.outputMode === "overflow")
+      this.setOutput("discard");
+  }
   mute(muted: boolean) {
-    this.desiredMuted = muted;
-    this.audio.muted = muted || this.blockedUntilQuiet;
+    if (muted) this.setOutput("discard");
+    else if (this.outputMode !== "overflow") this.setOutput("play");
+  }
+  private setOutput(command: OutputCommand) {
+    this.outputMode =
+      command === "play" ? "play" : command === "hold" ? "hold" : "discard";
+    if (command === "discard") {
+      this.pendingTranscript = [];
+      this.pendingTranscriptChars = 0;
+      this.transcriptOpen = false;
+      this.outputActive = false;
+    }
+    this.outputQueue?.port.postMessage({ command, epoch: ++this.outputEpoch });
+    this.callbacks.onDiagnostic?.(`Live output buffer: ${this.outputMode}`);
+  }
+  private outputTranscript(text: string) {
+    if (this.outputMode === "discard" || this.outputMode === "overflow") return;
+    // Captions and WebRTC packets have no shared word/packet IDs. Pace delayed
+    // captions against received/played PCM, rather than releasing the entire
+    // held reply's text as soon as its first syllable starts. This is approximate.
+    if (this.pendingTranscriptChars + text.length > 32000) {
+      this.setOutput("discard");
+      this.callbacks.onError(
+        "Voice reply captions exceeded the buffer. Please ask again.",
+      );
+      return;
+    }
+    this.pendingTranscript.push({
+      text,
+      frame: this.outputBuffer?.receivedFrames ?? 0,
+    });
+    this.pendingTranscriptChars += text.length;
+    this.flushOutputTranscript();
+  }
+  private flushOutputTranscript() {
+    if (this.outputMode !== "play" || !this.transcriptOpen) return;
+    const through = this.outputBuffer?.playedThroughFrame ?? 0;
+    while (
+      this.pendingTranscript.length &&
+      this.pendingTranscript[0].frame <= through
+    ) {
+      const part = this.pendingTranscript.shift()!;
+      this.pendingTranscriptChars -= part.text.length;
+      this.callbacks.onTranscript("assistant", part.text);
+    }
   }
   interrupt() {
-    this.audio.muted = true;
-    this.blockedUntilQuiet = true;
-    this.outputActive = false;
+    this.setOutput("discard");
     this.append(
       "instructions",
       "The user is asking a new question. Stop the old answer, listen, then respond in the language of their new utterance.",
@@ -204,7 +286,9 @@ export class LiveConnection {
     this.mic
       ?.getTracks()
       .forEach((t) => (t.enabled = enabled && !this.closing));
-    this.callbacks.onDiagnostic?.(`Live microphone sending: ${enabled && !this.closing}`);
+    this.callbacks.onDiagnostic?.(
+      `Live microphone sending: ${enabled && !this.closing}`,
+    );
   }
   /** On-demand metadata only. Never reads or records microphone samples. */
   async diagnostics() {
@@ -218,6 +302,9 @@ export class LiveConnection {
       inputEnabled: track?.enabled,
       inputMuted: track?.muted,
       inputState: track?.readyState,
+      output: this.outputBuffer,
+      outputGate: this.outputMode,
+      pendingTranscriptChars: this.pendingTranscriptChars,
     };
     const audio: Record<string, unknown>[] = [];
     try {
@@ -225,9 +312,18 @@ export class LiveConnection {
       stats?.forEach((report) => {
         if (report.kind !== "audio") return;
         if (report.type === "outbound-rtp")
-          audio.push({ type: report.type, bytesSent: report.bytesSent, packetsSent: report.packetsSent });
+          audio.push({
+            type: report.type,
+            bytesSent: report.bytesSent,
+            packetsSent: report.packetsSent,
+          });
         if (report.type === "media-source")
-          audio.push({ type: report.type, audioLevel: report.audioLevel, totalAudioEnergy: report.totalAudioEnergy, totalSamplesDuration: report.totalSamplesDuration });
+          audio.push({
+            type: report.type,
+            audioLevel: report.audioLevel,
+            totalAudioEnergy: report.totalAudioEnergy,
+            totalSamplesDuration: report.totalSamplesDuration,
+          });
       });
       return { ...state, audio };
     } catch {
@@ -241,7 +337,7 @@ export class LiveConnection {
       (resolve) => (this.resolveClose = resolve),
     );
     this.closing = true;
-    this.audio.muted = true;
+    this.setOutput("discard");
     this.input(false);
     if (this.ready) this.sendClose();
     // If creation is in flight, retain the channel long enough to close on session.started.
@@ -265,13 +361,17 @@ export class LiveConnection {
   }
   private cleanup() {
     clearTimeout(this.startTimer);
-    clearInterval(this.timer);
     clearTimeout(this.closeTimer);
     this.ready = false;
     this.channel?.close();
     this.peer?.close();
     this.mic?.getTracks().forEach((t) => t.stop());
     void this.ctx?.close();
-    this.audio.srcObject = null;
+    this.outputQueue?.disconnect();
+    this.outputQueue?.port.close();
+    this.pendingTranscript = [];
+    this.pendingTranscriptChars = 0;
+    this.receiver.pause();
+    this.receiver.srcObject = null;
   }
 }
