@@ -760,9 +760,9 @@ export class ListeningSession {
           }
         },
         onTranscript: (role, text) => {
-          if (role === "user" && !text.trim()) {
+          if (role === "user" && !text.trim() && !this.input) {
             if (valid() && this.debugRecognition)
-              this.lastInputDisposition = "Whitespace delta skipped by input gate";
+              this.lastInputDisposition = "Whitespace before any input skipped";
             return;
           }
           if (role === "user" && text.trim() && valid())

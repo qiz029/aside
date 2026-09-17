@@ -194,6 +194,23 @@ test("debug shows raw recognition before delegation and the exact text dispatche
   expect(errors).toEqual([]);
 });
 
+test("prefixed streamed playback requests reach NDJSON classification without delegation", async ({ page }) => {
+  const { audio, inputs, errors } = await setupRemote(page, true);
+  await page.locator(".debug-toggle").click();
+  await page.evaluate(() => {
+    for (const delta of ["Hey", " ", "could you", " ", "pause the podcast?"])
+      (window as any).remoteChannel.send(JSON.stringify({ type: "session.input_transcript.delta", delta }));
+  });
+  await expect.poll(() => audio.evaluate((a: HTMLAudioElement) => a.paused)).toBe(true);
+  expect(inputs).toHaveLength(1);
+  expect(inputs[0].history.at(-1).text).toBe("Hey could you pause the podcast?");
+  const panel = page.getByRole("region", { name: "Voice diagnostics" }).locator("pre");
+  await expect.poll(async () => JSON.parse((await panel.textContent())!).session?.recognition?.submittedText).toBe("Hey could you pause the podcast?");
+  await expect(page.locator("pre.debug").last()).toContainText("Backend intent: player_control");
+  expect(errors).toEqual([]);
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+});
+
 test("short Live input pauses through NDJSON without local onset or delegation", async ({
   page,
 }) => {

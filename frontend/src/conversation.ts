@@ -26,6 +26,12 @@ const shortPauseRequest = (text: string) =>
     text.trim(),
   );
 
+// This routes possible English playback requests to the backend, never executes
+// them. Prefixes, mixed-language context, negations and quotations must all reach
+// the model so it can determine the addressee and whether an action is wanted.
+const playbackControlCandidate = (text: string) =>
+  /\b(?:wait|pause|stop|hold\s+on|hang\s+on|play|resume|continue|slower?|faster?|speed|volume|mute|unmute|louder|quieter|rewind|forward|replay|repeat|missed|skip|seek)\b/i.test(text);
+
 export type ConversationVoice = Pick<
   OnDemandVoice,
   "append" | "activity" | "setWorking"
@@ -119,6 +125,7 @@ export class Conversation {
       requestPending: !!this.pending && !this.pending.signal.aborted,
       delegationReceived: !!this.delegation,
       shortPauseCandidate: shortPauseRequest(input?.text ?? ""),
+      playbackControlCandidate: playbackControlCandidate(input?.text ?? ""),
       settled: this.settled,
       acceptedInput: this.acceptedInput,
     };
@@ -229,6 +236,9 @@ export class Conversation {
     if (at >= 0) turns[at] = { ...turns[at], text: turns[at].text + text };
     else turns.push({ id, role, text });
     this.history(turns);
+    // Keep space-only deltas so streamed words do not become "Heystop". They
+    // do not invalidate an in-flight interpretation or start another request.
+    if (role === "user" && !text.trim()) return;
     if (role === "assistant")
       this.noteAnswer(turns.find((turn) => turn.id === id)!.text);
     else {
@@ -273,13 +283,13 @@ export class Conversation {
         return;
       // Live delegates as soon as it has an actionable clause. Do not wait for
       // local VAD speech-end; later transcript deltas cancel stale work.
-      const pauseCandidate =
+      const controlCandidate =
         this.host.playerInput()?.source === "voice" &&
-        shortPauseRequest(latest ?? "");
+        playbackControlCandidate(latest ?? "");
       if (
         latest?.trim() &&
         latest !== this.submittedText &&
-        (this.delegation || pauseCandidate)
+        (this.delegation || controlCandidate)
       ) {
         this.submittedText = latest;
         void this.answer(this.delegation, true);

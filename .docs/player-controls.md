@@ -112,6 +112,8 @@ npx playwright test tests/browser/voice-remote.spec.ts tests/browser/player-conf
 浏览器用真实 AudioWorklet、WebRTC 回环和 `<audio>`，只模拟云端转写/委派事件与后端 NDJSON。测试不会调用付费模型；实际 GPT-Live 委派时机、对话对象判断、否定/改口、回声以及端到端延迟需要真实音频评测。
 # Voice debugging
 
+English playback words in a longer or mixed-language utterance now select a backend classification candidate even if Live emits no delegation. The backend still owns addressee/negation/quotation checks and the actual decision; candidate detection never changes playback. Streamed whitespace is preserved. General conversation without playback vocabulary still uses Live delegation. Requests use the existing streaming debounce, without requiring local speech-end.
+
 Open `/episodes/<id>?debug`, then expand **开发观察 / Developer view** below the player. The debug flag survives canonical URL replacement and episode selection. Opening diagnostics never starts playback or requests microphone access.
 
 The panel polls local metadata once a second while expanded:

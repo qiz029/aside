@@ -767,6 +767,62 @@ test("short-command fallback still lets the backend ignore speech to somebody el
   s.session.dispose();
 });
 
+test("prefixed English controls reach classification without delegation or speech-end", async () => {
+  for (const text of ["Hey, stop the podcast please!", "Excuse me—could you pause?", "你好。Stop!", "Could you turn the volume down?"]) {
+    const s = setup("auto");
+    s.session.start();
+    await flush();
+    s.warm();
+    s.callbacks.onSpeech(true);
+    s.callbacks.onTranscript("user", text);
+    s.clock.advance(120);
+    assert.equal(s.requests.length, 1, text);
+    assert.equal(s.requests[0].data.history.at(-1)?.text, text);
+    assert.equal(s.audio.playing, true, "candidate selection must not pause audio");
+    remoteResult(s, 0, [{ type: "pause" }]);
+    await flush();
+    assert.equal(s.audio.playing, false);
+    s.session.dispose();
+  }
+});
+
+test("standalone whitespace deltas preserve word boundaries for classification", async () => {
+  const s = setup("auto");
+  s.session.start();
+  await flush();
+  s.warm();
+  for (const delta of ["Hey", " ", "stop", " ", "please"])
+    s.callbacks.onTranscript("user", delta);
+  s.clock.advance(120);
+  assert.equal(s.requests.length, 1);
+  assert.equal(s.requests[0].data.history.at(-1)?.text, "Hey stop please");
+  assert.equal(s.audio.playing, true);
+  s.callbacks.onTranscript("user", " ");
+  s.clock.advance(500);
+  assert.equal(s.requests.length, 1);
+  assert.equal(s.requests[0].signal.aborted, false);
+  s.session.dispose();
+});
+
+test("fallback candidates containing negations or bystander commands remain subject to backend rejection", async () => {
+  for (const text of ["Do not stop the podcast", "Honey, stop moving the chair", "He said 'pause the podcast' in that story"]) {
+    const s = setup("auto");
+    s.session.start();
+    await flush();
+    s.warm();
+    s.callbacks.onTranscript("user", text);
+    s.clock.advance(120);
+    assert.equal(s.requests.length, 1, text);
+    assert.equal(s.audio.playing, true);
+    s.requests[0].resolve({ revision: s.requests[0].data.revision, action: "ignore", answer: "", tools: [], sources: [] });
+    await flush();
+    assert.equal(s.audio.playing, true);
+    assert.equal(s.audio.config.volume, 1);
+    assert.deepEqual(s.session.checkpoint().history, []);
+    s.session.dispose();
+  }
+});
+
 test("a correction to a short pause request cancels the old interpretation", async () => {
   const s = setup("auto");
   await liveInput(s, "Wait", "pause-candidate");
