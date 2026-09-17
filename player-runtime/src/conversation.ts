@@ -352,8 +352,7 @@ export class Conversation {
   receiveLive(result: QuestionResult, text: string) {
     if (result.action === "ignore" || result.action === "wait") return;
     this.beginTurn(!this.host.playback().interruption);
-    this.acceptedInput = true;
-    this.addUser(text);
+    this.recognizeQuestion(text);
     this.submittedText = text;
     this.consumeResult(result, text, undefined, true, true);
     this.host.changed();
@@ -415,7 +414,7 @@ export class Conversation {
     this.noteAnswer(result.answer);
     this.host.log(`tools: ${result.tools.join(", ") || "context"}`);
     if (result.action === "resume") {
-      this.host.resume(1500);
+      this.host.resume(serverOwned ? 0 : 1500);
       return;
     }
     this.host.engage();

@@ -286,15 +286,26 @@ test("mixed control and question continues on the server only after playback ack
   assert.equal(s.requests[1].data.history.at(-1)?.text, "Explain that");
   await s.finish("answer");
   const answer = s.events.filter((e) => e.type === "decision").at(-1)!;
-  s.intent.update(state({ sequence: 2, revision: 2 }), {
-    decisionId: answer.decisionId,
-    applied: true,
-  });
+  s.intent.update(
+    state({
+      sequence: 2,
+      revision: 2,
+      assistant: {
+        decisionId: answer.decisionId,
+        text: "The delivered response",
+        state: "finished",
+      },
+    }),
+    {
+      decisionId: answer.decisionId,
+      applied: true,
+    },
+  );
   s.speak("What else?", 3000, 3100);
   await s.advance();
   assert.ok(
     s.requests[2].data.history.some(
-      (t) => t.role === "assistant" && t.text === "A response",
+      (t) => t.role === "assistant" && t.text === "The delivered response",
     ),
   );
   s.intent.close();
@@ -323,4 +334,133 @@ test("rejected and missing acknowledgements never silently allow another command
     /acknowledgement timed out/,
   );
   missing.intent.close();
+});
+
+test("a short confirmation sees the spoken offer and tool state in the same conversation", async () => {
+  const s = setup();
+  s.speak("Could you continue?");
+  await s.advance();
+  await s.finish("answer");
+  const answer = s.events.find((e) => e.type === "decision")!;
+  s.intent.update(
+    state({
+      sequence: 1,
+      wasPlaying: false,
+      audibleSource: "none",
+      playback: { mode: "awaiting_followup", interrupted: true },
+    }),
+    { decisionId: answer.decisionId, applied: true },
+  );
+  s.speak("Yes", 3000, 3100);
+  await s.advance();
+  assert.equal(s.requests.length, 2);
+  // The output report arrives while this confirmation is being interpreted.
+  s.intent.update(
+    state({
+      sequence: 2,
+      wasPlaying: false,
+      audibleSource: "none",
+      assistant: {
+        decisionId: answer.decisionId,
+        text: "Shall I resume the podcast?",
+        state: "finished",
+      },
+    }),
+  );
+  await s.finish("answer");
+  await s.advance();
+  assert.equal(
+    s.events.filter((e) => e.type === "decision").length,
+    1,
+    "result based on missing dialogue context was discarded",
+  );
+  assert.deepEqual(s.requests[2].data.history.slice(-2), [
+    { role: "assistant", text: "Shall I resume the podcast?" },
+    { role: "user", text: "Yes" },
+  ]);
+  await s.finish("resume");
+  const resume = s.events.filter((e) => e.type === "decision").at(-1)!;
+  s.intent.update(
+    state({ sequence: 3, playback: { mode: "resuming", interrupted: true } }),
+    { decisionId: resume.decisionId, applied: true },
+  );
+  s.speak("Slower", 5000, 5100);
+  await s.advance();
+  assert.deepEqual(
+    s.requests[3].data.conversation?.recentActions.at(-1)?.commands,
+    [{ type: "play" }],
+  );
+  s.intent.close();
+});
+
+test("spoken replies do not re-submit an already handled question, and a quick yes is a new turn", async () => {
+  const s = setup();
+  s.speak("Continue?");
+  await s.advance();
+  await s.finish("answer");
+  const answer = s.events.find((e) => e.type === "decision")!;
+  s.intent.update(
+    state({
+      sequence: 1,
+      assistant: {
+        decisionId: answer.decisionId,
+        text: "Resume?",
+        state: "finished",
+      },
+    }),
+    { decisionId: answer.decisionId, applied: true },
+  );
+  await s.advance();
+  assert.equal(s.requests.length, 1);
+  s.speak("Yes", 600, 700);
+  await s.advance();
+  assert.equal(s.requests[1].data.history.at(-1)?.text, "Yes");
+  assert.equal(s.requests[1].data.player?.handledText, undefined);
+  s.intent.close();
+});
+
+test("streaming assistant updates cannot indefinitely postpone an interruption or reclassify bystanders", async () => {
+  for (const result of ["player_control", "ignore"] as const) {
+    const s = setup();
+    s.speak("Explain that");
+    await s.advance();
+    await s.finish("answer");
+    const answer = s.events.find((e) => e.type === "decision")!;
+    const output = (sequence: number) =>
+      state({
+        sequence,
+        wasPlaying: false,
+        audibleSource: "assistant",
+        assistant: {
+          decisionId: answer.decisionId,
+          state: "speaking",
+          text: "An ongoing explanation. ".repeat(sequence),
+        },
+      });
+    s.intent.update(output(1), {
+      decisionId: answer.decisionId,
+      applied: true,
+    });
+    s.speak(
+      result === "ignore" ? "Honey, what's for dinner?" : "Stop",
+      600,
+      700,
+    );
+    await s.advance();
+    s.intent.update(output(2));
+    await s.finish(result);
+    await s.advance();
+    assert.equal(s.requests.length, 3, "one refresh includes the new context");
+    s.intent.update(output(3));
+    await s.finish(result);
+    assert.equal(
+      s.events.filter((e) => e.type === "decision").at(-1)?.result.action,
+      result,
+      "continued assistant speech cannot starve the user decision",
+    );
+    s.intent.update(output(4));
+    await s.advance();
+    assert.equal(s.requests.length, 3, "unchanged input refresh is bounded");
+    s.intent.close();
+  }
 });

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { buildContext, getPassage, searchPodcast } from "@aside/engine/server";
-import { explicitResume, type Analysis } from "@aside/engine/core";
+import { type Analysis } from "@aside/engine/core";
 import {
   playerCommandsSchema,
   type QuestionRequest,
@@ -76,10 +76,6 @@ export class QuestionService implements QuestionAnswerer {
       sources: [],
       tools: ["resume_podcast"],
     });
-    const latest =
-      request.history.filter((turn) => turn.role === "user").at(-1)?.text ?? "";
-    if (request.player?.source !== "voice" && explicitResume(latest))
-      return { ...resume(), tools: [] };
     const sources: QuestionResult["sources"] = [],
       used: string[] = [];
     // Accumulated per round and reported once on the way out, including on a
@@ -142,6 +138,9 @@ export class QuestionService implements QuestionAnswerer {
             ? {
                 ...buildContext(analysis, request.atMs, request.history),
                 ...(request.player ? { player: request.player } : {}),
+                ...(request.conversation
+                  ? { conversation: request.conversation }
+                  : {}),
               }
             : undefined,
         previousId,

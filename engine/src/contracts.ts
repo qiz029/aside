@@ -19,6 +19,26 @@ export const playerInputSchema = z.object({
   handledText: z.string().max(12000).optional(),
 });
 export type PlayerInput = z.infer<typeof playerInputSchema>;
+const playbackContextSchema = z.object({
+  mode: z.enum([
+    "paused",
+    "playing",
+    "listening",
+    "answering",
+    "awaiting_followup",
+    "resuming",
+    "reconnecting",
+  ]),
+  interrupted: z.boolean(),
+  resumeMs: positionSchema.optional(),
+});
+/** Only output admitted to the client's answer audio window; never a planned reply. */
+export const spokenReplySchema = z.object({
+  decisionId: z.string().min(1).max(100),
+  text: z.string().max(12000),
+  state: z.enum(["queued", "speaking", "finished", "interrupted"]),
+});
+export type SpokenReply = z.infer<typeof spokenReplySchema>;
 /** Browser-owned playback state, not a transcript or an intent request. */
 export const livePlayerStateSchema = playerInputSchema
   .omit({
@@ -30,14 +50,38 @@ export const livePlayerStateSchema = playerInputSchema
     version: revisionSchema,
     sequence: revisionSchema,
     revision: revisionSchema,
+    playback: playbackContextSchema.optional(),
+    assistant: spokenReplySchema.optional(),
   });
 export type LivePlayerState = z.infer<typeof livePlayerStateSchema>;
 export const playerCommandsSchema = z.array(playerCommandSchema).min(1).max(4);
+const observedPlayerSchema = livePlayerStateSchema.omit({
+  assistant: true,
+  version: true,
+  sequence: true,
+  revision: true,
+});
+export const conversationContextSchema = z.object({
+  playback: observedPlayerSchema,
+  assistant: spokenReplySchema.omit({ text: true }).optional(),
+  recentActions: z
+    .array(
+      z.object({
+        decisionId: z.string(),
+        commands: playerCommandsSchema,
+        accepted: z.boolean(),
+        observed: observedPlayerSchema,
+      }),
+    )
+    .max(4),
+});
+export type ConversationContext = z.infer<typeof conversationContextSchema>;
 export const questionSchema = z.object({
   atMs: positionSchema,
   revision: revisionSchema,
   history: historySchema,
   player: playerInputSchema.optional(),
+  conversation: conversationContextSchema.optional(),
 });
 export const liveSchema = z.object({
   history: historySchema.default([]),
@@ -128,6 +172,9 @@ export const liveControlEventSchema = z.discriminatedUnion("type", [
     type: z.literal("classifying"),
     version: revisionSchema,
     text: z.string().optional(),
+    conversation: conversationContextSchema
+      .extend({ history: historySchema })
+      .optional(),
   }),
   z.object({
     type: z.literal("decision"),

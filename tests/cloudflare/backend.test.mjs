@@ -2544,6 +2544,32 @@ test("Live sideband pushes multiple decisions on one owner-bound NDJSON stream w
     assert.notEqual(second.decisionId, first.decisionId);
     assert.equal(second.result.revision, 2);
     assert.equal(requests.length, 2);
+    assert.deepEqual(requests[1].conversation.recentActions[0].commands, [{ type: "pause" }]);
+    assert.equal((await a.request(path, "PUT", { ...update, player: { ...update.player, sequence: 2 }, acknowledgement: { decisionId: second.decisionId, applied: true } })).status, 200);
+    liveReply = async body => {
+      requests.push(JSON.parse(body.input[0].content));
+      return Response.json({ id: crypto.randomUUID(), output_text: "A draft explanation", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "A draft explanation", annotations: [] }] }] });
+    };
+    sidebands.get(sessionId).send(JSON.stringify({ type: "session.input_transcript.delta", delta: "What does that mean?", start_ms: 5000, end_ms: 5300 }));
+    const answer = await next("decision");
+    assert.equal(answer.result.action, "answer");
+    const spokenPlayer = { ...update.player, sequence: 3, revision: 3,
+      playback: { mode: "awaiting_followup", interrupted: true, resumeMs: 900 },
+      assistant: { decisionId: answer.decisionId, text: "Shall I resume the podcast?", state: "finished" },
+    };
+    assert.equal((await a.request(path, "PUT", { sessionId, player: spokenPlayer, acknowledgement: { decisionId: answer.decisionId, applied: true } })).status, 200);
+    liveReply = async body => {
+      const context = JSON.parse(body.input[0].content); requests.push(context);
+      assert.deepEqual(context.history.slice(-2), [{ role: "assistant", text: "Shall I resume the podcast?" }, { role: "user", text: "Yes" }]);
+      assert.equal(context.conversation.playback.playback.interrupted, true);
+      return Response.json({ id: crypto.randomUUID(), output: [{ type: "function_call", call_id: "resume", name: "resume_podcast", arguments: "{}" }] });
+    };
+    sidebands.get(sessionId).send(JSON.stringify({ type: "session.input_transcript.delta", delta: "Yes", start_ms: 8000, end_ms: 8100 }));
+    const resuming = await next("classifying");
+    assert.equal(resuming.conversation.history.at(-2).text, "Shall I resume the podcast?");
+    const resume = await next("decision");
+    assert.equal(resume.result.action, "resume");
+    assert.equal((await a.request(path, "PUT", { sessionId, player: { ...spokenPlayer, sequence: 4, revision: 4, wasPlaying: true, audibleSource: "podcast", playback: { mode: "playing", interrupted: false } }, acknowledgement: { decisionId: resume.decisionId, applied: true } })).status, 200);
     const rows = await db.prepare("SELECT bucket FROM budgets WHERE bucket=?").bind(`trial:${new Date().toISOString().slice(0, 10)}:question:${a.id}`).all();
     assert.equal(rows.results.length, 0, "allowlisted control sessions do not consume public quota per fragment");
     assert.equal(networkCalls.some(p => p.includes("live-control")), false);

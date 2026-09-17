@@ -7,6 +7,7 @@ import type {
   QuestionResult,
   Turn,
 } from "@aside/engine/contracts";
+import { LiveConversation } from "./live-conversation.js";
 
 interface Ports {
   answer(
@@ -22,9 +23,11 @@ interface Ports {
 export class LiveIntent {
   private text = "";
   private evaluated = "";
+  private evaluatedConversation = -1;
+  private refreshed = "";
   private handled = "";
   private input?: PlayerInput;
-  private history: Turn[];
+  private conversation: LiveConversation;
   private endMs = -1;
   private lastInputAt = -1;
   private fragments = new Set<string>();
@@ -43,7 +46,7 @@ export class LiveIntent {
     private debug = false,
     private limit = 30,
   ) {
-    this.history = history.slice(-20);
+    this.conversation = new LiveConversation(history);
   }
 
   receive(event: Record<string, unknown>) {
@@ -71,7 +74,12 @@ export class LiveIntent {
       start !== undefined && this.endMs >= 0
         ? start - this.endMs
         : this.ports.now() - this.lastInputAt;
-    if (this.input && gap > 1200) this.resetTurn();
+    const replied =
+      this.handled &&
+      this.text.trim() === this.handled.trim() &&
+      this.player.assistant?.text.trim() &&
+      this.player.assistant.state !== "queued";
+    if (this.input && (gap > 1200 || replied)) this.resetTurn();
     if (end !== undefined) this.endMs = end;
     this.lastInputAt = this.ports.now();
     if (!this.input)
@@ -117,6 +125,7 @@ export class LiveIntent {
     }
     if (player.version !== this.player.version) this.resetTurn();
     this.player = player;
+    this.conversation.observe(player);
     if (ack && ack.decisionId !== this.waiting?.decisionId)
       console.warn("Aside voice acknowledgement matched no pending decision", {
         applied: ack.applied,
@@ -136,21 +145,15 @@ export class LiveIntent {
         decidedVersion: decision.version,
         version: player.version,
       });
+      this.conversation.accept(decision, ack.applied, player);
       if (ack.applied) {
         this.handled = decision.text;
-        this.history = [
-          ...this.history,
-          { role: "user" as const, text: decision.text },
-          ...(decision.result.action === "answer"
-            ? [{ role: "assistant" as const, text: decision.result.answer }]
-            : []),
-        ].slice(-20);
         this.ports.context(
           JSON.stringify({
             commandId: decision.decisionId,
-            status: "applied",
+            status: "accepted",
             player,
-            note: "The browser applied this decision. Do not repeat the action or give a spoken control acknowledgement.",
+            note: "The client accepted this decision. Playback state reports whether it is playing or still resuming. An answer is only queued for speech; do not assume its full text was heard. Do not repeat player actions or give spoken control acknowledgements.",
           }),
         );
         if (
@@ -168,6 +171,9 @@ export class LiveIntent {
       } else this.resetTurn();
       this.schedule();
     }
+    // A short confirmation can arrive just before the last output snapshot.
+    // Re-evaluate unhandled input with that context, never replay handled input.
+    this.schedule();
   }
   private resetTurn() {
     // A decision the browser never answered is the trace of a broken round trip.
@@ -186,7 +192,7 @@ export class LiveIntent {
     this.acknowledgementTimer?.();
     this.acknowledgementTimer = undefined;
     this.waiting = undefined;
-    this.text = this.evaluated = this.handled = "";
+    this.text = this.evaluated = this.handled = this.refreshed = "";
     this.input = undefined;
   }
   private schedule() {
@@ -196,7 +202,10 @@ export class LiveIntent {
       this.waiting ||
       this.timer ||
       !this.text.trim() ||
-      this.text.trim() === this.evaluated.trim()
+      this.text.trim() === this.handled.trim() ||
+      (this.text.trim() === this.evaluated.trim() &&
+        (this.evaluatedConversation === this.conversation.revision ||
+          this.refreshed.trim() === this.text.trim()))
     )
       return;
     // A fixed batching window is not a trailing debounce: continuous speech
@@ -233,26 +242,41 @@ export class LiveIntent {
       controller.signal,
       AbortSignal.timeout(15000),
     ]);
+    // Refresh an unchanged utterance once for late dialogue context. Continuous
+    // assistant output must neither starve an interruption nor repeatedly bill
+    // for the same bystander speech. New user words remain independently eligible.
+    const refreshing = this.evaluated.trim() === text.trim();
+    if (refreshing) this.refreshed = text;
     this.evaluated = text;
+    const conversationRevision = (this.evaluatedConversation =
+      this.conversation.revision);
+    const request: QuestionRequest = {
+      atMs: player.positionMs,
+      revision: this.player.revision,
+      history: this.conversation.history(text),
+      player,
+      conversation: this.conversation.context(this.player),
+    };
     this.ports.emit({
       type: "classifying",
       version,
-      ...(this.debug ? { text } : {}),
+      ...(this.debug
+        ? {
+            text,
+            conversation: {
+              ...request.conversation!,
+              history: request.history.slice(-6),
+            },
+          }
+        : {}),
     });
     try {
-      const result = await this.ports.answer(
-        {
-          atMs: player.positionMs,
-          revision: this.player.revision,
-          history: [...this.history, { role: "user", text }],
-          player,
-        },
-        signal,
-      );
+      const result = await this.ports.answer(request, signal);
       if (
         this.closed ||
         controller.signal.aborted ||
         epoch !== this.epoch ||
+        (!refreshing && conversationRevision !== this.conversation.revision) ||
         text.trim() !== this.text.trim()
       )
         return;
@@ -318,7 +342,7 @@ export class LiveIntent {
   close() {
     this.closed = true;
     this.resetTurn();
-    this.history = [];
+    this.conversation.clear();
     this.fragments.clear();
   }
 }

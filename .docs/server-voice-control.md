@@ -1,5 +1,17 @@
 # 服务端语音控制
 
+## 同一段对话中的播放器工具
+
+对话和播放器操作使用同一个 `QuestionService` 模型与工具集合。用户无需切换模式，也不需要说出“播客”或固定命令；模型结合连续对话决定回答、使用播放器工具，或静默等待/忽略旁人聊天。文字输入也经过模型，不再用“继续”的正则表达式跳过对话理解。
+
+`LiveConversation` 保存被接受的用户输入、客户端允许播出的助手转录和最近四次播放器工具回报。后端准备的回答不直接充当已说出的历史；Live 的实际措辞会由共享播放器 runtime 回传。只有对应已接受回答的输出能写入会话，静音的自发输出和未知决定的回报被丢弃。输出状态为 queued / speaking / finished / interrupted；转录与音频播放并非逐字精确对齐，所以中断记录表示进入允许播放窗口的前缀，不证明每个字都已经被用户听到。
+
+客户端通过已有 `PUT /live-control` 同步可选 `player.playback`（模式、是否因对话中断、恢复位置）和 `player.assistant`（决定 ID、实际输出转录、交付状态）。转录更新最多每 250ms 合并一次，结束和中断立即同步；它们是上下文更新，不会调用前端意图分类。旧客户端仍可使用原来的协议，但完整的已播回答上下文需要更新客户端。
+
+下一轮模型获得 `conversation.playback`、`conversation.assistant`、`conversation.recentActions` 和同一份历史。例如完成解释后的“OK, go on”可以恢复播放；对“Shall I resume?”说“Yes”会恢复，对“Would you like more explanation?”说“Yes”会继续解释。工具回报中的 accepted 只表示客户端接受，是否已经播放要看最新状态。恢复工具不再额外等待 1.5 秒。
+
+短确认和最后一段回答回报可能交错；新增上下文会让基于旧历史的未处理决定失效并重新判断。同一句输入最多因上下文更新重试一次，避免持续的助手转录让中断请求一直失效或反复判断旁人聊天；用户追加的新内容仍会继续判断。已处理的输入不会因助手输出更新而再次执行。诊断面板可查看实际输出和最近一次模型看到的对话上下文，原文仅在显式 debug 模式下进入诊断帧。
+
 自动模式开启后，音频通过 WebRTC 从浏览器送到 GPT-Live。后端在返回 SDP 前附加 sideband，并在浏览器打开控制流后持续解释 `session.input_transcript.delta`。浏览器字幕、本地 VAD 和 `session.delegation.created` 都不是意图判断的开关。参考 [OpenAI server-side controls](https://developers.openai.com/api/docs/guides/voice-server-controls) 和 [transcript fragments](https://developers.openai.com/api/docs/guides/live-delegation#react-to-transcript-fragments)。
 
 Workers 的 sideband 握手限时 5 秒，但收到升级响应后必须清除定时器。`fetch` 的取消信号在 WebSocket 升级后仍关联连接，直接使用 `AbortSignal.timeout(5000)` 会在约 5 秒时切断已经建立的连接。集成测试在握手后等待超过该期限，再验证连续两条 NDJSON 决策。
@@ -65,3 +77,5 @@ npm run test:cloudflare
 npm run build
 npx playwright test tests/browser/voice-remote.spec.ts
 ```
+
+`npm run eval:voice-conversation` 是需要 `OPENAI_API_KEY` 的可选真实模型语义检查，覆盖恢复、确认继续解释、旁人聊天和混合指令。只使用合成对话，不开麦克风、不实际操作播放器；它会产生模型调用费用。普通单元/集成/浏览器测试使用模型替身，不能据此声称真实识别或语义准确率。

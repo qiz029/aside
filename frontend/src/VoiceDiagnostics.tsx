@@ -77,6 +77,18 @@ export function VoiceDiagnostics({ read }: { read: () => Promise<Snapshot> }) {
               </blockquote>
             </div>
           </div>
+          {session?.spokenReply && (
+            <div className="debug-stage">
+              <h3>Assistant output · {session.spokenReply.state}</h3>
+              <p>
+                Reply transcript admitted to playback and shared with the
+                backend
+              </p>
+              <blockquote>
+                {session.spokenReply.text || "No spoken output yet."}
+              </blockquote>
+            </div>
+          )}
           <p className="debug-note">
             Input path: {recognition.lastInputDisposition}
           </p>

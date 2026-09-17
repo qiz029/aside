@@ -117,7 +117,7 @@ test("invalid or unknown tool calls return structured errors to the model", asyn
     { callId: "unknown", value: { error: "Unknown tool" } },
   ]);
 });
-test("explicit continuation bypasses the model and semantic continuation stops the tool loop", async () => {
+test("casual continuation reaches the conversational model and its resume tool ends the loop", async () => {
   let calls = 0;
   const model: QuestionModel = {
     async reply() {
@@ -137,11 +137,11 @@ test("explicit continuation bypasses the model and semantic continuation stops t
     ).action,
     "resume",
   );
-  assert.equal(calls, 0);
+  assert.equal(calls, 1);
   const result = await service.answer(analysis, request);
   assert.equal(result.action, "resume");
   assert.equal(result.answer, "");
-  assert.equal(calls, 1);
+  assert.equal(calls, 2);
 });
 test("tool budget and cancellation stop further model work", async () => {
   let calls = 0;
@@ -530,4 +530,45 @@ test("text answers expose model deltas before completion and reset tool-round pr
     "Walking ",
     "Walking helps thinking.",
   ]);
+});
+
+test("conversation and playback tools share the actual spoken history and observed state", async () => {
+  let received: Parameters<QuestionModel["reply"]>[0] | undefined;
+  const conversation = {
+    playback: {
+      positionMs: 1500,
+      wasPlaying: false,
+      audibleSource: "none" as const,
+      config: createPlayerConfig(),
+      playback: { mode: "awaiting_followup" as const, interrupted: true },
+    },
+    assistant: { decisionId: "spoken", state: "finished" as const },
+    recentActions: [],
+  };
+  const result = await new QuestionService({
+    async reply(input) {
+      received = input;
+      return reply({
+        calls: [{ id: "resume", name: "resume_podcast", arguments: "{}" }],
+      });
+    },
+  }).answer(analysis, {
+    ...request,
+    conversation,
+    history: [
+      { role: "assistant", text: "Shall I resume the podcast?" },
+      { role: "user", text: "OK" },
+    ],
+  });
+  assert.equal(result.action, "resume");
+  assert.deepEqual(received?.context?.conversation, conversation);
+  assert.deepEqual(received?.context?.history.at(-2), {
+    role: "assistant",
+    text: "Shall I resume the podcast?",
+  });
+  assert.ok(
+    received?.tools.some(
+      (t) => t.type === "function" && t.name === "control_podcast",
+    ),
+  );
 });

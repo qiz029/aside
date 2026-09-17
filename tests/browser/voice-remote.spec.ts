@@ -1,10 +1,18 @@
 import { test, expect, type Page } from "@playwright/test";
 import { mockPlayer } from "./remote-fixture";
 import { LiveIntent } from "../../backend/src/live-intent";
-import type { LiveControlEvent } from "@aside/engine/contracts";
+import type {
+  LiveControlEvent,
+  QuestionRequest,
+  QuestionResult,
+} from "@aside/engine/contracts";
 
-test.use({ locale: "en-US" });
-async function setupRemote(page: Page, debug = false) {
+test.use({ locale: "en-US", launchOptions: { args: ["--mute-audio"] } });
+async function setupRemote(
+  page: Page,
+  debug = false,
+  respond?: (q: QuestionRequest) => QuestionResult,
+) {
   await mockPlayer(page);
   let transcriptions = 0,
     questionRequests = 0,
@@ -131,6 +139,7 @@ async function setupRemote(page: Page, debug = false) {
         // the production server coordinator; it never receives browser captions.
         answer: async (q) => {
           inputs.push(q);
+          if (respond) return respond(q);
           const text = q.history.at(-1)!.text.toLowerCase();
           const commands =
             text.includes("dinner") ||
@@ -171,6 +180,17 @@ async function setupRemote(page: Page, debug = false) {
     const answer = await page.evaluate(async (offer) => {
       const peer = new RTCPeerConnection();
       Object.assign(window, { remotePeer: peer });
+      const ctx = new AudioContext(),
+        osc = ctx.createOscillator(),
+        gain = ctx.createGain(),
+        dest = ctx.createMediaStreamDestination();
+      gain.gain.value = 0;
+      osc.connect(gain).connect(dest);
+      osc.start();
+      await ctx.resume();
+      for (const track of dest.stream.getTracks())
+        peer.addTrack(track, dest.stream);
+      Object.assign(window, { remoteOutput: { ctx, gain } });
       peer.ondatachannel = ({ channel }) => {
         Object.assign(window, { remoteChannel: channel });
         channel.onopen = () =>
@@ -232,6 +252,48 @@ async function setupRemote(page: Page, debug = false) {
     inputs,
     errors,
     speak,
+    async reply(text: string) {
+      await page.evaluate(() => {
+        const { ctx, gain } = (window as any).remoteOutput;
+        gain.gain.setValueAtTime(0.08, ctx.currentTime);
+      });
+      await expect
+        .poll(
+          async () =>
+            JSON.parse(
+              (await page
+                .getByRole("region", { name: "Voice diagnostics" })
+                .locator("pre")
+                .textContent())!,
+            ).session?.spokenReply?.state,
+        )
+        .toBe("speaking");
+      await page.evaluate(
+        (t) =>
+          (window as any).remoteChannel.send(
+            JSON.stringify({
+              type: "session.output_transcript.delta",
+              delta: t,
+            }),
+          ),
+        text,
+      );
+      await page.evaluate(() => {
+        const { ctx, gain } = (window as any).remoteOutput;
+        gain.gain.setValueAtTime(0, ctx.currentTime);
+      });
+      await expect
+        .poll(
+          async () =>
+            JSON.parse(
+              (await page
+                .getByRole("region", { name: "Voice diagnostics" })
+                .locator("pre")
+                .textContent())!,
+            ).session?.spokenReply?.state,
+        )
+        .toBe("finished");
+    },
     acknowledgements,
     transcriptions: () => transcriptions,
     questionRequests: () => questionRequests,
@@ -445,3 +507,49 @@ test("one stream handles rate, bystander speech, pause and resume without fronte
   expect(s.transcriptions()).toBe(0);
   expect(s.errors).toEqual([]);
 });
+
+for (const scenario of [
+  { offer: "Shall I resume the podcast?", action: "resume" as const },
+  {
+    offer: "Would you like me to explain the distinction?",
+    action: "answer" as const,
+  },
+])
+  test(`a spoken yes follows the actual offer: ${scenario.action}`, async ({
+    page,
+  }) => {
+    let turn = 0;
+    const s = await setupRemote(page, true, (q) => {
+      turn++;
+      if (turn === 2) {
+        expect(q.history.at(-2)).toEqual({
+          role: "assistant",
+          text: scenario.offer,
+        });
+        expect(q.history.at(-1)?.text).toBe("Yes");
+        expect(q.conversation?.assistant?.state).toBe("finished");
+        expect(q.conversation?.playback.playback?.interrupted).toBe(true);
+      }
+      return {
+        action: turn === 1 ? "answer" : scenario.action,
+        revision: q.revision,
+        answer: "A draft, not the spoken wording",
+        sources: [],
+        tools: [],
+      };
+    });
+    await page.locator(".debug-toggle").click();
+    await s.speak(["What does that mean?"]);
+    await expect.poll(() => s.acknowledgements.length).toBe(1);
+    await expect
+      .poll(() => s.audio.evaluate((a: HTMLAudioElement) => a.paused))
+      .toBe(true);
+    await s.reply(scenario.offer);
+    await s.speak(["Yes"]);
+    await expect.poll(() => s.acknowledgements.length).toBe(2);
+    await expect
+      .poll(() => s.audio.evaluate((a: HTMLAudioElement) => a.paused))
+      .toBe(scenario.action !== "resume");
+    expect(s.questionRequests()).toBe(0);
+    expect(s.errors).toEqual([]);
+  });

@@ -47,7 +47,7 @@ export const questionTools: QuestionTool[] = [
     type: "function",
     name: "resume_podcast",
     description:
-      "Resume the paused podcast ONLY when the latest actual user utterance clearly requests returning to podcast playback. Never for continuing an explanation, negation, quotations, hypothetical questions or podcast content. Ask a brief clarification if ambiguous.",
+      "Return to the paused podcast when the user's meaning in the ongoing conversation is to keep listening. After an interruption and completed answer, casual 'OK, go on' or 'you can continue' can be sufficient; the user need not say 'podcast'. A yes/OK confirming the assistant's spoken offer to resume also qualifies. Never resume merely on a bare acknowledgement with no relevant offer, silence, a request to continue explaining, negation, quotations or speech to another person. Clarify briefly if the conversation does not resolve the ambiguity.",
     parameters: {
       type: "object",
       properties: {},

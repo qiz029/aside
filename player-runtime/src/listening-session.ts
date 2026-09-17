@@ -17,6 +17,7 @@ import {
   type LiveControlEvent,
   type LiveControlUpdate,
   type LivePlayerState,
+  type SpokenReply,
 } from "@aside/engine/contracts";
 import {
   createPlayerConfig,
@@ -76,6 +77,10 @@ export class ListeningSession {
   private controlStatus = "off";
   private serverInput = "";
   private serverClassifying = "";
+  private serverConversation?: Extract<
+    LiveControlEvent,
+    { type: "classifying" }
+  >["conversation"];
   private seenDecisions = new Set<string>();
   private playerConfig: PlayerConfig;
   private input?: PlayerInput;
@@ -108,6 +113,8 @@ export class ListeningSession {
   private attendLevel = 1;
   /** Server voice control: the voice may only be heard while it delivers a backend answer. */
   private answerWindow = false;
+  private spokenReply?: SpokenReply;
+  private spokenSync?: () => void;
   private heartbeat?: () => void;
   private connectionKind: "cold" | "warm" = "cold";
   private clock: RuntimeClock;
@@ -230,6 +237,7 @@ export class ListeningSession {
     try {
       this.stop();
       this.resetRecognitionDiagnostics();
+      this.spokenReply = undefined;
       this.mediaRevision++;
       this.restoringMedia = true;
       this.positioning = undefined;
@@ -282,6 +290,12 @@ export class ListeningSession {
         owner: this.serverVoice ? "server" : "manual",
         status: this.controlStatus,
       },
+      ...(this.debugRecognition
+        ? {
+            conversation: this.serverConversation,
+            spokenReply: this.spokenReply,
+          }
+        : {}),
       recognition: this.debugRecognition
         ? {
             liveInputText: this.liveInputText,
@@ -301,6 +315,7 @@ export class ListeningSession {
   }
   private resetRecognitionDiagnostics() {
     this.serverInput = this.serverClassifying = "";
+    this.serverConversation = undefined;
     this.liveInputText = "";
     this.liveInputDeltas = [];
     this.lastInputDisposition = "No input received";
@@ -527,8 +542,41 @@ export class ListeningSession {
   }
   /** Whatever the voice says next is its own initiative, not a backend answer. */
   private silenceVoice() {
+    if (
+      this.spokenReply &&
+      ["queued", "speaking"].includes(this.spokenReply.state)
+    )
+      this.reportSpoken("interrupted");
     this.answerWindow = false;
     this.voice?.mute(true);
+  }
+  private reportSpoken(state: SpokenReply["state"]) {
+    if (!this.spokenReply) return;
+    this.spokenReply = {
+      ...this.spokenReply,
+      // Text can precede the audio-start callback. A cancelled queued reply
+      // must not become a claim that the listener heard its transcript.
+      ...(state === "interrupted" && this.spokenReply.state === "queued"
+        ? { text: "" }
+        : {}),
+      state,
+    };
+    this.spokenSync?.();
+    this.spokenSync = undefined;
+    this.syncControl();
+  }
+  private appendSpoken(text: string) {
+    if (!this.spokenReply) return;
+    this.spokenReply = {
+      ...this.spokenReply,
+      text: (this.spokenReply.text + text).slice(-12000),
+    };
+    // Coalesce output fragments, while output end/interruption flushes immediately.
+    if (!this.spokenSync)
+      this.spokenSync = this.clock.after(250, () => {
+        this.spokenSync = undefined;
+        this.syncControl();
+      });
   }
   /** Soft yield: the podcast ducks while an utterance is classified, and comes back on its own. */
   private attend(level: number = attention.level) {
@@ -740,6 +788,8 @@ export class ListeningSession {
   }
   private closeVoice() {
     this.answerWindow = false;
+    this.spokenSync?.();
+    this.spokenSync = undefined;
     this.cancelManual();
     this.controlAbort?.abort();
     this.controlAbort = undefined;
@@ -834,6 +884,14 @@ export class ListeningSession {
             ? "assistant"
             : "none",
       config: this.playerConfig,
+      playback: {
+        mode: this.playback.mode,
+        interrupted: !!this.playback.interruption,
+        ...(this.playback.interruption
+          ? { resumeMs: this.playback.interruption.resumeMs }
+          : {}),
+      },
+      ...(this.spokenReply ? { assistant: this.spokenReply } : {}),
     };
   }
   private syncControl(acknowledgement?: LiveControlUpdate["acknowledgement"]) {
@@ -951,7 +1009,10 @@ export class ListeningSession {
       if (event.type === "classifying") this.attend();
       if (this.debugRecognition && event.text !== undefined) {
         if (event.type === "observing") this.serverInput = event.text;
-        else this.serverClassifying = event.text;
+        else {
+          this.serverClassifying = event.text;
+          this.serverConversation = event.conversation;
+        }
       }
       this.controlStatus = event.type;
       this.log(
@@ -981,6 +1042,18 @@ export class ListeningSession {
       return;
     this.input = event.player;
     try {
+      if (event.result.action === "answer") {
+        if (
+          this.spokenReply &&
+          ["queued", "speaking"].includes(this.spokenReply.state)
+        )
+          this.reportSpoken("interrupted");
+        this.spokenReply = {
+          decisionId: event.decisionId,
+          text: "",
+          state: "queued",
+        };
+      }
       this.conversation.receiveLive(event.result, event.text);
       this.syncControl({ decisionId: event.decisionId, applied: true });
       this.log(`Backend decision applied: ${event.result.action}`);
@@ -1000,6 +1073,7 @@ export class ListeningSession {
     )
       return;
     this.status = "connecting";
+    this.spokenReply = undefined;
     this.resetRecognitionDiagnostics();
     this.setError("");
     const generation = ++this.voiceGeneration,
@@ -1141,6 +1215,7 @@ export class ListeningSession {
             });
             this.conversation.outputEnded();
           }
+          this.reportSpoken(active ? "speaking" : "finished");
         },
         onTranscript: (role, text) => {
           if (this.serverVoice && role === "user") {
@@ -1169,7 +1244,11 @@ export class ListeningSession {
               : this.playback.resumeRequested
                 ? "Skipped while playback resumes"
                 : "Skipped: no active input";
-          if (accepted) this.conversation.transcript(role, text);
+          if (accepted) {
+            this.conversation.transcript(role, text);
+            if (this.serverVoice && role === "assistant")
+              this.appendSpoken(text);
+          }
         },
         onDelegation: (id) => {
           if (valid()) this.log("Live delegation received");

@@ -1706,7 +1706,10 @@ test("under server voice control only a backend answer is heard or recorded", as
   s.callbacks.onOutput(false);
   assert.equal(lastMute(), "mute:true");
   assert.equal(s.commands.includes("mute:false"), false);
-  assert.deepEqual(s.session.getSnapshot().history, []);
+  assert.deepEqual(
+    s.session.getSnapshot().history.map((t) => [t.role, t.text]),
+    [["user", "A spoken request"]],
+  );
   assert.equal(s.session.getSnapshot().state.assistantSpeaking, false);
   // A backend answer opens the window...
   s.push(s.decision("answer"));
@@ -1725,5 +1728,78 @@ test("under server voice control only a backend answer is heard or recorded", as
   s.callbacks.onOutput(true);
   s.callbacks.onTranscript("assistant", " and an aside of its own");
   assert.equal(s.session.getSnapshot().history.at(-1)?.text, "An answer");
+  s.session.dispose();
+});
+
+test("one voice conversation reports delivered replies and playback state without asking a frontend classifier", async () => {
+  const s = setup("auto", undefined, undefined, false, true);
+  s.session.start();
+  await flush();
+  const answer = s.decision("answer");
+  s.push(answer);
+  await flush();
+  assert.equal(s.serverState.playback?.interrupted, true);
+  assert.deepEqual(s.serverState.assistant, {
+    decisionId: answer.decisionId,
+    text: "",
+    state: "queued",
+  });
+  assert.equal(s.session.checkpoint().history.at(-1)?.text, answer.text);
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", "Shall I resume");
+  s.callbacks.onTranscript("assistant", " the podcast?");
+  s.clock.advance(250);
+  await flush();
+  assert.equal(s.serverState.assistant?.text, "Shall I resume the podcast?");
+  assert.equal(s.serverState.assistant?.state, "speaking");
+  s.callbacks.onOutput(false);
+  await flush();
+  assert.equal(s.serverState.assistant?.state, "finished");
+  assert.equal(s.serverState.playback?.mode, "awaiting_followup");
+  s.push(s.decision("resume"));
+  s.clock.advance(0);
+  await flush();
+  assert.equal(
+    s.audio.playing,
+    true,
+    "resume tool has no artificial 1.5 second delay",
+  );
+  assert.equal(s.serverState.playback?.mode, "playing");
+  assert.equal(s.requests.length, 0);
+  s.callbacks.onTranscript("assistant", "muted unsolicited tail");
+  s.clock.advance(250);
+  await flush();
+  assert.equal(s.serverState.assistant?.text, "Shall I resume the podcast?");
+  s.session.dispose();
+});
+
+test("interrupting a spoken reply reports the admitted prefix, never its planned ending", async () => {
+  const s = setup("auto", undefined, undefined, false, true);
+  s.session.start();
+  await flush();
+  s.push(s.decision("answer"));
+  await flush();
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", "The first part");
+  s.session.executePlayerCommand({ type: "play" });
+  s.clock.advance(0);
+  await flush();
+  assert.equal(s.serverState.assistant?.state, "interrupted");
+  assert.equal(s.serverState.assistant?.text, "The first part");
+  s.session.dispose();
+});
+
+test("cancelling a queued reply before audio starts does not report its transcript as spoken", async () => {
+  const s = setup("auto", undefined, undefined, false, true);
+  s.session.start();
+  await flush();
+  s.push(s.decision("answer"));
+  await flush();
+  s.callbacks.onTranscript("assistant", "A reply that has not started playing");
+  s.session.executePlayerCommand({ type: "play" });
+  s.clock.advance(0);
+  await flush();
+  assert.equal(s.serverState.assistant?.state, "interrupted");
+  assert.equal(s.serverState.assistant?.text, "");
   s.session.dispose();
 });
