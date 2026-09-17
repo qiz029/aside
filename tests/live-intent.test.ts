@@ -419,6 +419,73 @@ test("spoken replies do not re-submit an already handled question, and a quick y
   s.intent.close();
 });
 
+test("late punctuation cannot create a phantom question or interrupt a queued or spoken answer", async () => {
+  const s = setup(true);
+  s.speak('？"}', 0, 10);
+  await s.advance();
+  assert.equal(s.requests.length, 0);
+  assert.equal(
+    s.events.length,
+    0,
+    "non-speech fragments do not signal a new utterance",
+  );
+  s.speak("那为什么是正传呢", 100, 500);
+  await s.advance();
+  s.speak("？", 500, 510);
+  await s.finish("answer");
+  const answer = s.events.find((e) => e.type === "decision")!;
+  assert.ok(
+    answer,
+    "trailing punctuation must not discard the in-flight answer",
+  );
+  s.speak('"}', 510, 520);
+  const snapshot = (
+    sequence: number,
+    outputState: "queued" | "speaking" | "finished",
+  ) =>
+    state({
+      sequence,
+      wasPlaying: false,
+      assistant: {
+        decisionId: answer.decisionId,
+        text: outputState === "queued" ? "" : "因为这些名目都不合",
+        state: outputState,
+      },
+    });
+  s.intent.update(snapshot(1, "queued"), {
+    decisionId: answer.decisionId,
+    applied: true,
+  });
+  s.speak("？", 520, 530);
+  s.intent.update(snapshot(2, "speaking"));
+  s.speak('"}', 530, 540);
+  s.intent.update(snapshot(3, "finished"));
+  s.speak("。", 540, 550);
+  await s.advance();
+  assert.equal(
+    s.requests.length,
+    1,
+    "no punctuation-only follow-up reaches the model",
+  );
+  assert.equal(s.events.filter((e) => e.type === "observing").length, 1);
+  s.speak("你继续播放吧", 700, 900);
+  await s.advance();
+  assert.equal(s.requests.at(-1)?.data.history.at(-1)?.text, "你继续播放吧");
+  s.intent.close();
+});
+
+test("separate spaces and numeric punctuation remain between meaningful transcript fragments", async () => {
+  const s = setup();
+  s.speak("Set");
+  s.speak(" ", 100, 110);
+  s.speak("rate to 0", 110, 200);
+  s.speak(".", 200, 210);
+  s.speak("5", 210, 300);
+  await s.advance();
+  assert.equal(s.requests[0].data.history.at(-1)?.text, "Set rate to 0.5");
+  s.intent.close();
+});
+
 test("streaming assistant updates cannot indefinitely postpone an interruption or reclassify bystanders", async () => {
   for (const result of ["player_control", "ignore"] as const) {
     const s = setup();

@@ -252,7 +252,18 @@ async function setupRemote(
     inputs,
     errors,
     speak,
-    async reply(text: string) {
+    async reply(text: string, prefix = "") {
+      if (prefix)
+        await page.evaluate(
+          (delta) =>
+            (window as any).remoteChannel.send(
+              JSON.stringify({
+                type: "session.output_transcript.delta",
+                delta,
+              }),
+            ),
+          prefix,
+        );
       await page.evaluate(() => {
         const { ctx, gain } = (window as any).remoteOutput;
         gain.gain.setValueAtTime(0.08, ctx.currentTime);
@@ -325,6 +336,58 @@ for (const url of ["/episodes/remote-a?debug", "/?episode=remote-a&debug"])
       await page.locator("audio").evaluate((a: HTMLAudioElement) => a.paused),
     ).toBe(true);
   });
+
+test("late punctuation and bystander recognition do not swallow an answer queued before audio starts", async ({
+  page,
+}) => {
+  const prefix = "因为这些名目都不合，";
+  const tail = "作者就用了正传。";
+  const s = await setupRemote(page, true, (q) => {
+    const latest = q.history.at(-1)!.text;
+    return {
+      action: latest.includes("Honey")
+        ? "ignore"
+        : latest.includes("continue")
+          ? "resume"
+          : "answer",
+      revision: q.revision,
+      answer: prefix + tail,
+      sources: [],
+      tools: [],
+    };
+  });
+  await page.locator(".debug-toggle").click();
+  await s.speak(["那为什么是正传呢"]);
+  await expect.poll(() => s.acknowledgements.length).toBe(1);
+  // Non-actionable caption fragments must not create an extra dialogue turn.
+  await s.speak(['？"}']);
+  // A real but unrelated utterance can be observed while the answer is queued.
+  await s.speak(["Honey, what's for dinner?"]);
+  await expect.poll(() => s.inputs.length).toBe(2);
+  await s.reply(tail, prefix);
+  await page.locator(".debug-toggle").click();
+  await expect(page.getByRole("log")).toContainText(prefix + tail);
+  await expect(page.getByRole("log")).not.toContainText('？"}');
+  await s.speak(['？"}']);
+  await s.speak(["OK, continue"]);
+  await expect.poll(() => s.acknowledgements.length).toBe(2);
+  expect(
+    s.inputs.every((q) => /[\p{L}\p{N}]/u.test(q.history.at(-1)!.text)),
+  ).toBe(true);
+  expect(
+    s.inputs.filter((q) => !q.history.at(-1)!.text.includes("Honey")),
+  ).toHaveLength(2);
+  expect(s.inputs.at(-1)!.history.slice(-3)).toEqual([
+    { role: "user", text: "那为什么是正传呢" },
+    { role: "assistant", text: prefix + tail },
+    { role: "user", text: "OK, continue" },
+  ]);
+  await expect
+    .poll(() => s.audio.evaluate((a: HTMLAudioElement) => a.paused))
+    .toBe(false);
+  expect(s.questionRequests()).toBe(0);
+  expect(s.errors).toEqual([]);
+});
 
 for (const viewport of [
   { width: 1414, height: 1049 },

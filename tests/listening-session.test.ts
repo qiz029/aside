@@ -1803,3 +1803,32 @@ test("cancelling a queued reply before audio starts does not report its transcri
   assert.equal(s.serverState.assistant?.text, "");
   s.session.dispose();
 });
+
+test("recognition notifications before answer audio starts cannot swallow its first words", async () => {
+  const s = setup("auto", undefined, undefined, true, true);
+  s.session.start();
+  await flush();
+  const answer = s.decision("answer");
+  s.push(answer);
+  await flush();
+  assert.equal(s.serverState.assistant?.state, "queued");
+  s.push({ type: "observing", version: s.serverState.version });
+  s.push({ type: "classifying", version: s.serverState.version });
+  s.callbacks.onTranscript("assistant", "因为这些名目都不合，");
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", "作者就用了正传。");
+  s.push(s.decision("ignore"));
+  s.callbacks.onOutput(false);
+  await flush();
+  assert.equal(s.serverState.assistant?.state, "finished");
+  assert.equal(
+    s.serverState.assistant?.text,
+    "因为这些名目都不合，作者就用了正传。",
+  );
+  assert.equal(
+    s.session.getSnapshot().history.at(-1)?.text,
+    "因为这些名目都不合，作者就用了正传。",
+  );
+  assert.equal(s.requests.length, 0);
+  s.session.dispose();
+});

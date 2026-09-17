@@ -167,7 +167,8 @@ for (const scenario of cases) {
               (command) =>
                 (command.type === "adjust_rate" &&
                   command.direction === "slower") ||
-                (command.type === "set_rate" && command.rate < config.rate),
+                (command.type === "set_rate" &&
+                  command.rate < config.playbackRate),
             )
           : commands.includes(c as (typeof commands)[number]),
       ));

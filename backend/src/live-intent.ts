@@ -22,6 +22,7 @@ interface Ports {
 /** Server-owned incremental interpretation. No browser transcript or keyword gate. */
 export class LiveIntent {
   private text = "";
+  private separators = "";
   private evaluated = "";
   private evaluatedConversation = -1;
   private refreshed = "";
@@ -70,6 +71,14 @@ export class LiveIntent {
       if (this.fragments.size > 256)
         this.fragments.delete(this.fragments.values().next().value!);
     }
+    // Captions can deliver spaces or sentence punctuation after the words have
+    // already been answered. Such fragments are not a new user utterance and
+    // must not cancel its answer. Buffer separators only for subsequent words
+    // in the same input (including split decimals such as "0", ".", "5").
+    if (!/[\p{L}\p{N}]/u.test(delta)) {
+      if (this.input) this.separators = (this.separators + delta).slice(-12000);
+      return;
+    }
     const gap =
       start !== undefined && this.endMs >= 0
         ? start - this.endMs
@@ -99,7 +108,8 @@ export class LiveIntent {
         audibleSource: this.player.audibleSource,
         config: this.player.config,
       };
-    this.text = (this.text + delta).slice(-12000);
+    this.text = (this.text + this.separators + delta).slice(-12000);
+    this.separators = "";
     this.ports.emit({
       type: "observing",
       version: this.player.version,
@@ -193,6 +203,7 @@ export class LiveIntent {
     this.acknowledgementTimer = undefined;
     this.waiting = undefined;
     this.text = this.evaluated = this.handled = this.refreshed = "";
+    this.separators = "";
     this.input = undefined;
   }
   private schedule() {

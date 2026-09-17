@@ -1003,7 +1003,9 @@ export class ListeningSession {
   private receiveControl(event: LiveControlEvent) {
     if (event.type === "observing" || event.type === "classifying") {
       if (event.version !== this.controlVersion) return;
-      if (this.answerWindow && !this.playback.assistantSpeaking)
+      // A queued answer may deliver text before audio starts. Recognition alone
+      // cannot revoke it; only a new accepted decision can replace that answer.
+      if (this.answerWindow && this.spokenReply?.state === "finished")
         this.silenceVoice();
       this.conversation.liveInputPending(true);
       if (event.type === "classifying") this.attend();
