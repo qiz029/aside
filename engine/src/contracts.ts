@@ -19,6 +19,19 @@ export const playerInputSchema = z.object({
   handledText: z.string().max(12000).optional(),
 });
 export type PlayerInput = z.infer<typeof playerInputSchema>;
+/** Browser-owned playback state, not a transcript or an intent request. */
+export const livePlayerStateSchema = playerInputSchema
+  .omit({
+    turnId: true,
+    source: true,
+    handledText: true,
+  })
+  .extend({
+    version: revisionSchema,
+    sequence: revisionSchema,
+    revision: revisionSchema,
+  });
+export type LivePlayerState = z.infer<typeof livePlayerStateSchema>;
 export const playerCommandsSchema = z.array(playerCommandSchema).min(1).max(4);
 export const questionSchema = z.object({
   atMs: positionSchema,
@@ -30,6 +43,12 @@ export const liveSchema = z.object({
   history: historySchema.default([]),
   sdp: z.string().min(1).max(64000),
   atMs: positionSchema,
+  control: z
+    .object({
+      player: livePlayerStateSchema,
+      debug: z.boolean().default(false),
+    })
+    .optional(),
 });
 export const checkpointSchema = z.object({
   positionMs: positionSchema,
@@ -83,7 +102,41 @@ export type QuestionEvent = z.infer<typeof questionEventSchema>;
 export type Source = z.infer<typeof sourceSchema>;
 export type Checkpoint = z.infer<typeof checkpointSchema>;
 export type LiveRequest = z.infer<typeof liveSchema>;
+export const liveControlUpdateSchema = z.object({
+  sessionId: z.string().min(1).max(200),
+  player: livePlayerStateSchema,
+  acknowledgement: z
+    .object({ decisionId: z.string().min(1).max(100), applied: z.boolean() })
+    .optional(),
+});
+export type LiveControlUpdate = z.infer<typeof liveControlUpdateSchema>;
+export const liveControlEventSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("ready"), sessionId: z.string() }),
+  z.object({ type: z.literal("heartbeat") }),
+  z.object({
+    type: z.literal("observing"),
+    version: revisionSchema,
+    text: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("classifying"),
+    version: revisionSchema,
+    text: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("decision"),
+    version: revisionSchema,
+    decisionId: z.string(),
+    player: playerInputSchema,
+    text: z.string(),
+    result: questionResultSchema,
+  }),
+  z.object({ type: z.literal("error"), error: z.string() }),
+  z.object({ type: z.literal("closed") }),
+]);
+export type LiveControlEvent = z.infer<typeof liveControlEventSchema>;
 export interface LiveResult {
   session: { id: string };
   transport: { sdp: string };
+  control?: boolean;
 }

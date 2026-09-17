@@ -12,6 +12,9 @@ import type {
   QuestionRequest,
   QuestionResult,
   QuestionPhase,
+  LivePlayerState,
+  LiveControlEvent,
+  LiveControlUpdate,
 } from "@aside/engine/contracts";
 import type { Episode } from "@aside/engine/core";
 import { createPlayerConfig, type PlayerConfig } from "@aside/engine/player";
@@ -94,6 +97,7 @@ function setup(
   permission?: Promise<void>,
   playerConfig?: Partial<PlayerConfig>,
   debugRecognition = false,
+  server = false,
 ) {
   const clock = new Clock();
   const audio = {
@@ -125,15 +129,45 @@ function setup(
     warm = false,
     cold = true;
   let voiceCount = 0;
+  let serverState!: LivePlayerState;
+  let receive!: (event: LiveControlEvent) => void;
+  let createLive: (() => Promise<unknown>) | undefined;
+  const updates: LiveControlUpdate[] = [];
   const backend: PlayerBackend = {
     question(_id, data, signal, progress) {
       return new Promise((resolve) =>
         requests.push({ data, signal, progress, resolve }),
       );
     },
-    async live() {
-      throw Error("Unexpected live negotiation");
+    async live(_id, request) {
+      if (!server) throw Error("Unexpected live negotiation");
+      serverState = request.control!.player;
+      return {
+        session: { id: "test-session" },
+        transport: { sdp: "mock" },
+        control: true,
+      };
     },
+    ...(server
+      ? {
+          control: async (
+            _id: string,
+            _session: string,
+            signal: AbortSignal,
+            callback: (event: LiveControlEvent) => void,
+          ) => {
+            receive = callback;
+            callback({ type: "ready", sessionId: "test-session" });
+            await new Promise<void>((resolve) =>
+              signal.addEventListener("abort", () => resolve(), { once: true }),
+            );
+          },
+          updateControl: async (_id: string, data: LiveControlUpdate) => {
+            serverState = data.player;
+            updates.push(data);
+          },
+        }
+      : {}),
     async transcribe() {
       throw Error("Unexpected transcription");
     },
@@ -154,6 +188,12 @@ function setup(
       callbacks.onStatus("arming");
       if (permission) await permission;
       if (enabled) callbacks.onStatus("armed");
+      if (server && enabled) {
+        await createLive!();
+        warm = true;
+        cold = false;
+        callbacks.onReady();
+      }
     },
     beginManual() {
       captures++;
@@ -192,7 +232,8 @@ function setup(
     mode,
     playerConfig,
     clock,
-    voiceFactory(_mic, _config, cb) {
+    voiceFactory(_mic, _config, cb, remote) {
+      createLive = () => remote.create("mock");
       voiceCount++;
       callbacks = cb;
       return voice;
@@ -216,6 +257,38 @@ function setup(
     session,
     requests,
     commands,
+    updates,
+    push(event: LiveControlEvent) {
+      receive(event);
+    },
+    decision(
+      action: QuestionResult["action"],
+      commands: import("@aside/engine/player").PlayerCommand[] = [
+        { type: "pause" },
+      ],
+    ) {
+      const event: Extract<LiveControlEvent, { type: "decision" }> = {
+        type: "decision",
+        version: serverState.version,
+        decisionId: crypto.randomUUID(),
+        text: "A spoken request",
+        player: { ...serverState, source: "voice", turnId: "server-turn" },
+        result: {
+          action,
+          revision: serverState.revision,
+          answer: "An answer",
+          sources: [],
+          tools: [],
+          ...(action === "player_control"
+            ? { commandId: crypto.randomUUID(), commands }
+            : {}),
+        } as QuestionResult,
+      };
+      return event;
+    },
+    get serverState() {
+      return serverState;
+    },
     get callbacks() {
       return callbacks;
     },
@@ -266,17 +339,24 @@ test("debug recognition preserves raw fragments and distinguishes backend dispat
   assert.equal(trace.conversationInput, "");
   assert.equal(trace.submittedText, "");
   s.callbacks.onTranscript("user", "Wait, wait!");
+  s.callbacks.onDelegation("debug-manual");
   s.clock.advance(120);
   await flush();
   trace = (await s.session.voiceDiagnostics()).recognition!;
   assert.equal(trace.conversationInput, "Wait, wait!");
   assert.equal(trace.submittedText, s.requests[0].data.history.at(-1)?.text);
   assert.equal(trace.requestPending, true);
-  assert.equal(trace.shortPauseCandidate, true);
   assert.deepEqual(s.session.checkpoint().history, []);
-  assert.ok(s.session.getSnapshot().events.every((event) => !event.includes("Wait, wait!")));
+  assert.ok(
+    s.session
+      .getSnapshot()
+      .events.every((event) => !event.includes("Wait, wait!")),
+  );
   s.session.stop();
-  assert.equal((await s.session.voiceDiagnostics()).recognition?.liveInputText, "Wait, wait!");
+  assert.equal(
+    (await s.session.voiceDiagnostics()).recognition?.liveInputText,
+    "Wait, wait!",
+  );
   s.session.dispose();
 });
 
@@ -284,8 +364,12 @@ test("debug recognition is bounded, preserves whitespace and clears on a new con
   const s = setup("auto", undefined, undefined, true);
   s.session.start();
   await flush();
-  for (const text of ["Hello", " ", "there!"]) s.callbacks.onInputTranscript?.(text);
-  assert.equal((await s.session.voiceDiagnostics()).recognition?.liveInputText, "Hello there!");
+  for (const text of ["Hello", " ", "there!"])
+    s.callbacks.onInputTranscript?.(text);
+  assert.equal(
+    (await s.session.voiceDiagnostics()).recognition?.liveInputText,
+    "Hello there!",
+  );
   for (let i = 0; i < 40; i++) s.callbacks.onInputTranscript?.("x".repeat(600));
   const trace = (await s.session.voiceDiagnostics()).recognition!;
   assert.equal(trace.liveInputText.length, 4000);
@@ -294,13 +378,22 @@ test("debug recognition is bounded, preserves whitespace and clears on a new con
   const old = s.callbacks;
   s.session.stop();
   old.onInputTranscript?.("stale");
-  assert.equal((await s.session.voiceDiagnostics()).recognition?.liveInputText, trace.liveInputText);
+  assert.equal(
+    (await s.session.voiceDiagnostics()).recognition?.liveInputText,
+    trace.liveInputText,
+  );
   s.session.start();
   await flush();
-  assert.equal((await s.session.voiceDiagnostics()).recognition?.liveInputText, "");
+  assert.equal(
+    (await s.session.voiceDiagnostics()).recognition?.liveInputText,
+    "",
+  );
   s.callbacks.onInputTranscript?.("new episode must not inherit this");
   s.session.load(episode, null);
-  assert.equal((await s.session.voiceDiagnostics()).recognition?.liveInputText, "");
+  assert.equal(
+    (await s.session.voiceDiagnostics()).recognition?.liveInputText,
+    "",
+  );
   s.session.dispose();
 });
 
@@ -723,106 +816,6 @@ test("a delegation preceding both transcript and local speech is retained", asyn
   s.session.dispose();
 });
 
-test("repeated wait reaches the backend without delegation and does not starve its pending decision", async () => {
-  const s = setup("auto");
-  s.session.start();
-  await flush();
-  s.warm();
-  s.callbacks.onSpeech(true);
-  s.callbacks.onTranscript("user", "Wait, wait");
-  s.clock.advance(120);
-  assert.equal(s.requests.length, 1);
-  s.callbacks.onSpeech(false);
-  s.callbacks.onSpeech(true);
-  s.callbacks.onTranscript("user", ", wait!");
-  s.callbacks.onDelegation("late-delegation");
-  s.clock.advance(500);
-  assert.equal(s.requests.length, 1);
-  assert.equal(s.requests[0].signal.aborted, false);
-  remoteResult(s, 0, [{ type: "pause" }]);
-  await flush();
-  assert.equal(s.audio.playing, false);
-  s.session.dispose();
-});
-
-test("short-command fallback still lets the backend ignore speech to somebody else", async () => {
-  const s = setup("auto");
-  s.session.start();
-  await flush();
-  s.warm();
-  s.callbacks.onSpeech(true);
-  s.callbacks.onTranscript("user", "Hold on");
-  s.clock.advance(120);
-  assert.equal(s.requests.length, 1);
-  s.requests[0].resolve({
-    revision: s.requests[0].data.revision,
-    action: "ignore",
-    answer: "",
-    tools: [],
-    sources: [],
-  });
-  await flush();
-  assert.equal(s.audio.playing, true);
-  assert.equal(s.session.getSnapshot().history.length, 0);
-  s.session.dispose();
-});
-
-test("prefixed English controls reach classification without delegation or speech-end", async () => {
-  for (const text of ["Hey, stop the podcast please!", "Excuse me—could you pause?", "你好。Stop!", "Could you turn the volume down?"]) {
-    const s = setup("auto");
-    s.session.start();
-    await flush();
-    s.warm();
-    s.callbacks.onSpeech(true);
-    s.callbacks.onTranscript("user", text);
-    s.clock.advance(120);
-    assert.equal(s.requests.length, 1, text);
-    assert.equal(s.requests[0].data.history.at(-1)?.text, text);
-    assert.equal(s.audio.playing, true, "candidate selection must not pause audio");
-    remoteResult(s, 0, [{ type: "pause" }]);
-    await flush();
-    assert.equal(s.audio.playing, false);
-    s.session.dispose();
-  }
-});
-
-test("standalone whitespace deltas preserve word boundaries for classification", async () => {
-  const s = setup("auto");
-  s.session.start();
-  await flush();
-  s.warm();
-  for (const delta of ["Hey", " ", "stop", " ", "please"])
-    s.callbacks.onTranscript("user", delta);
-  s.clock.advance(120);
-  assert.equal(s.requests.length, 1);
-  assert.equal(s.requests[0].data.history.at(-1)?.text, "Hey stop please");
-  assert.equal(s.audio.playing, true);
-  s.callbacks.onTranscript("user", " ");
-  s.clock.advance(500);
-  assert.equal(s.requests.length, 1);
-  assert.equal(s.requests[0].signal.aborted, false);
-  s.session.dispose();
-});
-
-test("fallback candidates containing negations or bystander commands remain subject to backend rejection", async () => {
-  for (const text of ["Do not stop the podcast", "Honey, stop moving the chair", "He said 'pause the podcast' in that story"]) {
-    const s = setup("auto");
-    s.session.start();
-    await flush();
-    s.warm();
-    s.callbacks.onTranscript("user", text);
-    s.clock.advance(120);
-    assert.equal(s.requests.length, 1, text);
-    assert.equal(s.audio.playing, true);
-    s.requests[0].resolve({ revision: s.requests[0].data.revision, action: "ignore", answer: "", tools: [], sources: [] });
-    await flush();
-    assert.equal(s.audio.playing, true);
-    assert.equal(s.audio.config.volume, 1);
-    assert.deepEqual(s.session.checkpoint().history, []);
-    s.session.dispose();
-  }
-});
-
 test("a correction to a short pause request cancels the old interpretation", async () => {
   const s = setup("auto");
   await liveInput(s, "Wait", "pause-candidate");
@@ -1048,6 +1041,124 @@ test("a second breath preserves pending context without exposing unclassified sp
   await flush();
   assert.equal(s.audio.config.playbackRate, 0.9);
   assert.equal(s.audio.config.volume, 0.8);
+  assert.equal(s.audio.playing, true);
+  s.session.dispose();
+});
+
+test("server stream owns voice decisions; frontend captions, delegation and VAD never request intent", async () => {
+  const s = setup("auto", undefined, undefined, true, true);
+  s.session.start();
+  await flush();
+  s.callbacks.onSpeech(true);
+  s.callbacks.onTranscript("user", "Any phrase without a trigger word");
+  s.callbacks.onDelegation("also-visible-in-browser");
+  s.clock.advance(2000);
+  await flush();
+  assert.equal(s.requests.length, 0);
+  assert.equal(s.audio.playing, true);
+  s.push({
+    type: "observing",
+    version: s.serverState.version,
+    text: "Any phrase",
+  });
+  s.push({
+    type: "classifying",
+    version: s.serverState.version,
+    text: "Any phrase",
+  });
+  assert.equal(
+    (await s.session.voiceDiagnostics()).recognition?.submittedText,
+    "Any phrase",
+  );
+  const speed = s.decision("player_control", [
+    { type: "adjust_rate", direction: "slower" },
+  ]);
+  s.push(speed);
+  s.push(speed);
+  await flush();
+  assert.equal(s.audio.config.playbackRate, 0.9);
+  assert.equal(s.audio.playing, true);
+  assert.equal(
+    s.updates.filter((x) => x.acknowledgement?.decisionId === speed.decisionId)
+      .length,
+    1,
+  );
+  s.push(s.decision("player_control"));
+  await flush();
+  assert.equal(s.audio.playing, false);
+  assert.equal(s.enabled, true);
+  assert.equal(s.requests.length, 0);
+  s.session.dispose();
+});
+
+test("server ignore and wait do not pause, duck or persist bystander speech", async () => {
+  const s = setup("auto", undefined, undefined, false, true);
+  s.session.start();
+  await flush();
+  s.push(s.decision("ignore"));
+  s.push(s.decision("wait"));
+  await flush();
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.audio.config.volume, 1);
+  assert.deepEqual(s.session.checkpoint().history, []);
+  assert.equal(
+    s.commands.some((x) => x.startsWith("commentary:")),
+    false,
+  );
+  s.session.dispose();
+});
+
+test("manual settings invalidate a queued server decision and report rejection", async () => {
+  const s = setup("auto", undefined, undefined, false, true);
+  s.session.start();
+  await flush();
+  const old = s.decision("player_control");
+  s.session.setPlaybackRate(1.2);
+  s.push(old);
+  await flush();
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.audio.config.playbackRate, 1.2);
+  assert.equal(s.updates.at(-1)?.acknowledgement?.applied, false);
+  const stale = s.decision("player_control");
+  s.session.load({ ...episode, id: "another" }, null);
+  s.push(stale);
+  await flush();
+  assert.equal(s.session.getSnapshot().history.length, 0);
+  s.session.dispose();
+});
+
+test("a pushed answer pauses only when accepted and mixed questions never submit a second frontend request", async () => {
+  const s = setup("auto", undefined, undefined, false, true);
+  s.session.start();
+  await flush();
+  const mixed = s.decision("player_control", [
+    { type: "adjust_rate", direction: "slower" },
+  ]);
+  if (mixed.result.action === "player_control")
+    mixed.result.followUpQuestion = "What did that mean?";
+  s.push(mixed);
+  await flush();
+  assert.equal(s.requests.length, 0);
+  assert.equal(s.audio.playing, true);
+  s.push(s.decision("answer"));
+  await flush();
+  assert.equal(s.audio.playing, false);
+  assert.ok(s.commands.includes("commentary:An answer"));
+  assert.equal(s.requests.length, 0);
+  s.session.dispose();
+});
+
+test("an in-flight server interpretation holds the previous answer's auto-resume timer", async () => {
+  const s = setup("auto", undefined, undefined, false, true);
+  s.session.start(); await flush();
+  s.push(s.decision("answer")); await flush();
+  s.callbacks.onOutput(true); s.callbacks.onOutput(false);
+  s.clock.advance(1000);
+  s.push({ type: "classifying", version: s.serverState.version });
+  s.clock.advance(5000); await flush();
+  assert.equal(s.audio.playing, false);
+  s.push(s.decision("ignore"));
+  s.clock.advance(3000); await flush();
   assert.equal(s.audio.playing, true);
   s.session.dispose();
 });

@@ -15,6 +15,10 @@
     "fastify": "^5.0.0",
     "jsonrepair": "^3.15.0",
     "openai": "^6.0.0",
+    "ws": "^8.21.0",
     "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
   }
 }

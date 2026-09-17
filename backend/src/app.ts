@@ -10,16 +10,39 @@ import {
   questionEventSchema,
   questionResultSchema,
   type QuestionEvent,
+  liveControlUpdateSchema,
 } from "@aside/engine/contracts";
 import { Jobs } from "./jobs.js";
 import { describeCost, type QuestionTelemetry } from "./question-service.js";
 import { withMedia } from "./local-media.js";
 import { readMicrophoneConfig, readVoiceLifecycleConfig } from "./config.js";
+import { LiveControl } from "./live-control.js";
+import type { LiveSideband } from "./live-sideband.js";
 export function createApp(store: Store, services?: BackendServices) {
   const microphone = readMicrophoneConfig();
   const voiceLifecycle = readVoiceLifecycleConfig();
   const app = Fastify({ logger: false, bodyLimit: 256000 });
   const jobs = new Jobs(store, services?.analysis);
+  const controls = new Map<
+    string,
+    {
+      episode: string;
+      control: LiveControl;
+      socket?: LiveSideband;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+  const closeControl = (id: string, error?: string) => {
+    const entry = controls.get(id);
+    if (!entry) return;
+    controls.delete(id);
+    clearTimeout(entry.timer);
+    entry.control.close(error);
+    entry.socket?.close();
+  };
+  app.addHook("onClose", async () => {
+    for (const id of controls.keys()) closeControl(id);
+  });
   app.register(multipart, {
     limits: { fileSize: 500 * 1024 * 1024, files: 1, parts: 2 },
   });
@@ -308,6 +331,8 @@ export function createApp(store: Store, services?: BackendServices) {
       if (!services)
         return reply.code(503).send({ error: "服务端未配置 OpenAI API key" });
       const q = liveSchema.parse(req.body);
+      if (q.control && !services.voice.attachLive)
+        throw Error("Server voice control is unavailable");
       const result = await services.voice.createLive(
         q.sdp,
         e.analysis,
@@ -315,9 +340,88 @@ export function createApp(store: Store, services?: BackendServices) {
         q.history,
       );
       store.recordUsage(e.id, result.session.id, 0, false);
-      return result;
+      if (q.control) {
+        const id = result.session.id;
+        const control = new LiveControl(
+          id,
+          q.control,
+          e.analysis,
+          q.history,
+          services.questions,
+          (text) =>
+            controls
+              .get(id)
+              ?.socket?.send(
+                JSON.stringify({
+                  type: "session.thinking.append",
+                  delegation_id: null,
+                  content: text,
+                }),
+              ),
+          (totals) => console.log(`live intent ${id} ${describeCost(totals)}`),
+        );
+        const entry: {
+          episode: string;
+          control: LiveControl;
+          socket?: LiveSideband;
+          timer: ReturnType<typeof setTimeout>;
+        } = {
+          episode: e.id,
+          control,
+          timer: setTimeout(() => {
+            entry.socket?.send(JSON.stringify({ type: "session.close" }));
+            closeControl(id);
+          }, 120000),
+        };
+        controls.set(id, entry);
+        try {
+          entry.socket = await services.voice.attachLive!(
+            id,
+            (event) => {
+              if (event.type === "session.closed") closeControl(id);
+              else control.receive(event);
+            },
+            () =>
+              closeControl(
+                id,
+                "Live sideband disconnected. Please reconnect the microphone.",
+              ),
+          );
+        } catch (error) {
+          closeControl(id);
+          throw error;
+        }
+      }
+      return { ...result, ...(q.control ? { control: true } : {}) };
     },
   );
+  app.route<{ Params: { id: string }; Querystring: { sessionId?: string } }>({
+    method: ["GET", "PUT"],
+    url: "/api/episodes/:id/live-control",
+    handler: async (req, reply) => {
+      const update =
+        req.method === "PUT"
+          ? liveControlUpdateSchema.parse(req.body)
+          : undefined;
+      const entry = controls.get(
+        update?.sessionId ?? req.query.sessionId ?? "",
+      );
+      if (!entry || entry.episode !== req.params.id)
+        return reply
+          .code(404)
+          .send({ error: "Voice control session not found" });
+      if (update) return { ok: entry.control.update(update) };
+      const response = entry.control.subscribe();
+      reply
+        .code(response.status)
+        .header("Content-Type", response.headers.get("Content-Type"));
+      return reply.send(
+        Readable.fromWeb(
+          response.body as import("node:stream/web").ReadableStream,
+        ),
+      );
+    },
+  });
   app.post<{ Params: { id: string } }>(
     "/api/episodes/:id/usage",
     async (req) => {
@@ -335,6 +439,7 @@ export function createApp(store: Store, services?: BackendServices) {
         data.seconds,
         data.finalized,
       );
+      if (data.finalized) closeControl(data.sessionId);
       return { ok: true };
     },
   );

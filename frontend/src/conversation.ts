@@ -19,19 +19,6 @@ import {
 } from "./response-latency";
 import type { RuntimeClock } from "./runtime-clock";
 
-// This only selects a backend classification candidate; it never executes a
-// command. Reject longer sentences, quotations and negations at this fast path.
-const shortPauseRequest = (text: string) =>
-  /^(?:please[\s,]+)?(?:(?:wait|pause|stop|hold on|hang on)[\s,.!?…]*)+(?:please[.!?]*)?$/i.test(
-    text.trim(),
-  );
-
-// This routes possible English playback requests to the backend, never executes
-// them. Prefixes, mixed-language context, negations and quotations must all reach
-// the model so it can determine the addressee and whether an action is wanted.
-const playbackControlCandidate = (text: string) =>
-  /\b(?:wait|pause|stop|hold\s+on|hang\s+on|play|resume|continue|slower?|faster?|speed|volume|mute|unmute|louder|quieter|rewind|forward|replay|repeat|missed|skip|seek)\b/i.test(text);
-
 export type ConversationVoice = Pick<
   OnDemandVoice,
   "append" | "activity" | "setWorking"
@@ -75,6 +62,7 @@ export class Conversation {
   private longAnswer = false;
   private answerQueued = false;
   private outputIsAnswer = false;
+  private livePending = false;
   private samples: ResponseLatency[] = [];
   private latency: ResponseLatencyTracker;
   private followup: FollowupTimer;
@@ -109,13 +97,6 @@ export class Conversation {
   get startedAt() {
     return this.beganAt;
   }
-  get pendingPause() {
-    return (
-      !!this.pending &&
-      !this.pending.signal.aborted &&
-      shortPauseRequest(this.submittedText)
-    );
-  }
   /** Read only: observing this must never submit or accept an utterance. */
   inputDiagnostics() {
     const input = this.turns.find((turn) => turn.id === this.streamIds.user);
@@ -124,8 +105,6 @@ export class Conversation {
       submittedText: this.submittedText,
       requestPending: !!this.pending && !this.pending.signal.aborted,
       delegationReceived: !!this.delegation,
-      shortPauseCandidate: shortPauseRequest(input?.text ?? ""),
-      playbackControlCandidate: playbackControlCandidate(input?.text ?? ""),
       settled: this.settled,
       acceptedInput: this.acceptedInput,
     };
@@ -153,6 +132,7 @@ export class Conversation {
     this.delegation = undefined;
     this.answerQueued = false;
     this.outputIsAnswer = false;
+    this.livePending = false;
     this.latency.cancel();
     this.host.voice()?.setWorking(false);
     this.host.changed();
@@ -242,10 +222,7 @@ export class Conversation {
     if (role === "assistant")
       this.noteAnswer(turns.find((turn) => turn.id === id)!.text);
     else {
-      const latest = turns.find((turn) => turn.id === id)!.text;
-      const repeatedPause =
-        shortPauseRequest(this.submittedText) && shortPauseRequest(latest);
-      if (this.pending && !repeatedPause) this.pending.abort();
+      if (this.pending) this.pending.abort();
       this.scheduleQuestion(120);
     }
   }
@@ -274,23 +251,7 @@ export class Conversation {
       const latest = this.turns
         .filter((turn) => turn.role === "user")
         .at(-1)?.text;
-      if (
-        this.pending &&
-        !this.pending.signal.aborted &&
-        shortPauseRequest(this.submittedText) &&
-        shortPauseRequest(latest ?? "")
-      )
-        return;
-      // Live delegates as soon as it has an actionable clause. Do not wait for
-      // local VAD speech-end; later transcript deltas cancel stale work.
-      const controlCandidate =
-        this.host.playerInput()?.source === "voice" &&
-        playbackControlCandidate(latest ?? "");
-      if (
-        latest?.trim() &&
-        latest !== this.submittedText &&
-        (this.delegation || controlCandidate)
-      ) {
+      if (latest?.trim() && latest !== this.submittedText && this.delegation) {
         this.submittedText = latest;
         void this.answer(this.delegation, true);
       }
@@ -333,6 +294,7 @@ export class Conversation {
           !state.userSpeaking &&
           !state.assistantSpeaking &&
           !this.pending &&
+          !this.livePending &&
           !this.delegation &&
           !this.answerQueued &&
           !this.draft.trim() &&
@@ -341,6 +303,91 @@ export class Conversation {
       },
       () => this.host.resume(0),
     );
+  }
+  liveInputPending(value: boolean) {
+    this.livePending = value;
+    if (value) this.followup.cancel();
+    else this.scheduleFollowup();
+  }
+  /** A server decision arrives on the session stream; this never submits a question. */
+  receiveLive(result: QuestionResult, text: string) {
+    if (result.action === "ignore" || result.action === "wait") return;
+    this.beginTurn(!this.host.playback().interruption);
+    this.acceptedInput = true;
+    this.addUser(text);
+    this.submittedText = text;
+    this.consumeResult(result, text, undefined, true, true);
+    this.host.changed();
+  }
+  private consumeResult(
+    result: QuestionResult,
+    handledText: string,
+    delegationId?: string,
+    speak = false,
+    serverOwned = false,
+  ) {
+    if (result.action === "wait") {
+      this.host
+        .voice()
+        ?.append(
+          "thinking",
+          "The app needs more of the utterance. Keep listening silently; no playback action was taken.",
+          delegationId ?? null,
+        );
+      return;
+    }
+    this.settled = true;
+    if (result.action === "ignore") {
+      this.history(
+        this.turns.filter((turn) => turn.id !== this.streamIds.user),
+      );
+      this.host
+        .voice()
+        ?.append(
+          "instructions",
+          "This speech was not addressed to the app. Remain silent. Do not acknowledge or ask a clarification. No playback action was taken.",
+          delegationId ?? null,
+        );
+      this.delegation = undefined;
+      return;
+    }
+    this.acceptedInput = true;
+    if (this.streamIds.user) this.provisionalTurns.delete(this.streamIds.user);
+    if (result.action === "player_control") {
+      this.host.control(result, handledText);
+      this.host.voice()?.append(
+        "thinking",
+        JSON.stringify({
+          commandId: result.commandId,
+          status: "dispatched",
+          player: this.host.playerInput(),
+          note: "The app dispatched these commands. Do not repeat them or announce playback success before actual playback. No spoken confirmation is needed.",
+        }),
+        delegationId ?? null,
+      );
+      this.delegation = undefined;
+      if (result.followUpQuestion && !serverOwned)
+        this.host.followup(result.followUpQuestion, !!(delegationId || speak));
+      return;
+    }
+    this.references = result.sources;
+    this.noteAnswer(result.answer);
+    this.host.log(`tools: ${result.tools.join(", ") || "context"}`);
+    if (result.action === "resume") {
+      this.host.resume(1500);
+      return;
+    }
+    this.host.engage();
+    const voice = this.host.voice();
+    if ((delegationId || speak) && voice) {
+      this.answerQueued = true;
+      voice.append("commentary", result.answer, delegationId ?? null);
+      voice.activity();
+      if (this.delegation === delegationId) this.delegation = undefined;
+    } else {
+      this.history([...this.turns, { role: "assistant", text: result.answer }]);
+      this.host.textAnswered();
+    }
   }
   private async answer(delegationId?: string, speak = false) {
     this.followup.cancel();
@@ -413,75 +460,7 @@ export class Conversation {
       if (!valid()) return;
       if (result.revision !== revision) throw Error("回答轮次不匹配，请重试");
       this.host.log(`Backend intent: ${result.action}`);
-      if (result.action === "wait") {
-        this.host
-          .voice()
-          ?.append(
-            "thinking",
-            "The app needs more of the utterance. Keep listening silently; no playback action was taken.",
-            delegationId ?? null,
-          );
-        return;
-      }
-      this.settled = true;
-      if (result.action === "ignore") {
-        this.history(
-          this.turns.filter((turn) => turn.id !== this.streamIds.user),
-        );
-        this.host
-          .voice()
-          ?.append(
-            "instructions",
-            "This speech was not addressed to the app. Remain silent. Do not acknowledge or ask a clarification. No playback action was taken.",
-            delegationId ?? null,
-          );
-        this.delegation = undefined;
-        return;
-      }
-      this.acceptedInput = true;
-      if (this.streamIds.user)
-        this.provisionalTurns.delete(this.streamIds.user);
-      if (result.action === "player_control") {
-        this.host.control(result, handledText);
-        this.host.voice()?.append(
-          "thinking",
-          JSON.stringify({
-            commandId: result.commandId,
-            status: "dispatched",
-            player: this.host.playerInput(),
-            note: "The app dispatched these commands. Do not repeat them or announce playback success before actual playback. No spoken confirmation is needed.",
-          }),
-          delegationId ?? null,
-        );
-        this.delegation = undefined;
-        if (result.followUpQuestion)
-          this.host.followup(
-            result.followUpQuestion,
-            !!(delegationId || speak),
-          );
-        return;
-      }
-      this.references = result.sources;
-      this.noteAnswer(result.answer);
-      this.host.log(`tools: ${result.tools.join(", ") || "context"}`);
-      if (result.action === "resume") {
-        this.host.resume(1500);
-        return;
-      }
-      this.host.engage();
-      const voice = this.host.voice();
-      if ((delegationId || speak) && voice) {
-        this.answerQueued = true;
-        voice.append("commentary", result.answer, delegationId ?? null);
-        voice.activity();
-        if (this.delegation === delegationId) this.delegation = undefined;
-      } else {
-        this.history([
-          ...this.turns,
-          { role: "assistant", text: result.answer },
-        ]);
-        this.host.textAnswered();
-      }
+      this.consumeResult(result, handledText, delegationId, speak);
     } catch (error) {
       if (valid()) {
         this.hold();

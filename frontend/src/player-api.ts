@@ -13,8 +13,11 @@ import {
   type QuestionRequest,
   type QuestionResult,
   type QuestionPhase,
+  type LiveControlEvent,
+  type LiveControlUpdate,
 } from "@aside/engine/contracts";
 import { readQuestion } from "./question-stream";
+import { readLiveControl } from "./live-control-stream";
 import { MAX_UPLOAD_BYTES } from "@aside/engine/core";
 export interface SpacePage {
   episodes: Episode[];
@@ -39,6 +42,17 @@ export interface PlayerBackend {
     progress: (phase: QuestionPhase) => void,
   ): Promise<QuestionResult>;
   live(id: string, request: LiveRequest): Promise<LiveResult>;
+  control?(
+    id: string,
+    sessionId: string,
+    signal: AbortSignal,
+    receive: (event: LiveControlEvent) => void,
+  ): Promise<void>;
+  updateControl?(
+    id: string,
+    update: LiveControlUpdate,
+    signal: AbortSignal,
+  ): Promise<void>;
   transcribe(id: string, audio: Blob, signal: AbortSignal): Promise<string>;
   usage(
     id: string,
@@ -88,6 +102,25 @@ export const playerBackend: PlayerBackend = {
     return result;
   },
   live: (id, request) => api(`/episodes/${id}/live`, json(request)),
+  async control(id, sessionId, signal, receive) {
+    await readLiveControl(
+      await fetch(
+        `/api/episodes/${id}/live-control?sessionId=${encodeURIComponent(sessionId)}`,
+        {
+          headers: { Accept: "application/x-ndjson" },
+          signal,
+        },
+      ),
+      receive,
+    );
+  },
+  async updateControl(id, update, signal) {
+    const result = await api<{ ok: boolean }>(`/episodes/${id}/live-control`, {
+      ...json(update, "PUT"),
+      signal,
+    });
+    if (!result.ok) throw Error("Voice control session is no longer active");
+  },
   async transcribe(id, audio, signal) {
     const body = new FormData();
     body.append("audio", audio, "question.wav");

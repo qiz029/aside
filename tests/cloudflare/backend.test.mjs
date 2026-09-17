@@ -32,6 +32,8 @@ let googleIdentity = {
   picture: "https://lh3.googleusercontent.com/a/test",
 };
 const controlEvents = [];
+const sidebands = new Map();
+let liveReply;
 const usedProofs = new Set();
 const origin = "https://aside.test";
 const testerIp = "192.0.2.10";
@@ -123,6 +125,7 @@ before(async () => {
         if (request.url.endsWith("/attach")) {
           const pair = new WebSocketPair();
           pair[1].accept();
+          sidebands.set(new URL(request.url).pathname.split("/").at(-2), pair[1]);
           pair[1].addEventListener("message", (event) => {
             const data = JSON.parse(event.data);
             controlEvents.push(data);
@@ -131,6 +134,7 @@ before(async () => {
           });
           return new WorkerResponse(null, { status: 101, webSocket: pair[0] });
         }
+        if (request.url.endsWith("/responses") && liveReply) return liveReply(await request.json());
         if (request.url.endsWith("/responses"))
           return Response.json({
             id: "response-test",
@@ -2122,4 +2126,64 @@ test("the worker serves indexable pages, a live sitemap and real 404s", async ()
   assert.match(chineseEpisodeHtml, /<html lang="zh-CN">/);
   assert.match(chineseEpisodeHtml, /"inLanguage":"zh-CN"/);
   assert.match(chineseEpisodeHtml, /<h1>阿Q正传<\/h1>/);
+});
+
+
+test("Live sideband pushes multiple decisions on one owner-bound NDJSON stream without question requests", async () => {
+  const a = await visitor(), b = await visitor();
+  await seed("control-public", "seed", true);
+  await a.request("/api/trial", "POST", { token: JSON.stringify({ cdata: a.id, nonce: crypto.randomUUID() }) }, { "cf-connecting-ip": testerIp });
+  const { createPlayerConfig } = await import("../../engine/src/player.ts");
+  const player = { version: 0, sequence: 0, revision: 1, positionMs: 1000, wasPlaying: true, audibleSource: "podcast", config: createPlayerConfig() };
+  const requests = [];
+  liveReply = async body => {
+    const context = JSON.parse(body.input[0].content); requests.push(context);
+    return Response.json({ id: crypto.randomUUID(), output_text: "", output: [{ type: "function_call", call_id: crypto.randomUUID(), name: "control_podcast", arguments: JSON.stringify({ commands: [{ type: "pause" }] }) }] });
+  };
+  let reader, sessionId;
+  try {
+    const created = await a.request("/api/episodes/control-public/live", "POST", { sdp: "offer", atMs: 1000, control: { player, debug: true } }, { "cf-connecting-ip": testerIp });
+    assert.equal(created.status, 200, await created.clone().text());
+    const live = await created.json(); sessionId = live.session.id;
+    assert.equal(live.control, true);
+    const path = `/api/episodes/control-public/live-control?sessionId=${sessionId}`;
+    assert.equal((await b.request(path)).status, 404, "another visitor cannot subscribe to this session");
+    const stream = await a.request(path);
+    assert.equal(stream.status, 200); assert.match(stream.headers.get("content-type"), /ndjson/);
+    reader = stream.body.getReader();
+    let buffered = "";
+    const next = async type => {
+      for (;;) {
+        while (buffered.includes("\n")) {
+          const at = buffered.indexOf("\n"), line = buffered.slice(0, at); buffered = buffered.slice(at + 1);
+          const event = JSON.parse(line); if (event.type === type) return event;
+        }
+        const { value, done } = await reader.read(); assert.equal(done, false);
+        buffered += new TextDecoder().decode(value);
+      }
+    };
+    assert.equal((await next("ready")).sessionId, sessionId);
+    assert.equal((await a.request(path)).status, 409, "second subscriber cannot duplicate commands");
+    sidebands.get(sessionId).send(JSON.stringify({ type: "session.input_transcript.delta", delta: "Could you lower that a bit?", start_ms: 0, end_ms: 200 }));
+    const first = await next("decision");
+    assert.equal(first.result.action, "player_control");
+    assert.equal(requests.length, 1, "sideband alone invokes the backend model");
+    assert.equal(first.player.positionMs, 1000);
+    const update = { sessionId, player: { ...player, sequence: 1, revision: 2, wasPlaying: false, audibleSource: "none" }, acknowledgement: { decisionId: first.decisionId, applied: true } };
+    assert.equal((await b.request(path, "PUT", update)).status, 404);
+    assert.equal((await a.request(path, "PUT", update)).status, 200);
+    sidebands.get(sessionId).send(JSON.stringify({ type: "session.delegation.created", delegation: { id: "duplicate", target: "client" } }));
+    sidebands.get(sessionId).send(JSON.stringify({ type: "session.input_transcript.delta", delta: "Pause again", start_ms: 2500, end_ms: 2800 }));
+    const second = await next("decision");
+    assert.notEqual(second.decisionId, first.decisionId);
+    assert.equal(second.result.revision, 2);
+    assert.equal(requests.length, 2);
+    const rows = await db.prepare("SELECT bucket FROM budgets WHERE bucket=?").bind(`trial:${new Date().toISOString().slice(0, 10)}:question:${a.id}`).all();
+    assert.equal(rows.results.length, 0, "allowlisted control sessions do not consume public quota per fragment");
+    assert.equal(networkCalls.some(p => p.includes("live-control")), false);
+  } finally {
+    liveReply = undefined;
+    await reader?.cancel();
+    if (sessionId) await a.request("/api/episodes/control-public/usage", "POST", { sessionId, seconds: 1, finalized: true });
+  }
 });

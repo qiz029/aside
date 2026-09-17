@@ -2,11 +2,9 @@
 
 播放器遥控与人物对话是独立功能。`@aside/engine/player` 提供配置、运行时命令校验和纯计算规则；`ListeningSession` 执行音频操作并协调已有问答的取消。它不依赖人物 profile、模型连接或转录结果，未分析的音频也可执行基础控制。
 
-英文语音遥控复用 GPT-Live 的 client delegation：现有后端工具把意图转换成经过校验的 `PlayerCommand`，通过问答 NDJSON 结果传给前端，再使用同一播放器执行层；不直接操作 DOM 或复制播放状态机。此模块只控制播客原音频，AI 实时语音的语速与重说属于另一条音频链路。
+英文语音遥控由后端通过 GPT-Live sideband 持续接收识别片段，再经独立的 NDJSON 长连接推送经过校验的 `PlayerCommand`。前端执行同一播放器操作，不再通过关键词或委派决定是否提交语音判断。协议和限制见[服务端语音控制](server-voice-control.md)。此模块控制播客原音频；AI 实时语音的语速与重说属于另一条音频链路。
 
 ## PlayerConfig
-
-短句输入不再依赖本地 VAD 先触发：Live 转写/委派先到时保留输入，稍后到达的本地起声不取消已有判断。`wait / wait wait / hold on / hang on / pause / stop` 等独立短句可以直接触发后端意图分类，不必等待 Live 委派；前端不按关键词直接暂停，仍由后端结合上下文排除旁人对话。重复暂停短句不会反复取消正在处理的请求，补充不同内容时仍取消过期判断。开发观察（URL 加 `?debug`）记录本地起声、收到转写的字符数、委派和后端判断，不在事件日志里保存原话。
 
 配置属于播放器实例，不属于单集节目或人物。`ListeningSession` 构造参数可接收 `playerConfig`，运行时可通过 `configurePlayer(patch)` 原子校验并更新。配置是只读快照，旧快照不会随操作被修改。
 
@@ -78,51 +76,13 @@ npm run test:player-coverage
 浏览器验证只需启动前端 `npm run dev -w @aside/frontend`，运行 `npx playwright test tests/browser/player-config.spec.ts`。这组测试用模拟 API 和本地 WAV 验证真实音频元素、倍速菜单、换集与刷新，不需要后端、演示数据或模型 API key。
 
 
-## Live 遥控链路
+## Live 遥控链路与诊断
 
-自动语音模式在用户开启语音并开始收听时提前建立 GPT-Live 连接，连接就绪后麦克风直接通过 WebRTC 送入 Live，不再为正常连续发言单独调用转写。播放恢复后保留该连接，直到用户停止收听、关闭语音、切节目或离开页面；相较原先按需连接，这会增加按时长计费的 Live 用量。按住说话仍使用录音转写；若自动模式下用户在连接就绪前开口，保留原有 WAV/Whisper 首句兜底，不能保证这条冷启动路径达到增量语音延迟。
+完整协议见[服务端语音控制](server-voice-control.md)。打开 `/episodes/<id>?debug` 并展开开发观察：
 
-`session.input_transcript.delta` 累积到当前输入；`session.delegation.created` 触发现有 question 请求，不等待本地 VAD 的 speech-end。后续有意义的转写增量取消旧请求，并用 120ms 防抖合并后重新判断。委派先于转写到达时，等待转写事件补齐；不重复处理同一委派。用户讲话时记录原始位置、发声对象、播放状态和 turnId，意图判断使用这个快照。
+- `control.owner: server` 表示后端拥有意图判断；`control.status` 显示连接、接收片段、判断和决定。
+- `Live heard` 是浏览器收到的 Live 字幕；`Backend received` 是 sideband 收到的累计文本；`Backend classifying` 是实际送入模型的文本。
+- 事件依次显示 `Server voice control NDJSON connected`、`Backend sideband transcript received`、`Backend intent classification started`、`Backend intent: ...`、`Backend decision applied: ...`。
+- 麦克风 RMS、帧数、轨道状态、WebRTC 字节和音频能量仍用于检查采集与发送。字节增加本身不能证明有语音。
 
-检测到声音只开始一轮输入，不暂停播客，也不降音量。Live 和后端都有明确的对话对象指令：和第三方聊天应保持静默，不能把播客内容、引用、否定句当成命令。后端可以返回 `ignore` 或 `wait`；未被确认是系统输入的文字不展示或写入节目 checkpoint。是否正确理解真实车内对话仍需模型音频评测，自动化替身测试不构成语义准确率保证。未新增自动降音量偏好；当前旁边聊天保持用户原有音量。
-
-### NDJSON 合约
-
-复用 `/api/episodes/:id/question` 和现有 `application/x-ndjson`，不增加独立指令连接。请求可选的 `player` 携带 turnId、source、positionMs、wasPlaying、audibleSource、config；老客户端仍然可以不传。
-
-模型通过 `control_podcast` 返回 1–4 个完整、按顺序执行的指令。服务器在整个指令批次校验通过后立即结束模型工具循环，不再请求模型生成确认话语，直接返回终结事件：
-
-```json
-{"type":"result","result":{"revision":7,"action":"player_control","commandId":"turn:call","commands":[{"type":"adjust_rate","direction":"slower"}],"answer":"","sources":[],"tools":["control_podcast"]}}
-```
-
-`ignore` 和 `wait` 同样作为 result.action 返回，但没有 commands。`wait` 允许同一轮后续转写继续判断；`ignore` 静默结束本轮。混合请求可以带 `followUpQuestion`：前端先执行遥控，再启动内容问答，避免解释生成阻塞暂停等操作。现有 `answer` / `resume` 结果保持兼容。
-
-前端按完整 NDJSON 行解析并校验 revision。当前节目、会话 epoch、请求取消状态一起拦截迟到结果；commandId 与已处理的当前输入防止重复调速。手动定位、调音量、切节目或停止会撤销旧请求。`repeat` 使用用户开口时的位置选择语义锚点。批次先完整校验再执行；反馈为 dispatched，不会把异步 play() 尚未成功的状态宣称为播放成功。播放器自身的 play() 拒绝仍走已有错误处理。
-
-AI 发言速度与原音频倍速严格区分，前者尚未实现。标准播放调整不需要 spoken confirmation。默认仍由后端模型决定是否忽略无关语音，因此必须评测误触发，而非仅看指令格式有效。
-
-### 验证 Live 遥控
-
-```bash
-npm run test:remote-coverage
-npx playwright test tests/browser/voice-remote.spec.ts tests/browser/player-config.spec.ts
-```
-
-浏览器用真实 AudioWorklet、WebRTC 回环和 `<audio>`，只模拟云端转写/委派事件与后端 NDJSON。测试不会调用付费模型；实际 GPT-Live 委派时机、对话对象判断、否定/改口、回声以及端到端延迟需要真实音频评测。
-# Voice debugging
-
-English playback words in a longer or mixed-language utterance now select a backend classification candidate even if Live emits no delegation. The backend still owns addressee/negation/quotation checks and the actual decision; candidate detection never changes playback. Streamed whitespace is preserved. General conversation without playback vocabulary still uses Live delegation. Requests use the existing streaming debounce, without requiring local speech-end.
-
-Open `/episodes/<id>?debug`, then expand **开发观察 / Developer view** below the player. The debug flag survives canonical URL replacement and episode selection. Opening diagnostics never starts playback or requests microphone access.
-
-The panel polls local metadata once a second while expanded:
-
-- `bundle`: the exact frontend asset loaded by the browser.
-- `session.status`, `error`: whether voice is off, arming, connecting or on, and the current failure.
-- `voice.microphone`: selected device label, track/context state, processed frame count, last frame age, RMS and VAD speech probability. Frames must advance; speech should change RMS. Frame processing alone does not prove the signal contains speech.
-- `voice.live`: WebRTC/ICE/data-channel state, outgoing track enablement, bytes/packets sent and source audio energy. Byte counts can increase for silence; compare audio energy and local RMS too.
-- `events`: local speech start/end, Live event types, transcript character counts, delegation and backend intent results. Diagnostics do not add transcript text, recording uploads or server-side telemetry.
-- With `?debug`, the separate `recognition` trace now shows `liveInputText` (raw input deltas including whitespace, before cold/input gating), `conversationInput` (current conversation turn) and `submittedText` (latest text dispatched for classification). `lastInputDisposition` describes the input gate; `requestPending`, `delegationReceived`, `shortPauseCandidate`, `settled` and `acceptedInput` help interpret dispatch. Ordinary event logs still omit recognition text. The extra trace is opt-in, stays in tab memory, retains the last 4,000 characters and 30 deltas of at most 500 characters each, survives stopping for inspection, and clears on reload, episode change or a new voice connection. It is not added to checkpoints or server logs; accepted conversation history follows its existing behavior. No trace is collected on pages without `?debug`.
-
-Reproduce with the listener explicitly starting playback/voice and saying “Wait, wait” once. Leave the panel open to inspect the changing counters. Local input without transmitted energy points to the transport/input path; transmitted energy without Live input events points further downstream. Synthetic browser tests verify the measurement path and NDJSON controls, not real provider recognition accuracy.
+面板不会开启设备或播放音频。额外识别文本只在 `?debug` 时通过控制流显示，不写入 checkpoint 或服务端日志；事件日志只记录状态。服务端会话中的识别文本仅保留在有界内存里，用于判断，关闭时释放。被接受的对话沿用已有历史保存逻辑。

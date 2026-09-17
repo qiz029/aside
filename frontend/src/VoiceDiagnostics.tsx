@@ -6,7 +6,9 @@ type Snapshot = Awaited<ReturnType<ListeningSession["voiceDiagnostics"]>>;
 export function VoiceDiagnostics({ read }: { read: () => Promise<Snapshot> }) {
   const latest = useRef(read);
   latest.current = read;
-  const [snapshot, setSnapshot] = useState<Snapshot | { diagnosticsUnavailable: true } | null>(null);
+  const [snapshot, setSnapshot] = useState<
+    Snapshot | { diagnosticsUnavailable: true } | null
+  >(null);
   useEffect(() => {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -26,25 +28,44 @@ export function VoiceDiagnostics({ read }: { read: () => Promise<Snapshot> }) {
       clearTimeout(timer);
     };
   }, []);
-  const recognition = snapshot && "recognition" in snapshot ? snapshot.recognition : undefined;
+  const recognition =
+    snapshot && "recognition" in snapshot ? snapshot.recognition : undefined;
   return (
     <section aria-label="Voice diagnostics">
       <p>
-        Voice diagnostics · This extra trace stays in memory in this tab, outside
-        checkpoints and server logs. It resets on reload, episode change or a new
-        voice connection. Normal accepted conversation history is separate.
+        Voice diagnostics · This extra trace stays in memory in this tab,
+        outside checkpoints and server logs. It resets on reload, episode change
+        or a new voice connection. Normal accepted conversation history is
+        separate.
       </p>
-      {recognition && <div>
-        <p><strong>Live heard (current connection, last 4,000 characters)</strong></p>
-        <blockquote style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
-          {recognition.liveInputText || "No input transcript received yet."}
-        </blockquote>
-        <p><strong>Conversation input</strong></p>
-        <blockquote>{recognition.conversationInput || "No input in the current turn."}</blockquote>
-        <p><strong>Sent for intent classification</strong></p>
-        <blockquote>{recognition.submittedText || "No request sent in the current turn."}</blockquote>
-        <p>Input gate: {recognition.lastInputDisposition}</p>
-      </div>}
+      {recognition && (
+        <div>
+          <p>
+            <strong>
+              Live heard (current connection, last 4,000 characters)
+            </strong>
+          </p>
+          <blockquote
+            style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
+          >
+            {recognition.liveInputText || "No input transcript received yet."}
+          </blockquote>
+          <p>
+            <strong>Backend received</strong>
+          </p>
+          <blockquote>
+            {recognition.conversationInput || "No input in the current turn."}
+          </blockquote>
+          <p>
+            <strong>Backend classifying</strong>
+          </p>
+          <blockquote>
+            {recognition.submittedText ||
+              "No classification started in this session."}
+          </blockquote>
+          <p>Input path: {recognition.lastInputDisposition}</p>
+        </div>
+      )}
       <pre className="debug">
         {JSON.stringify(
           {

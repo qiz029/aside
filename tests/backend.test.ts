@@ -11,6 +11,136 @@ import { createApp } from "../backend/src/app.js";
 const unused = async (): Promise<never> => {
   throw Error("Unexpected provider call in test");
 };
+test("local server attaches sideband before returning Live and streams server decisions", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aside-live-control-"));
+  const store = new Store(root);
+  const { createPlayerConfig } = await import("@aside/engine/player");
+  const analysis = {
+    version: "1",
+    source: "demo" as const,
+    summary: "",
+    hostStyle: "",
+    passages: [],
+    anchors: [],
+    speakers: [],
+    voice: "masculine" as const,
+    voiceReason: "test",
+  };
+  store.put({
+    id: "live-test",
+    title: "test",
+    createdAt: "now",
+    durationMs: 10000,
+    status: "ready",
+    stage: "ready",
+    progress: 1,
+    analysis,
+  });
+  let receive!: (event: Record<string, unknown>) => void;
+  let modelCalls = 0,
+    attached = false;
+  const app = createApp(
+    store,
+    fakeServices({
+      voice: {
+        transcribeQuestion: unused,
+        createLive: async () => ({
+          session: { id: "session" },
+          transport: { sdp: "answer" },
+        }),
+        attachLive: async (_id, callback) => {
+          receive = callback;
+          attached = true;
+          return { send() {}, close() {} };
+        },
+      },
+      questions: {
+        answer: async (_analysis, q, _signal, _progress, telemetry) => {
+          modelCalls++;
+          telemetry?.({
+            rounds: 1,
+            tiers: [],
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            outputTokens: 1,
+            reasoningTokens: 0,
+          });
+          return {
+            revision: q.revision,
+            action: "ignore",
+            answer: "",
+            sources: [],
+            tools: [],
+          };
+        },
+      },
+    }),
+  );
+  const player = {
+    version: 0,
+    sequence: 0,
+    revision: 1,
+    positionMs: 1000,
+    wasPlaying: true,
+    audibleSource: "podcast",
+    config: createPlayerConfig(),
+  };
+  try {
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/episodes/live-test/live",
+      payload: { sdp: "offer", atMs: 1000, control: { player } },
+    });
+    assert.equal(created.statusCode, 200);
+    assert.equal(created.json().control, true);
+    assert.equal(attached, true);
+    assert.equal(
+      (await app.inject("/api/episodes/other/live-control?sessionId=session"))
+        .statusCode,
+      404,
+    );
+    assert.equal(
+      (
+        await app.inject({
+          method: "PUT",
+          url: "/api/episodes/live-test/live-control",
+          payload: { sessionId: "session", player: { ...player, sequence: 1 } },
+        })
+      ).json().ok,
+      true,
+    );
+    const reading = app.inject(
+      "/api/episodes/live-test/live-control?sessionId=session",
+    );
+    // inject resolves only after the response stream ends. The simulated Live
+    // emits independently while that single HTTP response remains open.
+    const input = setTimeout(
+      () =>
+        receive({ type: "session.input_transcript.delta", delta: "Dinner?" }),
+      30,
+    );
+    const end = setTimeout(() => receive({ type: "session.closed" }), 300);
+    const stream = await reading;
+    clearTimeout(input);
+    clearTimeout(end);
+    assert.match(stream.headers["content-type"]!, /ndjson/);
+    const events = stream.body
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    assert.equal(events[0].type, "ready");
+    assert.equal(
+      events.find((e) => e.type === "decision").result.action,
+      "ignore",
+    );
+    assert.equal(events.at(-1).type, "closed");
+    assert.equal(modelCalls, 1);
+  } finally {
+    await app.close();
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 function fakeServices(overrides: Partial<BackendServices>): BackendServices {
   return {
     analysis: { transcribe: unused, enrich: unused },

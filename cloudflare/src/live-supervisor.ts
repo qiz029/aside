@@ -6,6 +6,13 @@ import {
   LiveCreationRejected,
 } from "../../backend/src/interactive-provider.js";
 import { enabled, release } from "./trial.js";
+import {
+  liveControlUpdateSchema,
+  type LiveRequest,
+} from "@aside/engine/contracts";
+import { LiveControl } from "../../backend/src/live-control.js";
+import { QuestionService } from "../../backend/src/question-service.js";
+import { recordQuestionUsage } from "./usage.js";
 interface State {
   owner: string;
   token: string;
@@ -32,6 +39,7 @@ const closeGraceMs = 15 * 60 * 1000;
 /** The browser never owns the lease or the authoritative close acknowledgement. */
 export class LiveSupervisor extends DurableObject<Env> {
   private socket?: WebSocket;
+  private control?: LiveControl;
   private pending: Promise<unknown> = Promise.resolve();
   private serial<T>(run: () => Promise<T>): Promise<T> {
     const next = this.pending.then(run, run);
@@ -47,9 +55,21 @@ export class LiveSupervisor extends DurableObject<Env> {
     analysis: Analysis,
     atMs: number,
     history: Turn[],
+    control?: LiveRequest["control"],
+    accountId: string | null = null,
   ) {
     return this.serial(() =>
-      this.startSession(owner, token, episode, sdp, analysis, atMs, history),
+      this.startSession(
+        owner,
+        token,
+        episode,
+        sdp,
+        analysis,
+        atMs,
+        history,
+        control,
+        accountId,
+      ),
     );
   }
   private async startSession(
@@ -60,6 +80,8 @@ export class LiveSupervisor extends DurableObject<Env> {
     analysis: Analysis,
     atMs: number,
     history: Turn[],
+    control?: LiveRequest["control"],
+    accountId: string | null = null,
   ) {
     const previous = await this.ctx.storage.get<State>("state");
     if (previous?.confirmed) await this.confirm(previous);
@@ -79,6 +101,51 @@ export class LiveSupervisor extends DurableObject<Env> {
         this.env.ASIDE_BACKEND_MODEL,
       ).createLive(sdp, analysis, atMs, history);
       state.session = result.session.id;
+      if (control) {
+        const questions = new QuestionService(
+          new InteractiveProvider(
+            this.env.OPENAI_API_KEY!,
+            this.env.ASIDE_BACKEND_MODEL,
+            true,
+          ),
+          3,
+        );
+        this.control = new LiveControl(
+          result.session.id,
+          control,
+          analysis,
+          history,
+          {
+            answer: async (...args) => {
+              if (Date.now() >= state.deadline || !(await enabled(this.env)))
+                throw Error("Trial stopped");
+              const result = await questions.answer(...args);
+              if (Date.now() >= state.deadline || !(await enabled(this.env)))
+                throw Error("Trial stopped");
+              return result;
+            },
+          },
+          (text) => {
+            if (this.socket?.readyState === 1)
+              this.socket.send(
+                JSON.stringify({
+                  type: "session.thinking.append",
+                  delegation_id: null,
+                  content: text,
+                }),
+              );
+          },
+          (totals) =>
+            this.ctx.waitUntil(
+              recordQuestionUsage(this.env, {
+                owner,
+                accountId,
+                episodeId: episode,
+                totals,
+              }),
+            ),
+        );
+      }
       await this.ctx.storage.put("state", state);
       await this.env.DB.prepare(
         "INSERT INTO voice_usage(session_id,owner_id,episode_id) VALUES(?,?,?)",
@@ -88,8 +155,9 @@ export class LiveSupervisor extends DurableObject<Env> {
       await this.attach(state);
       if (Date.now() >= state.deadline || !(await enabled(this.env)))
         throw Error("Trial stopped");
-      return result;
+      return { ...result, ...(control ? { control: true } : {}) };
     } catch (error) {
+      this.control?.close();
       if (error instanceof LiveCreationRejected && !state.session) {
         await this.ctx.storage.delete("state");
         await this.ctx.storage.deleteAlarm();
@@ -103,12 +171,42 @@ export class LiveSupervisor extends DurableObject<Env> {
       throw error;
     }
   }
+  /** The public API authenticates the owner before selecting this object. */
+  async fetch(request: Request) {
+    const url = new URL(request.url);
+    const state = await this.ctx.storage.get<State>("state");
+    if (
+      !state ||
+      state.closing ||
+      Date.now() >= state.deadline ||
+      state.session !== url.searchParams.get("sessionId") ||
+      state.episode !== url.searchParams.get("episode") ||
+      !this.control
+    )
+      return Response.json(
+        { error: "Voice control session not found" },
+        { status: 404 },
+      );
+    if (request.method === "GET") return this.control.subscribe();
+    if (request.method === "PUT") {
+      const parsed = liveControlUpdateSchema.safeParse(await request.json());
+      if (!parsed.success)
+        return Response.json(
+          { error: "Invalid player state" },
+          { status: 400 },
+        );
+      return Response.json({ ok: this.control.update(parsed.data) });
+    }
+    return new Response(null, { status: 405 });
+  }
   /**
    * Releases everything a finished session holds. `finalize` marks the usage
    * row as supplier-confirmed, which only a real `session.closed` frame or a
    * 404 from the supplier may claim.
    */
   private async retire(state: State, finalize: boolean) {
+    this.control?.close();
+    this.control = undefined;
     await this.env.DB.batch([
       ...(finalize && state.session
         ? [
@@ -142,12 +240,15 @@ export class LiveSupervisor extends DurableObject<Env> {
       await this.breaker(state);
       return;
     }
-    console.error("Aside voice session released without a close acknowledgement", {
-      owner: state.owner,
-      session: state.session,
-      dropped,
-      error: error instanceof Error ? error.message : String(error),
-    });
+    console.error(
+      "Aside voice session released without a close acknowledgement",
+      {
+        owner: state.owner,
+        session: state.session,
+        dropped,
+        error: error instanceof Error ? error.message : String(error),
+      },
+    );
     await this.retire(state, dropped);
   }
   private async breaker(state: State) {
@@ -182,6 +283,7 @@ export class LiveSupervisor extends DurableObject<Env> {
       if (typeof event.data !== "string") return;
       try {
         const message = JSON.parse(event.data);
+        this.control?.receive(message);
         if (message.type === "session.closed")
           this.ctx.waitUntil(this.serial(() => this.confirm(state)));
       } catch {
@@ -189,10 +291,20 @@ export class LiveSupervisor extends DurableObject<Env> {
       }
     });
     socket.addEventListener("close", () => {
-      if (this.socket === socket) this.socket = undefined;
+      if (this.socket === socket) {
+        this.socket = undefined;
+        this.control?.close(
+          "Live sideband disconnected. Please reconnect the microphone.",
+        );
+      }
     });
     socket.addEventListener("error", () => {
-      if (this.socket === socket) this.socket = undefined;
+      if (this.socket === socket) {
+        this.socket = undefined;
+        this.control?.close(
+          "Live sideband failed. Please reconnect the microphone.",
+        );
+      }
     });
   }
   private async confirm(state: State) {
