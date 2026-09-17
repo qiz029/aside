@@ -89,6 +89,7 @@ async function setupRemote(
         (!init?.method || init.method === "GET")
       ) {
         const encoder = new TextEncoder();
+        let streamClosed = false;
         const stream = new ReadableStream({
           start(controller) {
             (window as any).remotePush = (line: string) =>
@@ -100,12 +101,16 @@ async function setupRemote(
               "abort",
               () => {
                 (window as any).remotePush = undefined;
-                controller.close();
+                if (!streamClosed) {
+                  streamClosed = true;
+                  controller.close();
+                }
               },
               { once: true },
             );
           },
           cancel() {
+            streamClosed = true;
             (window as any).remotePush = undefined;
           },
         });
@@ -262,6 +267,14 @@ async function setupRemote(
     inputs,
     errors,
     speak,
+    async expire() {
+      emit({
+        type: "error",
+        error:
+          "Voice session time limit reached. Please reconnect the microphone to keep talking.",
+      });
+      await emitted;
+    },
     async reply(text: string, prefix = "") {
       if (prefix)
         await page.evaluate(
@@ -320,6 +333,61 @@ async function setupRemote(
     questionRequests: () => questionRequests,
   };
 }
+
+test("expiry during a spoken answer clears Answering and leaves podcast resume usable", async ({
+  page,
+}) => {
+  const s = await setupRemote(page, true, (q) => ({
+    action: "answer",
+    revision: q.revision,
+    answer: "A draft answer",
+    sources: [],
+    tools: [],
+  }));
+  await page.locator(".debug-toggle").click();
+  await s.speak(["What does that mean?"]);
+  await expect.poll(() => s.acknowledgements.length).toBe(1);
+  await page.evaluate(() => {
+    const { ctx, gain } = (window as any).remoteOutput;
+    gain.gain.setValueAtTime(0.08, ctx.currentTime);
+  });
+  await expect(page.locator(".status")).toContainText("Answering");
+  await s.expire();
+  await expect(page.locator(".status")).not.toContainText("Answering");
+  await expect(page.getByRole("alert")).toContainText(
+    "Voice session time limit reached",
+  );
+  await expect
+    .poll(
+      async () =>
+        JSON.parse(
+          (await page
+            .getByRole("region", { name: "Voice diagnostics" })
+            .locator("pre")
+            .textContent())!,
+        ).session?.spokenReply?.state,
+    )
+    .toBe("interrupted");
+  await expect
+    .poll(
+      async () =>
+        JSON.parse(
+          (await page
+            .getByRole("region", { name: "Voice diagnostics" })
+            .locator("pre")
+            .textContent())!,
+        ).session?.status,
+    )
+    .toBe("off");
+  await page.getByRole("button", { name: /^Keep listening/ }).click();
+  await expect
+    .poll(() => s.audio.evaluate((a: HTMLAudioElement) => a.paused))
+    .toBe(false);
+  await expect
+    .poll(() => page.evaluate(() => (window as any).remoteChannel?.readyState))
+    .toBe("open");
+  expect(s.errors).toEqual([]);
+});
 
 test("reloading sends a server close even when the voice never acknowledges closing", async ({
   page,

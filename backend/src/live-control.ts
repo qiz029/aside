@@ -27,6 +27,7 @@ export class LiveControl {
     questions: QuestionAnswerer,
     context: (text: string) => void,
     telemetry?: (totals: QuestionTelemetry) => void,
+    intentLimit = 30,
   ) {
     this.intent = new LiveIntent(
       control.player,
@@ -43,6 +44,7 @@ export class LiveControl {
         },
       },
       control.debug,
+      intentLimit,
     );
   }
   private eventTypes = new Set<string>();

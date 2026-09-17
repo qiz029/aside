@@ -48,6 +48,16 @@ export class TestMedia extends DurableObject {
 
 import { LiveSupervisor } from "../../cloudflare/src/live-supervisor.ts";
 export class TestLive extends LiveSupervisor {
+  async remainingMs() {
+    const state = await this.ctx.storage.get("state");
+    return state.deadline - Date.now();
+  }
+  async elapse(ms, tick = false) {
+    const state = await this.ctx.storage.get("state");
+    state.deadline -= ms;
+    await this.ctx.storage.put("state", state);
+    if (tick) await this.alarm();
+  }
   async expire() {
     return this.expireAt(0);
   }

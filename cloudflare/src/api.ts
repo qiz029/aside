@@ -28,6 +28,7 @@ import {
   readMicrophoneConfig,
   readVoiceLifecycleConfig,
 } from "../../backend/src/config.js";
+import { liveSessionPolicy } from "../../backend/src/live-session-policy.js";
 import type { Env } from "./env.js";
 import { session } from "./session.js";
 import { CloudStore } from "./store.js";
@@ -245,7 +246,12 @@ async function route(
       const result = await env.DB.prepare(
         "UPDATE voice_usage SET seconds=MAX(seconds,?) WHERE session_id=? AND owner_id=? AND episode_id=? RETURNING session_id",
       )
-        .bind(Math.min(data.seconds, 120), data.sessionId, owner, id)
+        .bind(
+          Math.min(data.seconds, liveSessionPolicy(env, !!accountId).seconds),
+          data.sessionId,
+          owner,
+          id,
+        )
         .first();
       if (!result) throw new HttpError(404, "语音会话不存在");
       if (data.finalized || data.closed)
@@ -358,6 +364,8 @@ async function route(
   if (action === "live") {
     const data = liveSchema.parse(await readJson(request));
     boundedHistory(data.history);
+    // Validate operator configuration before reserving a live lease.
+    liveSessionPolicy(env, !!accountId);
     const token = await acquire(env, owner, "live");
     try {
       await budget(env, owner, "live", request);

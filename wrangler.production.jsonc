@@ -16,6 +16,7 @@
     "ALLOW_UPLOADS": "true",
     "AI_ENABLED": "true",
     "TRIAL_DAILY_LIMITS": "false",
+    "ASIDE_LIVE_ACCOUNT_SESSION_SECONDS": "1800",
     "MOBILE_AUDIO_ENABLED": "true",
     "TURNSTILE_SITE_KEY": "0x4AAAAAAEyIQuX7vD966Cp_",
     "AUTH_EMAIL_FROM": "login@auth.asidefm.com",

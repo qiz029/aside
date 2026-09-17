@@ -24,6 +24,8 @@ export interface Env {
   GOOGLE_CLIENT_SECRET?: string;
   OPENAI_API_KEY?: string;
   ASIDE_BACKEND_MODEL?: string;
+  /** Application lifetime for authenticated Live sessions, in seconds (120–3600). */
+  ASIDE_LIVE_ACCOUNT_SESSION_SECONDS?: string;
   /** Shared secret for /api/admin/*. Unset leaves those routes unmounted. */
   ADMIN_KEY?: string;
   APP_ORIGIN: string;

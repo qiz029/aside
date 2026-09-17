@@ -936,8 +936,14 @@ export class ListeningSession {
   private controlFailed(message: string) {
     this.controlStatus = "failed";
     this.log(`Server voice control: ${message}`);
-    this.cancelWork();
+    // Losing voice must not cancel an explicit podcast resume already queued.
+    if (!this.playback.resumeRequested) this.cancelWork();
+    this.silenceVoice();
     this.closeVoice();
+    if (this.playback.interruption && !this.playback.resumeRequested) {
+      this.dispatch({ type: "disconnect" });
+      this.conversation.hold();
+    }
     this.controlStatus = "failed";
     this.setError(withKeepListeningHint(message));
   }

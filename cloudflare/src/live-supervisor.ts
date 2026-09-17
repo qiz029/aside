@@ -14,6 +14,10 @@ import { LiveControl } from "../../backend/src/live-control.js";
 import { QuestionService } from "../../backend/src/question-service.js";
 import { recordQuestionUsage } from "./usage.js";
 import { fetchWebSocketUpgrade } from "../../backend/src/websocket-upgrade.js";
+import {
+  liveSessionExpired,
+  liveSessionPolicy,
+} from "../../backend/src/live-session-policy.js";
 interface State {
   owner: string;
   token: string;
@@ -84,6 +88,7 @@ export class LiveSupervisor extends DurableObject<Env> {
     control?: LiveRequest["control"],
     accountId: string | null = null,
   ) {
+    const policy = liveSessionPolicy(this.env, !!accountId);
     const previous = await this.ctx.storage.get<State>("state");
     if (previous?.confirmed) await this.confirm(previous);
     if (await this.ctx.storage.get("state"))
@@ -102,6 +107,8 @@ export class LiveSupervisor extends DurableObject<Env> {
         this.env.ASIDE_BACKEND_MODEL,
       ).createLive(sdp, analysis, atMs, history);
       state.session = result.session.id;
+      // Connection creation must not consume the listener's session allowance.
+      state.deadline = Date.now() + policy.seconds * 1000;
       if (control) {
         const questions = new QuestionService(
           new InteractiveProvider(
@@ -145,6 +152,7 @@ export class LiveSupervisor extends DurableObject<Env> {
                 totals,
               }),
             ),
+          policy.intentCalls,
         );
       }
       await this.ctx.storage.put("state", state);
@@ -178,15 +186,30 @@ export class LiveSupervisor extends DurableObject<Env> {
     const state = await this.ctx.storage.get<State>("state");
     if (
       !state ||
-      state.closing ||
-      Date.now() >= state.deadline ||
       state.session !== url.searchParams.get("sessionId") ||
-      state.episode !== url.searchParams.get("episode") ||
-      !this.control
+      state.episode !== url.searchParams.get("episode")
     )
       return Response.json(
-        { error: "Voice control session not found" },
+        {
+          error:
+            "Voice control session is no longer available. Please reconnect the microphone.",
+        },
         { status: 404 },
+      );
+    if (Date.now() >= state.deadline) {
+      this.control?.close(liveSessionExpired);
+      return Response.json(
+        { error: liveSessionExpired, code: "voice_session_expired" },
+        { status: 410 },
+      );
+    }
+    if (state.closing || !this.control)
+      return Response.json(
+        {
+          error:
+            "Voice control session ended. Please reconnect the microphone.",
+        },
+        { status: 410 },
       );
     if (request.method === "GET") return this.control.subscribe();
     if (request.method === "PUT") {
@@ -380,6 +403,7 @@ export class LiveSupervisor extends DurableObject<Env> {
         await this.ctx.storage.deleteAlarm();
         return;
       }
+      if (Date.now() >= state.deadline) this.control?.close(liveSessionExpired);
       await this.attach(state);
       if (
         state.closing ||

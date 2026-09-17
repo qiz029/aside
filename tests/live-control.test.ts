@@ -32,6 +32,49 @@ const flush = async () => {
   for (let i = 0; i < 20; i++) await Promise.resolve();
 };
 
+test("a longer session admits more than 30 intent calls while retaining its configured cap", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let calls = 0;
+  const c = new LiveControl(
+    "long-session",
+    { player, debug: false },
+    analysis,
+    [],
+    {
+      answer: async (_a, q) => {
+        calls++;
+        return {
+          action: "ignore",
+          revision: q.revision,
+          answer: "",
+          sources: [],
+          tools: [],
+        };
+      },
+    },
+    () => {},
+    undefined,
+    32,
+  );
+  t.after(() => c.close());
+  const reading = assert.rejects(
+    readLiveControl(c.subscribe(), () => {}),
+    /intent limit/,
+  );
+  for (let i = 0; i < 33; i++) {
+    c.receive({
+      type: "session.input_transcript.delta",
+      delta: `Background speech ${i}`,
+      start_ms: i * 2000,
+      end_ms: i * 2000 + 100,
+    });
+    t.mock.timers.tick(160);
+    await flush();
+  }
+  await reading;
+  assert.equal(calls, 32);
+});
+
 test("one authenticated session stream carries multiple decisions, heartbeat and graceful close", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
   const calls: string[] = [],

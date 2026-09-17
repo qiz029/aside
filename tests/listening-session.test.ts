@@ -145,6 +145,7 @@ function setup(
   let voiceCount = 0;
   let serverState!: LivePlayerState;
   let receive!: (event: LiveControlEvent) => void;
+  let failControl!: (error: Error) => void;
   let createLive: (() => Promise<unknown>) | undefined;
   const updates: LiveControlUpdate[] = [];
   const usages: Parameters<PlayerBackend["usage"]>[1][] = [];
@@ -176,9 +177,10 @@ function setup(
           ) => {
             receive = callback;
             callback({ type: "ready", sessionId: "test-session" });
-            await new Promise<void>((resolve) =>
-              signal.addEventListener("abort", () => resolve(), { once: true }),
-            );
+            await new Promise<void>((resolve, reject) => {
+              failControl = reject;
+              signal.addEventListener("abort", () => resolve(), { once: true });
+            });
           },
           updateControl: async (_id: string, data: LiveControlUpdate) => {
             serverState = data.player;
@@ -286,6 +288,11 @@ function setup(
     requests,
     commands,
     updates,
+    failControl(
+      message = "Voice session time limit reached. Please reconnect the microphone.",
+    ) {
+      failControl(Error(message));
+    },
     push(event: LiveControlEvent) {
       receive(event);
     },
@@ -1943,4 +1950,59 @@ test("given a confirmed close, later teardown does not request another server cl
     { sessionId: "test-session", seconds: 12, finalized: true, closed: true },
   ]);
   s.session.dispose();
+});
+
+test("given a control failure during a spoken answer, the microphone and answering state both end", async (t) => {
+  const s = setup("auto", undefined, undefined, true, true);
+  t.after(() => s.session.dispose());
+  s.session.start();
+  await flush();
+  s.push(s.decision("answer"));
+  await flush();
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", "The heard prefix");
+  assert.equal(s.session.getSnapshot().state.assistantSpeaking, true);
+  s.failControl();
+  await flush();
+  const snapshot = s.session.getSnapshot();
+  assert.equal(snapshot.state.assistantSpeaking, false);
+  assert.equal(snapshot.state.userSpeaking, false);
+  assert.equal(snapshot.state.mode, "reconnecting");
+  const diagnostics = await s.session.voiceDiagnostics();
+  assert.equal(diagnostics.status, "off");
+  assert.equal(diagnostics.spokenReply?.state, "interrupted");
+  assert.match(snapshot.error, /time limit reached/);
+  assert.equal(s.usages.at(-1)?.closed, true);
+  // A late callback from the old connection cannot resurrect the answer.
+  s.callbacks.onOutput(true);
+  assert.equal(s.session.getSnapshot().state.assistantSpeaking, false);
+});
+
+test("given a control failure while listening, the podcast continues at full volume", async (t) => {
+  const s = setup("auto", undefined, undefined, false, true);
+  t.after(() => s.session.dispose());
+  s.session.start();
+  await flush();
+  s.push({ type: "classifying", version: s.serverState.version });
+  s.failControl();
+  await flush();
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.audio.level, 1);
+  assert.equal(s.session.getSnapshot().state.mode, "playing");
+});
+
+test("given a control failure after an explicit resume, the pending resume still completes", async (t) => {
+  const s = setup("auto", undefined, undefined, false, true);
+  t.after(() => s.session.dispose());
+  s.session.start();
+  await flush();
+  s.push(s.decision("answer"));
+  await flush();
+  s.push(s.decision("resume"));
+  s.failControl();
+  await flush();
+  s.clock.advance(0);
+  await flush();
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.session.getSnapshot().state.mode, "playing");
 });

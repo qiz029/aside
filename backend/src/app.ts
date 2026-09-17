@@ -17,10 +17,15 @@ import { describeCost, type QuestionTelemetry } from "./question-service.js";
 import { withMedia } from "./local-media.js";
 import { readMicrophoneConfig, readVoiceLifecycleConfig } from "./config.js";
 import { LiveControl } from "./live-control.js";
+import {
+  liveSessionExpired,
+  liveSessionPolicy,
+} from "./live-session-policy.js";
 import type { LiveSideband } from "./live-sideband.js";
 export function createApp(store: Store, services?: BackendServices) {
   const microphone = readMicrophoneConfig();
   const voiceLifecycle = readVoiceLifecycleConfig();
+  const sessionPolicy = liveSessionPolicy(process.env, true);
   const app = Fastify({ logger: false, bodyLimit: 256000 });
   const jobs = new Jobs(store, services?.analysis);
   const controls = new Map<
@@ -371,6 +376,7 @@ export function createApp(store: Store, services?: BackendServices) {
               }),
             ),
           (totals) => console.log(`live intent ${id} ${describeCost(totals)}`),
+          sessionPolicy.intentCalls,
         );
         const entry: {
           episode: string;
@@ -382,8 +388,8 @@ export function createApp(store: Store, services?: BackendServices) {
           control,
           timer: setTimeout(() => {
             entry.socket?.send(JSON.stringify({ type: "session.close" }));
-            closeControl(id);
-          }, 120000),
+            closeControl(id, liveSessionExpired);
+          }, sessionPolicy.seconds * 1000),
         };
         controls.set(id, entry);
         try {

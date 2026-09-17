@@ -85,6 +85,7 @@ before(async () => {
         SESSION_SECRET: "local-test-secret-at-least-32-characters",
         TRIAL_TEST_IP_HASHES: testerIpHash,
         OPENAI_API_KEY: "test-placeholder",
+        ASIDE_LIVE_ACCOUNT_SESSION_SECONDS: "1800",
         ALLOW_UPLOADS: "true",
         AUTH_EMAIL_FROM: "login@auth.asidefm.com",
         GOOGLE_CLIENT_ID: "google-test-id",
@@ -1786,6 +1787,158 @@ test("voice deadline sends server-side session.close without browser cooperation
     1,
   );
 });
+
+test("an authenticated session remains controllable beyond two minutes and records longer bounded usage", async () => {
+  const a = await signedInAccount();
+  await seed("session-policy-account", a.id);
+  const { createPlayerConfig } = await import("../../engine/src/player.ts");
+  const player = {
+    version: 0,
+    sequence: 0,
+    revision: 1,
+    positionMs: 1000,
+    wasPlaying: true,
+    audibleSource: "podcast",
+    config: createPlayerConfig(),
+  };
+  const created = await a.request(
+    "/api/episodes/session-policy-account/live",
+    "POST",
+    { sdp: "offer", atMs: 1000, control: { player, debug: false } },
+    { "cf-connecting-ip": testerIp },
+  );
+  assert.equal(created.status, 200, await created.clone().text());
+  const sessionId = (await created.json()).session.id;
+  const bindings = await mf.getBindings(),
+    supervisor = bindings.LIVE.get(bindings.LIVE.idFromName(a.id));
+  try {
+    const remaining = await supervisor.remainingMs();
+    assert.ok(remaining > 1790000 && remaining <= 1800000);
+    await supervisor.elapse(121000, true);
+    const updated = await a.request(
+      "/api/episodes/session-policy-account/live-control",
+      "PUT",
+      { sessionId, player },
+    );
+    assert.equal(updated.status, 200, await updated.text());
+    const usage = async (seconds) => {
+      const response = await a.request(
+        "/api/episodes/session-policy-account/usage",
+        "POST",
+        { sessionId, seconds, finalized: false },
+      );
+      assert.equal(response.status, 200, await response.text());
+      return (
+        await db
+          .prepare("SELECT seconds FROM voice_usage WHERE session_id=?")
+          .bind(sessionId)
+          .first()
+      ).seconds;
+    };
+    assert.equal(await usage(300), 300);
+    assert.equal(
+      await usage(10),
+      300,
+      "cumulative reports cannot reduce usage",
+    );
+    assert.equal(await usage(80000), 1800, "client reports remain bounded");
+  } finally {
+    await supervisor.expire();
+    await eventually(
+      async () =>
+        !(await db
+          .prepare(
+            "SELECT token FROM trial_leases WHERE owner=? AND kind='live'",
+          )
+          .bind(a.id)
+          .first()),
+    );
+  }
+});
+
+for (const tick of [false, true])
+  test(`guest expiry via ${tick ? "alarm" : "update"} gives a clear HTTP and NDJSON reason before provider close confirmation`, async () => {
+    const a = await visitor();
+    const path = `/api/episodes/session-policy-guest-${tick}`;
+    await seed(`session-policy-guest-${tick}`, a.id);
+    await a.request(
+      "/api/trial",
+      "POST",
+      { token: JSON.stringify({ cdata: a.id, nonce: crypto.randomUUID() }) },
+      { "cf-connecting-ip": testerIp },
+    );
+    const { createPlayerConfig } = await import("../../engine/src/player.ts");
+    const player = {
+      version: 0,
+      sequence: 0,
+      revision: 1,
+      positionMs: 1000,
+      wasPlaying: true,
+      audibleSource: "podcast",
+      config: createPlayerConfig(),
+    };
+    const created = await a.request(
+      `${path}/live`,
+      "POST",
+      { sdp: "offer", atMs: 1000, control: { player, debug: false } },
+      { "cf-connecting-ip": testerIp },
+    );
+    assert.equal(created.status, 200, await created.clone().text());
+    const sessionId = (await created.json()).session.id;
+    const bindings = await mf.getBindings(),
+      supervisor = bindings.LIVE.get(bindings.LIVE.idFromName(a.id));
+    try {
+      const remaining = await supervisor.remainingMs();
+      assert.ok(remaining > 110000 && remaining <= 120000);
+      const stream = await a.request(
+        `${path}/live-control?sessionId=${sessionId}`,
+      );
+      assert.equal(stream.status, 200);
+      const frames = stream.text();
+      acknowledgeClose = false;
+      await supervisor.elapse(121000, tick);
+      assert.equal(
+        (await a.request(`${path}/live-control?sessionId=wrong`)).status,
+        404,
+      );
+      const expired = await a.request(`${path}/live-control`, "PUT", {
+        sessionId,
+        player,
+      });
+      assert.equal(expired.status, 410);
+      assert.equal((await expired.json()).code, "voice_session_expired");
+      const events = (await frames)
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      assert.match(
+        events.find((event) => event.type === "error").error,
+        /time limit reached.*reconnect/i,
+      );
+      assert.equal(events.at(-1).type, "closed");
+      assert.ok(
+        await db
+          .prepare(
+            "SELECT token FROM trial_leases WHERE owner=? AND kind='live'",
+          )
+          .bind(a.id)
+          .first(),
+        "expiry notification alone must not release the supplier lease",
+      );
+    } finally {
+      acknowledgeClose = true;
+      await supervisor.expire();
+      await eventually(
+        async () =>
+          !(await db
+            .prepare(
+              "SELECT token FROM trial_leases WHERE owner=? AND kind='live'",
+            )
+            .bind(a.id)
+            .first()),
+      );
+    }
+  });
 test("an abandoned voice start is refused as busy until the browser closes it, then the replacement succeeds", async () => {
   const a = await visitor();
   const start = () =>
