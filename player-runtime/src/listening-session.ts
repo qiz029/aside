@@ -1275,13 +1275,13 @@ export class ListeningSession {
           if (!valid()) return;
           if (this.playback.resumeRequested) {
             voice.cancelCapture();
-            voice.mute(true);
+            this.silenceVoice();
             this.log(message);
             return;
           }
           this.cancelWork();
           voice.cancelCapture();
-          voice.mute(true);
+          this.silenceVoice();
           if (this.manualHeld && !this.playback.interruption) {
             this.active = false;
             this.dispatch({ type: "pause" });

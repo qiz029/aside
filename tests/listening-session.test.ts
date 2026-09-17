@@ -1885,3 +1885,18 @@ test("given a pending voice request, arm audio before classification even with d
   );
   s.session.dispose();
 });
+
+test("given a failed buffered reply, the next request can prepare a fresh audio prefix", async () => {
+  const s = setup("auto", undefined, undefined, false, true);
+  s.session.start();
+  await flush();
+  s.push(s.decision("answer"));
+  await flush();
+  s.callbacks.onError("Voice reply buffer exceeded 30 seconds. Please ask again.");
+  await flush();
+  assert.equal(s.serverState.assistant?.state, "interrupted");
+  s.commands.length = 0;
+  s.callbacks.onInputTranscript?.("Could you say that again?");
+  assert.ok(s.commands.includes("prepareOutput"));
+  s.session.dispose();
+});
