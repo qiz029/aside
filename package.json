@@ -28,7 +28,7 @@
     "db:cloudflare:production": "wrangler d1 migrations apply DB --remote --config wrangler.production.jsonc",
     "export:demo": "node --import tsx scripts/export-public-demo.ts",
     "test:remote-coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-include='backend/src/question-service.ts' --test-coverage-include='backend/src/question-tools.ts' --test-coverage-include='backend/src/dialogue-policy.ts' --test-coverage-include='backend/src/interactive-provider.ts' --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-functions=80 tests/question-service.test.ts tests/provider.test.ts",
-    "test:voice-control-coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-include='backend/src/live-*.ts' --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-functions=80 tests/live-intent.test.ts tests/live-control.test.ts"
+    "test:voice-control-coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-include='backend/src/live-*.ts' --test-coverage-include='backend/src/websocket-upgrade.ts' --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-functions=80 tests/live-intent.test.ts tests/live-control.test.ts tests/websocket-upgrade.test.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260911.1",

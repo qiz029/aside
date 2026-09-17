@@ -263,6 +263,7 @@ export function PlayerView({
   const debugAllowed =
     import.meta.env.DEV ||
     new URLSearchParams(window.location.search).has("debug");
+  const debugOpen = debugAllowed && debug;
   useLayoutEffect(() => {
     const box = messages.current;
     if (!box) return;
@@ -277,7 +278,9 @@ export function PlayerView({
 
   if (!episode) return null;
   return (
-    <main className={compact ? "player-main listening-layout" : "player-main"}>
+    <main
+      className={`player-main${compact ? " listening-layout" : ""}${debugOpen ? " diagnostics-open" : ""}`}
+    >
       <header className="player-header">
         <div className="player-navigation">
           {navigation ?? <span>{t("听到这里，你也有话想说。")}</span>}
@@ -408,7 +411,7 @@ export function PlayerView({
         onTimeUpdate={audioTick}
         onEnded={stopListening}
       />
-      <div className="lower">
+      <div className="lower" hidden={debugOpen}>
         <section
           className="transcript"
           data-active={mobileTab === "transcript" || undefined}
@@ -920,27 +923,32 @@ export function PlayerView({
       <button
         className="debug-toggle"
         hidden={!debugAllowed}
+        aria-expanded={debugOpen}
+        aria-controls={`${panelId}-diagnostics`}
         onClick={() => setDebug(!debug)}
       >
         {t("开发观察")}
         {debug ? "−" : "+"}
       </button>
-      {debugAllowed && debug && (
-        <>
-        <VoiceDiagnostics read={player.voiceDiagnostics} />
-        <pre className="debug">
-          {JSON.stringify(
-            {
-              state,
-              voiceReason: episode.analysis?.voiceReason,
-              responseLatencies: latencies,
-              events,
-            },
-            null,
-            2,
-          )}
-        </pre>
-        </>
+      {debugOpen && (
+        <div className="debug-workspace" id={`${panelId}-diagnostics`}>
+          <VoiceDiagnostics read={player.voiceDiagnostics} />
+          <details className="debug-details">
+            <summary>Player events</summary>
+            <pre className="debug">
+              {JSON.stringify(
+                {
+                  state,
+                  voiceReason: episode.analysis?.voiceReason,
+                  responseLatencies: latencies,
+                  events,
+                },
+                null,
+                2,
+              )}
+            </pre>
+          </details>
+        </div>
       )}
       <footer className="player-footer">
         ASIDE <span>{t("随时聊两句，再接着听。")}</span>

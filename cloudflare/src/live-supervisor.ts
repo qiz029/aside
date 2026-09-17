@@ -13,6 +13,7 @@ import {
 import { LiveControl } from "../../backend/src/live-control.js";
 import { QuestionService } from "../../backend/src/question-service.js";
 import { recordQuestionUsage } from "./usage.js";
+import { fetchWebSocketUpgrade } from "../../backend/src/websocket-upgrade.js";
 interface State {
   owner: string;
   token: string;
@@ -260,14 +261,11 @@ export class LiveSupervisor extends DurableObject<Env> {
     if (this.socket?.readyState === 1) return;
     if (!state.session)
       throw Error("Unknown session; operator reconciliation required");
-    const response = await fetch(
+    const response = await fetchWebSocketUpgrade(
       `https://api.openai.com/v1/live/sessions/${encodeURIComponent(state.session)}/attach`,
       {
-        headers: {
-          Upgrade: "websocket",
-          Authorization: `Bearer ${this.env.OPENAI_API_KEY}`,
-        },
-        signal: AbortSignal.timeout(5000),
+        Upgrade: "websocket",
+        Authorization: `Bearer ${this.env.OPENAI_API_KEY}`,
       },
     );
     const socket = response.webSocket;
@@ -279,22 +277,37 @@ export class LiveSupervisor extends DurableObject<Env> {
     }
     socket.accept();
     this.socket = socket;
+    const connectedAt = Date.now();
+    let supplierClosed = false;
     socket.addEventListener("message", (event) => {
       if (typeof event.data !== "string") return;
       try {
         const message = JSON.parse(event.data);
         this.control?.receive(message);
-        if (message.type === "session.closed")
+        if (message.type === "session.closed") {
+          supplierClosed = true;
+          this.control?.close();
           this.ctx.waitUntil(this.serial(() => this.confirm(state)));
+        }
       } catch {
         /* Ignore non-JSON frames. */
       }
     });
-    socket.addEventListener("close", () => {
+    socket.addEventListener("close", (event) => {
       if (this.socket === socket) {
         this.socket = undefined;
+        if (supplierClosed || state.closing) {
+          this.control?.close();
+          return;
+        }
+        const ageMs = Date.now() - connectedAt;
+        console.warn("Live sideband transport closed", {
+          code: event.code,
+          wasClean: event.wasClean,
+          ageMs,
+        });
         this.control?.close(
-          "Live sideband disconnected. Please reconnect the microphone.",
+          `Live sideband disconnected (code ${event.code}, after ${Math.round(ageMs / 1000)}s). Please reconnect the microphone.`,
         );
       }
     });

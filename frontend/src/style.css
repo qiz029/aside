@@ -744,6 +744,114 @@ details small {
   overflow: auto;
   max-height: 300px;
 }
+.shell .player-main .lower[hidden] {
+  display: none;
+}
+.debug-workspace {
+  min-width: 0;
+  min-height: 0;
+  max-height: 60dvh;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  margin-top: 12px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--fill);
+}
+.debug-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.debug-heading h2 {
+  margin: 0 auto 0 0;
+  font-size: 16px;
+}
+.debug-status {
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 4px 9px;
+  font-size: 11px;
+}
+.debug-note {
+  font-size: 12px;
+  color: var(--ink-2);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.debug-error {
+  border-left: 3px solid var(--ink-2);
+  padding: 8px 12px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.debug-stages {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
+  gap: 12px;
+  margin: 20px 0;
+}
+.debug-stage {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.debug-stage h3 {
+  font-size: 12px;
+  margin: 0;
+}
+.debug-stage p {
+  font-size: 11px;
+  color: var(--ink-3);
+  margin: 6px 0 12px;
+}
+.debug-stage blockquote {
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.debug-details {
+  border-top: 1px solid var(--line);
+  padding: 12px 0;
+  font-size: 12px;
+}
+.debug-details summary {
+  cursor: pointer;
+}
+.debug-workspace .debug {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 1000px) {
+  .shell .player-main.diagnostics-open {
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+  }
+  .diagnostics-open > :not(.debug-workspace) {
+    flex-shrink: 0;
+  }
+  .diagnostics-open .debug-workspace {
+    flex: 1;
+    max-height: none;
+    padding: 14px;
+  }
+  .diagnostics-open .debug-toggle {
+    align-self: flex-start;
+    margin-top: 4px;
+  }
+  .diagnostics-open .player-footer {
+    display: none;
+  }
+}
 .player-footer {
   margin: 35px 0 20px;
   padding-top: 20px;
@@ -1448,6 +1556,10 @@ progress {
     flex-shrink: 0;
     max-height: 20dvh;
     margin: 6px 0 0;
+  }
+  .shell .debug-workspace {
+    flex: 1;
+    max-height: none;
   }
   .shell .alert {
     flex-shrink: 0;

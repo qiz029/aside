@@ -264,6 +264,73 @@ for (const url of ["/episodes/remote-a?debug", "/?episode=remote-a&debug"])
     ).toBe(true);
   });
 
+for (const viewport of [
+  { width: 1414, height: 1049 },
+  { width: 1280, height: 650 },
+  { width: 768, height: 900 },
+  { width: 375, height: 667 },
+])
+  test(`expanded diagnostics keeps the player accessible at ${viewport.width}×${viewport.height}`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize(viewport);
+    await mockPlayer(page);
+    await page.goto("/episodes/remote-a?debug");
+    const toggle = page.locator(".debug-toggle");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator(".lower")).toBeHidden();
+    await expect(
+      page.getByRole("region", { name: "Voice diagnostics" }),
+    ).toContainText("Microphone: off");
+    const workspace = page.locator(".debug-workspace");
+    await page.screenshot({
+      path: testInfo.outputPath("diagnostics-overview.png"),
+    });
+    // Long input and expanded raw traces must scroll inside the workspace,
+    // without moving the transport off-screen or underneath the trace.
+    await workspace
+      .locator("summary")
+      .filter({ hasText: "Connection details" })
+      .click();
+    await workspace
+      .locator("summary")
+      .filter({ hasText: "Player events" })
+      .click();
+    await workspace
+      .locator("blockquote")
+      .first()
+      .evaluate((el) => {
+        el.textContent =
+          "Long transcript without spaces: " + "testing".repeat(600);
+      });
+    const bounds = await workspace.boundingBox();
+    const dock = await page.locator(".player-dock").boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(dock).not.toBeNull();
+    expect(bounds!.height).toBeGreaterThan(100);
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(dock!.y);
+    expect(dock!.y + dock!.height).toBeLessThanOrEqual(viewport.height);
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth),
+    ).toBeLessThanOrEqual(viewport.width);
+    await expect(
+      page.getByRole("button", { name: "Play", exact: true }),
+    ).toBeInViewport();
+    await workspace.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    await expect(
+      page.getByRole("button", { name: "Play", exact: true }),
+    ).toBeInViewport();
+    await page.screenshot({ path: testInfo.outputPath("diagnostics.png") });
+    await toggle.click();
+    await expect(page.locator(".lower")).toBeVisible();
+    expect(
+      await page.locator("audio").evaluate((a: HTMLAudioElement) => a.paused),
+    ).toBe(true);
+  });
+
 test("diagnostics shows real local input frames, sending state and WebRTC byte counters", async ({
   page,
 }) => {
@@ -327,6 +394,8 @@ test("debug separates browser captions, sideband reception and backend classific
   await expect.poll(() => s.inputs.length).toBe(1);
   expect(s.questionRequests()).toBe(0);
   expect(await s.audio.evaluate((a: HTMLAudioElement) => a.paused)).toBe(false);
+  await page.locator(".debug-toggle").click();
+  await expect(page.getByRole("log")).toBeVisible();
   await expect(page.getByRole("log")).not.toContainText("dinner");
   expect(s.errors).toEqual([]);
 });

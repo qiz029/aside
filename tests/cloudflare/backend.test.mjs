@@ -2156,7 +2156,9 @@ test("Live sideband pushes multiple decisions on one owner-bound NDJSON stream w
       for (;;) {
         while (buffered.includes("\n")) {
           const at = buffered.indexOf("\n"), line = buffered.slice(0, at); buffered = buffered.slice(at + 1);
-          const event = JSON.parse(line); if (event.type === type) return event;
+          const event = JSON.parse(line);
+          assert.notEqual(event.type, "error", event.message);
+          if (event.type === type) return event;
         }
         const { value, done } = await reader.read(); assert.equal(done, false);
         buffered += new TextDecoder().decode(value);
@@ -2164,6 +2166,8 @@ test("Live sideband pushes multiple decisions on one owner-bound NDJSON stream w
     };
     assert.equal((await next("ready")).sessionId, sessionId);
     assert.equal((await a.request(path)).status, 409, "second subscriber cannot duplicate commands");
+    // A completed upgrade must outlive the five-second handshake timeout.
+    await new Promise(resolve => setTimeout(resolve, 5500));
     sidebands.get(sessionId).send(JSON.stringify({ type: "session.input_transcript.delta", delta: "Could you lower that a bit?", start_ms: 0, end_ms: 200 }));
     const first = await next("decision");
     assert.equal(first.result.action, "player_control");
@@ -2181,6 +2185,9 @@ test("Live sideband pushes multiple decisions on one owner-bound NDJSON stream w
     const rows = await db.prepare("SELECT bucket FROM budgets WHERE bucket=?").bind(`trial:${new Date().toISOString().slice(0, 10)}:question:${a.id}`).all();
     assert.equal(rows.results.length, 0, "allowlisted control sessions do not consume public quota per fragment");
     assert.equal(networkCalls.some(p => p.includes("live-control")), false);
+    sidebands.get(sessionId).send(JSON.stringify({ type: "session.closed" }));
+    sidebands.get(sessionId).close(1000, "session ended");
+    assert.equal((await next("closed")).type, "closed", "normal supplier closure is not a transport error");
   } finally {
     liveReply = undefined;
     await reader?.cancel();
