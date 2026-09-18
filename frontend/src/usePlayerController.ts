@@ -63,6 +63,7 @@ export function usePlayerController() {
   const [episode, setEpisode] = useState<Episode>();
   const [uploadsEnabled, setUploadsEnabled] = useState(false);
   const [debug, setDebug] = useState(false);
+  const [startingNewConversation, setStartingNewConversation] = useState(false);
   const selected = useRef<Episode | undefined>(undefined);
   const loadVersion = useRef(0);
   const autoplayVersion = useRef<number | null>(null);
@@ -206,6 +207,20 @@ export function usePlayerController() {
     submitQuestion: () =>
       session.submitQuestion(session.getSnapshot().question),
     setQuestion: (text: string) => session.setQuestion(text),
+    startingNewConversation,
+    async newConversation() {
+      if (startingNewConversation) return;
+      const version = loadVersion.current;
+      setStartingNewConversation(true);
+      try {
+        await session.newConversation();
+        if (version === loadVersion.current) await save();
+      } catch (error) {
+        if (version === loadVersion.current) session.setError(String(error));
+      } finally {
+        setStartingNewConversation(false);
+      }
+    },
     setError: (error: string) => session.setError(error),
     startListening: () => session.executePlayerCommand({ type: "play" }),
     stopListening: () => session.executePlayerCommand({ type: "stop" }),

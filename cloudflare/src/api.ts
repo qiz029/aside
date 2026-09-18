@@ -5,7 +5,6 @@ import {
   acquire,
   release,
   budget,
-  boundedHistory,
   validateWav,
 } from "./trial.js";
 import { z } from "zod";
@@ -363,7 +362,6 @@ async function route(
   if (!episode.analysis) throw new HttpError(409, "节目尚未完成分析");
   if (action === "live") {
     const data = liveSchema.parse(await readJson(request));
-    boundedHistory(data.history);
     // Validate operator configuration before reserving a live lease.
     liveSessionPolicy(env, !!accountId);
     const token = await acquire(env, owner, "live");
@@ -391,7 +389,6 @@ async function route(
   }
   const data = questionSchema.parse(await readJson(request));
   data.atMs = Math.min(data.atMs, episode.durationMs);
-  boundedHistory(data.history);
   const token = await acquire(env, owner, "operation");
   try {
     await budget(env, owner, "question", request);

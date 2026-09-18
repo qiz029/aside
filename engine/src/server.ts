@@ -148,6 +148,10 @@ export function buildContext(
       context.earlierExcerpts = context.earlierExcerpts.slice(1);
     else if (context.recentTranscript.length)
       context.recentTranscript = context.recentTranscript.slice(1);
+    // Four turns are a preference, not a reason to reject a continuing chat.
+    // Long old answers can be dropped while the newest question stays intact.
+    else if (context.history.length > 1)
+      context.history = context.history.slice(1);
     else break;
   }
   return context;

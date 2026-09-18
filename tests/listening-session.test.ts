@@ -148,6 +148,7 @@ function setup(
   let failControl!: (error: Error) => void;
   let createLive: (() => Promise<unknown>) | undefined;
   const updates: LiveControlUpdate[] = [];
+  const liveRequests: Parameters<PlayerBackend["live"]>[1][] = [];
   const usages: Parameters<PlayerBackend["usage"]>[1][] = [];
   const usageEpisodes: string[] = [];
   let liveGate: Promise<void> | undefined;
@@ -159,6 +160,7 @@ function setup(
     },
     async live(_id, request) {
       if (!server) throw Error("Unexpected live negotiation");
+      liveRequests.push(request);
       await liveGate;
       serverState = request.control!.player;
       return {
@@ -288,6 +290,7 @@ function setup(
     requests,
     commands,
     updates,
+    liveRequests,
     failControl(
       message = "Voice session time limit reached. Please reconnect the microphone.",
     ) {
@@ -2063,4 +2066,98 @@ test("a Live progress sentence and a long quiet gap do not finish the answer or 
   await flush();
   assert.equal(s.audio.playing, true);
   assert.equal(s.serverState.assistant?.state, "interrupted");
+});
+
+test("new conversation clears saved context atomically and cancels old work without moving the playhead", async (t) => {
+  const s = setup("off");
+  t.after(() => s.session.dispose());
+  s.session.start();
+  s.session.submitQuestion("Old question");
+  s.session.setQuestion("Old draft");
+  s.session.setError("问题或对话过长，请开始新的对话");
+  const before = s.session.checkpoint();
+  const checkpoints: ReturnType<typeof s.session.checkpoint>[] = [];
+  const unsubscribe = s.session.subscribe(() =>
+    checkpoints.push(s.session.checkpoint()),
+  );
+  await s.session.newConversation();
+  unsubscribe();
+  assert.equal(s.requests[0].signal.aborted, true);
+  assert.ok(checkpoints.length > 0);
+  assert.ok(checkpoints.every((cp) => cp.history.length === 0));
+  assert.deepEqual(s.session.checkpoint(), { ...before, history: [] });
+  assert.equal(s.session.getSnapshot().question, "");
+  assert.equal(s.session.getSnapshot().error, "");
+  assert.equal(s.session.getSnapshot().busy, false);
+  assert.equal(s.audio.playing, false);
+  assert.equal(s.audio.positionMs, 31000);
+  assert.equal(s.voiceCount, 0);
+  s.answer(0, "Late old answer");
+  await flush();
+  assert.deepEqual(s.session.getSnapshot().history, []);
+  s.session.submitQuestion("Fresh question");
+  assert.deepEqual(
+    s.requests[1].data.history.map(({ role, text }) => ({ role, text })),
+    [{ role: "user", text: "Fresh question" }],
+  );
+});
+
+test("new conversation replaces the active Live session with empty history and ignores stale callbacks", async (t) => {
+  const s = setup(
+    "auto",
+    undefined,
+    { playbackRate: 1.2, volume: 0.4 },
+    true,
+    true,
+  );
+  t.after(() => s.session.dispose());
+  s.session.start();
+  await flush();
+  s.push(s.decision("answer"));
+  await flush();
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", "Old voice context");
+  s.callbacks.onOutput(false);
+  const previous = s.callbacks;
+  const checkpoint = s.session.checkpoint();
+  await s.session.newConversation();
+  await flush();
+  assert.equal(s.voiceCount, 2);
+  assert.equal(s.liveRequests.length, 2);
+  assert.deepEqual(s.liveRequests[1].history, []);
+  assert.equal(s.liveRequests[1].control?.player.assistant, undefined);
+  assert.equal(s.usages[0]?.closed, true);
+  assert.deepEqual(s.session.checkpoint(), { ...checkpoint, history: [] });
+  assert.equal(s.audio.playing, false);
+  assert.equal(s.audio.config.playbackRate, 1.2);
+  assert.equal(s.audio.config.volume, 0.4);
+  previous.onOutput(true);
+  previous.onTranscript("assistant", "Late old voice");
+  previous.onError("Old error");
+  assert.equal(s.session.getSnapshot().state.assistantSpeaking, false);
+  assert.deepEqual(s.session.getSnapshot().history, []);
+  assert.equal(s.session.getSnapshot().error, "");
+  s.clock.advance(10000);
+  await flush();
+  assert.equal(s.audio.playing, false);
+});
+
+test("new conversation preserves playing audio and never opens a microphone that was off", async (t) => {
+  const s = setup("off");
+  t.after(() => s.session.dispose());
+  s.session.load(episode, {
+    positionMs: 31000,
+    history: [{ role: "user", text: "Old saved history" }],
+  });
+  s.session.metadataLoaded();
+  s.session.start();
+  await flush();
+  const plays = s.audio.plays;
+  await s.session.newConversation();
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.audio.plays, plays);
+  assert.equal(s.audio.positionMs, 31000);
+  assert.equal(s.session.getSnapshot().state.mode, "playing");
+  assert.deepEqual(s.session.checkpoint().history, []);
+  assert.equal(s.voiceCount, 0);
 });

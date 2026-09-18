@@ -159,14 +159,6 @@ export async function budget(
     limit(kind === "live" ? 10 : 100),
   );
 }
-export function boundedHistory(history: { text: string }[]) {
-  if (
-    history.length > 20 ||
-    history.some((t) => t.text.length > 2000) ||
-    history.reduce((n, t) => n + t.text.length, 0) > 8000
-  )
-    throw new HttpError(413, "问题或对话过长，请开始新的对话");
-}
 export function validateWav(bytes: Uint8Array) {
   const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const str = (at: number) =>

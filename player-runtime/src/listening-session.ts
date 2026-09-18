@@ -331,6 +331,68 @@ export class ListeningSession {
     this.customWait = true;
     this.conversation.setWait(delayMs);
   }
+  /** Clear chat context in both the saved checkpoint and the Live session. */
+  async newConversation() {
+    if (!this.episode) return;
+    const reconnect =
+      this.mode === "auto" && (this.active || !!this.voice?.isEnabled);
+    const playing = this.playback.mode === "playing";
+    const positionMs = this.restoringMedia
+      ? this.playback.positionMs
+      : this.audio.positionMs;
+    // Publish only the final empty history, so checkpoint subscribers cannot
+    // save an intermediate mix of the old conversation and reset state.
+    this.changingEpisode = true;
+    try {
+      this.cancelWork();
+      this.silenceVoice();
+      this.closeVoice();
+      this.controlVersion++;
+      this.input = undefined;
+      this.inputSpeaking = false;
+      this.liveInputBeforeVad = false;
+      this.spokenReply = undefined;
+      this.resetRecognitionDiagnostics();
+      this.contextAt = -1;
+      this.appliedCommands.clear();
+      this.seenDecisions.clear();
+      this.conversation.reset();
+      if (!playing) this.audio.pause();
+      this.playback = {
+        ...this.playback,
+        positionMs: clampPlayerPosition(positionMs, this.episode.durationMs),
+        revision: this.playback.revision + (playing ? 0 : 1),
+        mode: playing
+          ? "playing"
+          : this.playback.interruption
+            ? "awaiting_followup"
+            : "paused",
+        userSpeaking: false,
+        assistantSpeaking: false,
+        resumeRequested: false,
+      };
+      if (this.playback.interruption) this.conversation.hold();
+      this.error = "";
+    } finally {
+      this.changingEpisode = false;
+    }
+    this.publish();
+    if (reconnect) {
+      const connecting = this.connect();
+      const generation = this.voiceGeneration;
+      try {
+        await connecting;
+      } catch (error) {
+        if (generation !== this.voiceGeneration) return;
+        this.closeVoice();
+        this.setError(
+          withKeepListeningHint(
+            error instanceof Error ? error.message : String(error),
+          ),
+        );
+      }
+    }
+  }
   metadataLoaded() {
     this.audio.configure(this.playerConfig);
     const revision = ++this.mediaRevision;

@@ -2190,7 +2190,41 @@ test("an unconfirmed creation stops pausing everyone after the grace window", as
   );
   assert.equal((await (await a.request("/api/trial")).json()).enabled, true);
 });
-test("oversized history and malformed/long WAV are rejected before any model call", async () => {
+test("conversations beyond the old trial limits can ask and reconnect with bounded model context", async () => {
+  await seed("long-conversation", "curator", true);
+  const history = Array.from({ length: 60 }, (_, i) => ({
+    role: i % 2 ? "assistant" : "user",
+    text: `Turn ${i}: ${"Earlier conversation. ".repeat(12)}`,
+  }));
+  history.at(-1).text = "A longer previous answer. ".repeat(100);
+  history.push({ role: "user", text: "What did you mean by that?" });
+  assert.ok(history.length > 20);
+  assert.ok(history.some((turn) => turn.text.length > 2000));
+  assert.ok(history.reduce((total, turn) => total + turn.text.length, 0) > 8000);
+  const headers = { "cf-connecting-ip": testerIp };
+  for (const a of [await visitor(), await signedInAccount()]) {
+    // Keep this history regression independent of the shared trial quota tests.
+    const verified = await a.request("/api/trial", "POST", {
+      token: JSON.stringify({ cdata: a.id, nonce: crypto.randomUUID() }),
+    }, headers);
+    assert.equal(verified.status, 200);
+    const response = await a.request("/api/episodes/long-conversation/question", "POST", {
+      atMs: 0, revision: 1, history,
+    }, headers);
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.equal((await response.json()).answer, "A short answer");
+    const live = await a.request("/api/episodes/long-conversation/live", "POST", {
+      sdp: "offer", atMs: 0, history,
+    }, headers);
+    assert.equal(live.status, 200, await live.clone().text());
+    const { session } = await live.json();
+    const closed = await a.request("/api/episodes/long-conversation/usage", "POST", {
+      sessionId: session.id, seconds: 0, finalized: false, closed: true,
+    });
+    assert.equal(closed.status, 200);
+  }
+});
+test("oversized request bodies and malformed/long WAV are rejected before any model call", async () => {
   const { validateWav } = await import("../../cloudflare/src/trial.ts");
   const wav = (seconds) => {
     const data = Buffer.alloc(44 + 16000 * 2 * seconds);
@@ -2220,7 +2254,7 @@ test("oversized history and malformed/long WAV are rejected before any model cal
       await a.request("/api/episodes/public/question", "POST", {
         atMs: 0,
         revision: 1,
-        history: [{ role: "user", text: "x".repeat(2001) }],
+        history: [{ role: "user", text: "x".repeat(256001) }],
       })
     ).status,
     413,

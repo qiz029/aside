@@ -488,6 +488,10 @@ export const english: Record<string, string> = {
     "AI trials are paused for today. You can keep listening.",
   "问题或对话过长，请开始新的对话":
     "This question or conversation is too long. Please start a new conversation.",
+  新对话: "New conversation",
+  "正在开始新对话…": "Starting new conversation…",
+  "清空当前对话，保留播放进度":
+    "Clear this conversation and keep your playback position",
   "每次问题录音最多 30 秒":
     "Please keep each recorded question under 30 seconds.",
   "没有识别到完整问题，请再说一次":

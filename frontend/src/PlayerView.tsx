@@ -91,6 +91,19 @@ export function PlayerView({
   const [chatUser, setChatUser] = useState<User | null>(null);
   const [failedAvatar, setFailedAvatar] = useState<string | null>(null);
   const [enablingMic, setEnablingMic] = useState(false);
+  const newConversationButton = (
+    <button
+      className="btn btn-secondary btn-sm new-conversation"
+      disabled={player.startingNewConversation}
+      title={t("清空当前对话，保留播放进度")}
+      onClick={() => {
+        setMobileTab("chat");
+        void player.newConversation();
+      }}
+    >
+      {player.startingNewConversation ? t("正在开始新对话…") : t("新对话")}
+    </button>
+  );
   const [compactEpisode, setCompactEpisode] = useState("");
   const compact = !!episode && compactEpisode === episode.id;
   // A cover that fails to load falls back to the drawn art for that episode.
@@ -304,7 +317,10 @@ export function PlayerView({
       </header>
       {error && (
         <div role="alert" className="alert">
-          {message(error)}
+          <span className="alert-message">{message(error)}</span>
+          {episode?.analysis &&
+            (history.length > 0 || question.trim()) &&
+            newConversationButton}
           <button
             className="btn btn-quiet btn-icon btn-sm"
             aria-label={t("关闭")}
@@ -487,55 +503,58 @@ export function PlayerView({
             <span aria-hidden="true">⌄</span>
           </button>
           <div className="mobile-panel-body" id={`${panelId}-chat`}>
-            <div className="panel-heading">
+            <div className="panel-heading conversation-heading">
               <h2>{t("聊两句")}</h2>
-              {listeningMode === "off" && (
-                <button
-                  className="enable-microphone btn btn-voice btn-sm"
-                  disabled={enablingMic || !configured}
-                  onClick={async () => {
-                    setEnablingMic(true);
-                    try {
-                      await player.enableMicrophone();
-                    } finally {
-                      setEnablingMic(false);
-                    }
-                  }}
-                >
-                  <svg
-                    viewBox="0 0 16 16"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.6"
-                    strokeLinecap="round"
-                    aria-hidden="true"
+              {newConversationButton}
+              <div className="conversation-microphone">
+                {listeningMode === "off" && (
+                  <button
+                    className="enable-microphone btn btn-voice btn-sm"
+                    disabled={enablingMic || !configured}
+                    onClick={async () => {
+                      setEnablingMic(true);
+                      try {
+                        await player.enableMicrophone();
+                      } finally {
+                        setEnablingMic(false);
+                      }
+                    }}
                   >
-                    <rect x="5.5" y="1.5" width="5" height="8" rx="2.5" />
-                    <path d="M3 7.5a5 5 0 0 0 10 0M8 12.5v2" />
-                  </svg>
-                  {enablingMic ? t("开启麦克风…") : t("开启麦克风")}
-                </button>
-              )}
-              <span
-                role="status"
-                className={liveStatus !== "off" ? "mic active" : "mic"}
-              >
-                {{
-                  off: t("麦克风未监听"),
-                  arming: t("开启麦克风…"),
-                  armed:
-                    listeningMode === "manual"
-                      ? t("按住说话 · 待命")
-                      : t("● 本地监听"),
-                  connecting: t("● Aside 正在加入"),
-                  transcribing: t("● 正在识别"),
-                  on:
-                    listeningMode === "manual"
-                      ? t("按住说话 · 可继续追问")
-                      : t("● 语音交流中"),
-                  closing: t("● 本地监听"),
-                }[liveStatus] ?? t("麦克风未监听")}
-              </span>
+                    <svg
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      strokeLinecap="round"
+                      aria-hidden="true"
+                    >
+                      <rect x="5.5" y="1.5" width="5" height="8" rx="2.5" />
+                      <path d="M3 7.5a5 5 0 0 0 10 0M8 12.5v2" />
+                    </svg>
+                    {enablingMic ? t("开启麦克风…") : t("开启麦克风")}
+                  </button>
+                )}
+                <span
+                  role="status"
+                  className={liveStatus !== "off" ? "mic active" : "mic"}
+                >
+                  {{
+                    off: t("麦克风未监听"),
+                    arming: t("开启麦克风…"),
+                    armed:
+                      listeningMode === "manual"
+                        ? t("按住说话 · 待命")
+                        : t("● 本地监听"),
+                    connecting: t("● Aside 正在加入"),
+                    transcribing: t("● 正在识别"),
+                    on:
+                      listeningMode === "manual"
+                        ? t("按住说话 · 可继续追问")
+                        : t("● 语音交流中"),
+                    closing: t("● 本地监听"),
+                  }[liveStatus] ?? t("麦克风未监听")}
+                </span>
+              </div>
             </div>
             {state.interruption && (
               <p className="conversation-origin">

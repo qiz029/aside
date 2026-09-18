@@ -118,3 +118,22 @@ test("a long recording with a long conversation still fits the request budget", 
   assert.ok(c.history.at(-1)?.text.startsWith("19"));
   assert.equal(c.recentTranscript.at(-1)?.id, "p2399");
 });
+
+test("long previous answers cannot prevent the newest question from fitting the model context", () => {
+  const history = Array.from({ length: 60 }, (_, i) => ({
+    role: i % 2 ? ("assistant" as const) : ("user" as const),
+    text: `Turn ${i}: ${"Earlier context. ".repeat(600)}`,
+  }));
+  history.push({ role: "user", text: "Can you explain your last point?" });
+  const original = JSON.stringify(history);
+  const context = buildContext(a, 4000, history);
+  assert.ok(new TextEncoder().encode(JSON.stringify(context)).length <= 24000);
+  assert.deepEqual(context.history.at(-1), history.at(-1));
+  assert.deepEqual(context.history.at(-2), history.at(-2));
+  assert.equal(context.currentPassage?.id, "2");
+  assert.equal(
+    JSON.stringify(history),
+    original,
+    "model selection must not erase the stored conversation",
+  );
+});

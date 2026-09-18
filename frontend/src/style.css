@@ -363,6 +363,20 @@ input[type="file"] {
   margin: -4px -8px -4px 8px;
   color: inherit;
 }
+.alert:has(.alert-message) {
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.alert-message {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+.alert .new-conversation {
+  margin: 0;
+}
+.alert .alert-message ~ .btn-icon {
+  margin-left: auto;
+}
 .player-card {
   display: flex;
   gap: 36px;
@@ -2170,6 +2184,32 @@ progress {
 .enable-microphone {
   margin-left: auto;
   margin-right: 10px;
+}
+.conversation-heading {
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.conversation-heading .new-conversation {
+  margin-left: auto;
+}
+.conversation-microphone {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 1 0 100%;
+  gap: 8px;
+  min-width: 0;
+}
+.conversation-microphone .enable-microphone {
+  margin: 0 auto 0 0;
+}
+.conversation-microphone .mic {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  font-size: 12px;
+  color: var(--ink-3);
 }
 
 /* Library lives in the top bar; no permanent navigation column. */
