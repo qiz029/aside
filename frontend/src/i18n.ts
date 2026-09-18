@@ -489,6 +489,11 @@ export const english: Record<string, string> = {
   "问题或对话过长，请开始新的对话":
     "This question or conversation is too long. Please start a new conversation.",
   新对话: "New conversation",
+  正在开启麦克风: "Starting microphone",
+  正在连接语音: "Connecting voice",
+  正在接收声音: "Hearing audio",
+  麦克风已开启: "Microphone on",
+  麦克风反馈: "Microphone activity",
   "正在开始新对话…": "Starting new conversation…",
   "清空当前对话，保留播放进度":
     "Clear this conversation and keep your playback position",

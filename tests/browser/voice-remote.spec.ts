@@ -240,7 +240,9 @@ async function setupRemote(
   await expect
     .poll(() => page.evaluate(() => (window as any).remoteChannel?.readyState))
     .toBe("open");
-  await expect(page.getByRole("status")).toContainText("Voice conversation");
+  await expect(page.getByRole("status", { includeHidden: true })).toContainText(
+    "Voice conversation",
+  );
   const audio = page.locator("audio");
   await expect
     .poll(() => audio.evaluate((a: HTMLAudioElement) => a.paused))
@@ -440,6 +442,7 @@ test("expiry during a spoken answer clears Answering and leaves podcast resume u
 
 test("reloading sends a server close even when the voice never acknowledges closing", async ({
   page,
+  baseURL,
 }) => {
   const received: unknown[] = [];
   // Unload keepalive requests outlive the page's interception callbacks. Use a
@@ -457,9 +460,7 @@ test("reloading sends a server close even when the voice never acknowledges clos
         .writeHead(404, { "Content-Type": "application/json" })
         .end('{"error":"Test endpoint"}');
     } else {
-      const upstream = await fetch(
-        new URL(request.url!, "http://127.0.0.1:5173"),
-      );
+      const upstream = await fetch(new URL(request.url!, baseURL));
       response.writeHead(upstream.status, {
         "Content-Type": upstream.headers.get("Content-Type") ?? "text/plain",
       });
@@ -628,6 +629,68 @@ for (const viewport of [
       await page.locator("audio").evaluate((a: HTMLAudioElement) => a.paused),
     ).toBe(true);
   });
+
+for (const width of [1440, 320]) {
+  test(`microphone feedback follows local audio before any model decision at ${width}px`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width, height: 844 });
+    const s = await setupRemote(page);
+    const feedback = page.getByRole("group", { name: "Microphone activity" });
+    const center = feedback.locator("i").nth(3);
+    const scale = () =>
+      center.evaluate(
+        (bar) => new DOMMatrixReadOnly(getComputedStyle(bar).transform).m22,
+      );
+    const input = (value: number) =>
+      page.evaluate((value) => {
+        const { gain, ctx } = (window as any).remoteMic;
+        gain.gain.setValueAtTime(value, ctx.currentTime);
+      }, value);
+    await expect(feedback).toBeInViewport();
+    await expect(feedback).toContainText("Microphone on");
+    await expect.poll(scale).toBeLessThan(0.16);
+    // Below the speech detector's threshold: visual feedback does not wait for VAD or NDJSON.
+    await input(0.02);
+    await expect(feedback).toHaveAttribute("data-hearing", "true");
+    await expect(feedback).toContainText("Hearing audio");
+    await expect.poll(scale).toBeGreaterThan(0.2);
+    const soft = await scale();
+    await input(0.12);
+    await expect.poll(scale).toBeGreaterThan(soft + 0.25);
+    expect(s.inputs).toHaveLength(0);
+    expect(s.questionRequests()).toBe(0);
+    expect(s.transcriptions()).toBe(0);
+    expect(
+      await s.audio.evaluate((audio: HTMLAudioElement) => audio.paused),
+    ).toBe(false);
+    const activityBox = (await feedback.boundingBox())!;
+    const dockBox = (await page.locator(".player-dock").boundingBox())!;
+    expect(activityBox.y + activityBox.height).toBeLessThan(dockBox.y);
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth),
+    ).toBeLessThanOrEqual(width);
+    await page.screenshot({
+      path: testInfo.outputPath("microphone-hearing.png"),
+      fullPage: true,
+    });
+    await input(0);
+    await expect(feedback).not.toHaveAttribute("data-hearing", "true");
+    await expect(feedback).toContainText("Microphone on");
+    await expect.poll(scale).toBeLessThan(0.16);
+    // Reduced motion keeps a static state change instead of a fluctuating meter.
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await input(0.03);
+    await expect.poll(scale).toBe(0.65);
+    await input(0.15);
+    await expect.poll(scale).toBe(0.65);
+    await input(0);
+    await expect.poll(scale).toBe(0.15);
+    await page.getByRole("button", { name: "Pause", exact: true }).click();
+    await expect(feedback).toHaveCount(0);
+    expect(s.errors).toEqual([]);
+  });
+}
 
 test("diagnostics shows real local input frames, sending state and WebRTC byte counters", async ({
   page,

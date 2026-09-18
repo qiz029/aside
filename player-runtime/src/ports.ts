@@ -109,6 +109,8 @@ export interface VoicePort {
   activity(): void;
   setWorking(value: boolean): void;
   outputLevels?(levels: Float32Array): boolean;
+  /** Current local microphone amplitude; reading this never starts capture. */
+  inputLevel?(): number;
   diagnostics?(): Promise<unknown>;
 }
 export type VoiceFactory = (

@@ -14,6 +14,7 @@ import { LanguageSelect } from "./LanguageSelect";
 import { SpeedSelect } from "./SpeedSelect";
 import { Transcript } from "./Transcript";
 import { VoiceDiagnostics } from "./VoiceDiagnostics";
+import { VoiceActivity } from "./VoiceActivity";
 import { message, resumeLabel, t } from "./i18n";
 import { names, type PlayerController } from "./usePlayerController";
 
@@ -436,6 +437,7 @@ export function PlayerView({
         onTimeUpdate={audioTick}
         onEnded={stopListening}
       />
+      <VoiceActivity status={liveStatus} readLevel={player.microphoneLevel} />
       <div className="lower" hidden={debugOpen}>
         <section
           className="transcript"

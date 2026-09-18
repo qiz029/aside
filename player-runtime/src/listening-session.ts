@@ -279,6 +279,9 @@ export class ListeningSession {
   voiceLevels(levels: Float32Array) {
     return this.voice?.outputLevels?.(levels) ?? false;
   }
+  microphoneLevel() {
+    return this.voice?.inputLevel?.() ?? 0;
+  }
   async voiceDiagnostics() {
     return {
       mode: this.mode,

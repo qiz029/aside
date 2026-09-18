@@ -7,6 +7,7 @@ export interface MicrophonePort {
   snapshot(): Blob;
   discard(): void;
   stop(): void;
+  inputLevel?(): number;
   diagnostics?(): unknown;
 }
 export class LocalMicrophone implements MicrophonePort {
@@ -25,7 +26,9 @@ export class LocalMicrophone implements MicrophonePort {
   private observe(frame: Float32Array, probability?: number) {
     this.frames++;
     this.lastFrameAt = Date.now();
-    this.rms = Math.sqrt(frame.reduce((sum, value) => sum + value * value, 0) / frame.length);
+    this.rms = Math.sqrt(
+      frame.reduce((sum, value) => sum + value * value, 0) / frame.length,
+    );
     this.speechProbability = probability;
   }
   diagnostics() {
@@ -42,6 +45,20 @@ export class LocalMicrophone implements MicrophonePort {
       speechProbability: this.speechProbability,
       stopped: this.stopped,
     };
+  }
+  /** Read the existing capture meter; never acquire a device just to draw UI. */
+  inputLevel() {
+    const track = this.stream?.getAudioTracks()[0];
+    if (
+      this.stopped ||
+      this.context?.state !== "running" ||
+      track?.readyState !== "live" ||
+      !track.enabled ||
+      track.muted ||
+      Date.now() - this.lastFrameAt > 250
+    )
+      return 0;
+    return this.rms;
   }
   constructor(
     private config: MicrophoneConfig,

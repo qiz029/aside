@@ -456,6 +456,11 @@ export class OnDemandVoice {
   outputLevels(levels: Float32Array) {
     return this.cloud?.levels?.(levels) ?? false;
   }
+  inputLevel() {
+    return this.enabled && this.microphoneReady
+      ? (this.mic.inputLevel?.() ?? 0)
+      : 0;
+  }
   async close() {
     this.enabled = false;
     this.microphoneReady = false;

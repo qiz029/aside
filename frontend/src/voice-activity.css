@@ -1,0 +1,60 @@
+.voice-activity-row {
+  display: flex;
+  flex: none;
+  padding: 4px 0 10px;
+}
+.voice-activity {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  max-width: 100%;
+  padding: 5px 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-full);
+  color: var(--ink-3);
+  background: var(--fill);
+  transition:
+    color 180ms,
+    background 180ms,
+    border-color 180ms;
+}
+.voice-activity[data-hearing] {
+  color: var(--olive);
+  background: var(--glow-sage);
+  border-color: color-mix(in srgb, var(--olive) 28%, transparent);
+}
+.voice-activity > svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+.voice-activity-bars {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: 39px;
+  height: 22px;
+  flex: none;
+}
+.voice-activity-bars i {
+  width: 3px;
+  height: 22px;
+  background: currentColor;
+  border-radius: 3px;
+  transform: scaleY(0.15);
+}
+.voice-activity-label {
+  min-width: 140px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.voice-activity[data-connecting]:not([data-hearing]) {
+  color: var(--ink-2);
+}
+@media (prefers-reduced-motion: reduce) {
+  .voice-activity {
+    transition: none;
+  }
+}

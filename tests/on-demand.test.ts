@@ -15,6 +15,7 @@ function setup(manual = false, continuous = false) {
     closed = 0,
     micStopped = 0,
     captures = 0;
+  let inputLevel = 0;
   let resolveConnect!: () => void;
   let resolveText!: (text: string) => void;
   let signal: AbortSignal | undefined;
@@ -59,6 +60,7 @@ function setup(manual = false, continuous = false) {
           return new Blob(["wav"]);
         },
         discard() {},
+        inputLevel: () => inputLevel,
         stop() {
           micStopped++;
         },
@@ -110,6 +112,9 @@ function setup(manual = false, continuous = false) {
   const voice = new OnDemandVoice(configs, cb, deps, manual, continuous);
   return {
     voice,
+    setInputLevel: (level: number) => {
+      inputLevel = level;
+    },
     speech: (a: boolean) => speech(a),
     ready: () => {
       resolveConnect();
@@ -138,6 +143,23 @@ function setup(manual = false, continuous = false) {
     events,
   };
 }
+test("reading microphone feedback is passive and reports silence after capture closes", async () => {
+  const s = setup();
+  s.setInputLevel(0.12);
+  assert.equal(s.voice.inputLevel(), 0);
+  assert.deepEqual(s.statuses, []);
+  assert.equal(s.creates, 0);
+  await s.voice.enable();
+  assert.equal(s.voice.inputLevel(), 0.12);
+  assert.equal(
+    s.creates,
+    0,
+    "drawing the meter must not create a cloud session",
+  );
+  assert.equal(s.captures, 0);
+  await s.voice.close();
+  assert.equal(s.voice.inputLevel(), 0);
+});
 test("arming creates no paid connection; first utterance waits for both transcript and ready", async () => {
   const s = setup();
   await s.voice.enable();
