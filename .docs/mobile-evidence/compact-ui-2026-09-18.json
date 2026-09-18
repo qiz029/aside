@@ -1,0 +1,124 @@
+{
+  "source": "2f7466b",
+  "fixtureBackendSource": "7ed30db",
+  "nativeFixtureBuild": 42,
+  "platforms": {
+    "ios": {
+      "continuousBuild": 40,
+      "continuousQuestion": "What is a biography 1789721733506?",
+      "inputFrames": 60,
+      "continuousNativeFlowPassed": true,
+      "completionReplaySuppressed": true,
+      "composer": {
+        "platform": "ios",
+        "question": "Compact composer ios 1789722434128?",
+        "completedReply": "A short answer",
+        "uniqueQuestionCount": 1,
+        "historyLength": 22,
+        "nativeDraftCleared": true,
+        "emptyAfterReopening": true,
+        "fixture": true
+      },
+      "manual": {
+        "build": 42,
+        "armedAt": 1789722574863,
+        "historyBefore": 22,
+        "historyAfter": 24,
+        "newQuestion": "Question",
+        "newAnswer": "A short answer",
+        "priorHistoryUnchanged": true,
+        "manualWaitAndExplicitResumeUiPassed": true
+      },
+      "captureCancelAndForegroundPausePassed": true,
+      "keyboardStopOnBuild42": true,
+      "lastObservedVoiceStatus": "off",
+      "historyCountAfterCancelAndToolbar": 24
+    },
+    "android": {
+      "continuousBuild": 40,
+      "continuousQuestion": "What is a biography 1789721934790?",
+      "inputFrames": 28,
+      "continuousNativeFlowPassed": true,
+      "completionReplaySuppressed": true,
+      "composer": {
+        "platform": "android",
+        "question": "Compact composer android 1789722881592?",
+        "completedReply": "A short answer",
+        "uniqueQuestionCount": 1,
+        "historyLength": 26,
+        "nativeDraftCleared": true,
+        "emptyAfterReopening": true,
+        "fixture": true
+      },
+      "manual": {
+        "build": 42,
+        "armedAt": 1789723010893,
+        "historyBefore": 26,
+        "historyAfter": 28,
+        "newQuestion": "Question",
+        "newAnswer": "A short answer",
+        "priorHistoryUnchanged": true,
+        "manualWaitAndExplicitResumeUiPassed": true
+      },
+      "captureCancelAndForegroundPausePassed": true,
+      "keyboardStopOnBuild42": true,
+      "lastObservedVoiceStatus": "off",
+      "historyCountAfterCancelAndToolbar": 28
+    }
+  },
+  "visual": {
+    "androidDarkAndBothLanguages": true,
+    "iosLightAndBothLanguages": true,
+    "iosSEMaximumAccessibilitySize": true,
+    "sheetSelectionAndLastActionReachable": true,
+    "sources": "Regular iOS visual flow on 40; SE and Android UI corrections on 42. Microphone/keyboard screenshots are labeled by their native build."
+  },
+  "checks": {
+    "localTests": 425,
+    "typeAndBoundariesPassed": true,
+    "ci": "https://github.com/qiz029/aside/actions/runs/35328473929"
+  },
+  "iphone": {
+    "source": "2f7466b",
+    "build": "43",
+    "bundle": "com.asidefm.app.dev",
+    "api": "https://asidefm.com",
+    "fixture": false,
+    "ota": false,
+    "signatureVerified": true,
+    "phoneInProfile": true,
+    "profileExpires": "2026-09-24T02:49:02",
+    "installed": true,
+    "appSourceSha256": "c7683898a175f1a473138f850e3bf676986b6b1eb11a4ec4b9bbd25040cb4a8a",
+    "launchVerified": true,
+    "installationTransport": "localNetwork"
+  },
+  "android": {
+    "build": 20,
+    "version": "0.1.0",
+    "source": "2f7466b",
+    "easId": "3af84051-5f8f-4436-b02d-4c6a56b56392",
+    "status": "finished",
+    "bundle": "com.asidefm.app",
+    "apkSha256": "ca41536b195930d3fff7c5635264d3903630879ffdcc6a85c82ea2f772c61424",
+    "certificateSha256": "a1145c78a613303fc04edb9b6352d7a00ffa0b6c971ea59a03f50798df9e597f",
+    "fixture": false,
+    "ota": false,
+    "api": "https://asidefm.com",
+    "artifact": "https://expo.dev/artifacts/eas/cTxZdyzfiibeT3SlAMTAVqJO7IAAhuYemV8qeLWTXNU.apk",
+    "upgradedFrom": 19,
+    "installedNativeVersion": 20,
+    "productionPublicSmokePassed": true,
+    "smokeEpisode": "luxun-ah-q",
+    "installPage": "https://expo.dev/accounts/jiahangzhang/projects/aside/builds/3af84051-5f8f-4436-b02d-4c6a56b56392"
+  },
+  "realModelCalls": 0,
+  "realEmails": 0,
+  "webProductChanged": false,
+  "remaining": "Unlabelled supplier reply audio during an unfinished answer, physical routing/lock screen acceptance and paid Apple distribution remain separate open gates.",
+  "upstream": {
+    "main": "25e1621540515fd576d4dc006b4694b1759e5e73",
+    "included": true,
+    "prMergeable": true
+  }
+}

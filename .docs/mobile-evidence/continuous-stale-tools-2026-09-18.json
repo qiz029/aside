@@ -1,0 +1,45 @@
+{
+  "date": "2026-09-18",
+  "backendSource": "f559178f41f6fa6c2d72d1d4b52b5f862a67f0d0",
+  "regressions": {
+    "beforeFix": "All three stale tool follow-up cases failed: manual playback change, new utterance, session close.",
+    "afterFix": "All three pass; normal mobile tool follow-ups still run; canceled tool outputs settle without issuing response.create.",
+    "unitTests": 425,
+    "typeAndBoundaryChecks": "passed",
+    "cloudflareSidebandTests": 2,
+    "ci": "https://github.com/qiz029/aside/actions/runs/35324139889",
+    "ciConclusion": "success"
+  },
+  "androidCall": {
+    "emulatedTelephony": true,
+    "nativeFixtureBuild": 38,
+    "nativeSource": "b685f13",
+    "fixtureBackendSource": "7ed30db",
+    "rawEvidenceSha256": "a625f7e24f91a684d9fcc009c36b23b70de527490b35b6e133bcb9d241b5d82f",
+    "answerAudibleBeforeCall": true,
+    "telephonyRegistryConfirmedRinging": true,
+    "audioServiceConfirmedRecorderBefore": true,
+    "audioServiceConfirmedRecorderReleased": true,
+    "nativeRecorderStopAfterSystemFocusRequestMs": 51,
+    "programmePaused": true,
+    "anchorPreserved": true,
+    "microphoneOffAfterReturn": true,
+    "returnObservationSamples": 13,
+    "observedAfterReturnMs": 3654,
+    "supplierSessionReleased": true,
+    "limitations": [
+      "Synthetic supplier output; Android emulator audio focus/telephony path, not physical headset routing or iOS telephony.",
+      "No native application source changed in this correction."
+    ]
+  },
+  "production": {
+    "version": "bb4dd397-dcf6-49d1-8921-1c062ac179db",
+    "previousVersion": "62fe977a-e6e6-42a2-ad06-dbf1febcb115",
+    "mediaRollout": "none",
+    "authSmokeChecks": 4
+  },
+  "realModelCalls": 0,
+  "realEmails": 0,
+  "realPhoneCalls": 0,
+  "open": "Overlapping supplier audio on the single Live stream remains a separate limitation; answer-channel preference requested from user."
+}

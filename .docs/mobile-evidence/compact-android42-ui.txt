@@ -1,0 +1,45 @@
+Running on emulator-5554
+ > Flow player-ui
+Launch app "com.asidefm.app.dev"... COMPLETED
+Tap on id: public-library... COMPLETED
+Scrolling DOWN until id: episode-mobile-sample is visible with speed 40, visibility percentage 100%, timeout 20000 ms, with centering enabled... COMPLETED
+Tap on id: episode-mobile-sample... COMPLETED
+Assert that "Talk hands-free" is visible... COMPLETED
+Assert that id: hold-to-talk is visible... COMPLETED
+Assert that id: send-question is not visible... COMPLETED
+Take screenshot player-compact... COMPLETED
+Tap on id: question... COMPLETED
+Input text Can you explain the last sentence?... COMPLETED
+Assert that id: send-question is visible... COMPLETED
+Take screenshot player-keyboard... COMPLETED
+Tap on id: close-question... COMPLETED
+Assert that id: hold-to-talk is visible... COMPLETED
+Tap on id: question... COMPLETED
+Assert that "Can you explain the last sentence?" is visible... COMPLETED
+Erase text... COMPLETED
+Tap on id: close-question... COMPLETED
+Tap on id: player-options... COMPLETED
+Assert that "Resume after answers" is visible... COMPLETED
+Assert that id: close-player-options is visible... COMPLETED
+Scrolling DOWN until id: followup-8000 is visible with speed 40, visibility percentage 100%, timeout 20000 ms, with centering disabled... COMPLETED
+Tap on id: followup-8000... COMPLETED
+Take screenshot player-options... COMPLETED
+Tap on id: close-player-options... COMPLETED
+Tap on id: back-library... COMPLETED
+Tap on id: tab-account... COMPLETED
+Scrolling DOWN until id: locale-zh is visible with speed 40, visibility percentage 100%, timeout 20000 ms, with centering disabled... COMPLETED
+Tap on id: locale-zh... COMPLETED
+Tap on id: tab-library... COMPLETED
+Scrolling DOWN until id: continue-last is visible with speed 40, visibility percentage 100%, timeout 20000 ms, with centering enabled... COMPLETED
+Tap on id: continue-last... COMPLETED
+Take screenshot player-chinese... COMPLETED
+Tap on id: player-options... COMPLETED
+Assert that "??????" is visible... COMPLETED
+Assert that id: close-player-options is visible... COMPLETED
+Scrolling DOWN until id: followup-3000 is visible with speed 40, visibility percentage 100%, timeout 20000 ms, with centering disabled... COMPLETED
+Tap on id: followup-3000... COMPLETED
+Tap on id: close-player-options... COMPLETED
+Tap on id: back-library... COMPLETED
+Tap on id: tab-account... COMPLETED
+Scrolling DOWN until id: locale-en is visible with speed 40, visibility percentage 100%, timeout 20000 ms, with centering disabled... COMPLETED
+Tap on id: locale-en... COMPLETED

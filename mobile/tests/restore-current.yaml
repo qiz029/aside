@@ -1,0 +1,16 @@
+# Signed-in fixture account with a unique question/answer produced on another device.
+appId: com.asidefm.app.dev
+---
+- stopApp
+- launchApp
+- tapOn:
+    id: public-library
+- tapOn:
+    id: episode-mobile-sample
+- tapOn: Conversation
+- assertVisible: ${QUESTION}
+- assertVisible: ${ANSWER}
+- assertVisible:
+    id: playback-position
+    text: ${POSITION}
+- takeScreenshot: current-restored-conversation

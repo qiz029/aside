@@ -28,6 +28,8 @@ appId: ${APP_ID}
     timeout: 30000
 - takeScreenshot: online-episode
 - tapOn:
+    id: back-library
+- tapOn:
     id: tab-account
     waitToSettleTimeoutMs: 1000
 - assertNotVisible:

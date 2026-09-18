@@ -1,0 +1,100 @@
+{
+  "date": "2026-09-18",
+  "runtimeSource": "5dbcfe2803976cfc8fab2c6eb433a8fad55ef4ac",
+  "verifiedSource": "cb5774a",
+  "upstream": "4d8003f",
+  "agentPaidModelCalls": 0,
+  "agentEmailsSent": 0,
+  "unitTests": 403,
+  "typesAndBoundaries": "passed",
+  "cloudflare": "both Web and mobile sideband regressions passed",
+  "ci": {
+    "url": "https://github.com/qiz029/aside/actions/runs/35319924745",
+    "conclusion": "success"
+  },
+  "web": {
+    "fullRunPassed": 69,
+    "fullRunTotal": 70,
+    "initialFailure": "obsolete assertion requiring no spoken auto-resume",
+    "testOnlyCorrection": "assert upstream countdown, then click explicit hold and verify no resume",
+    "focusedRerun": "passed",
+    "productSourceMatchesUpstream": true
+  },
+  "mobilePolicy": {
+    "speechYield": "duck at 0.15 until admission",
+    "defaultFollowupMs": 3000,
+    "longAnswerMinimumMs": 8000,
+    "requiresNativeDrainAndMatchingFinalAnswer": true,
+    "nonFinalToolProgressCannotFinish": true,
+    "temporaryBargeInHoldClearsOnNextAnswer": true,
+    "explicitUserHoldPersists": true
+  },
+  "native": {
+    "ios": {
+      "fixtureBuild": 36,
+      "samples": 248,
+      "sampleIntervalMs": 200,
+      "inputFrames": 13,
+      "externalModels": "deterministic fixture",
+      "nativeDrainBeforeCountdown": true,
+      "observedShortWaitMs": 3017,
+      "observedLongWaitMs": 8168,
+      "afterCompletionDuplicateInHistory": false,
+      "podcastAnswerOverlap": false,
+      "ignoredSpeechAndAnchoredFollowups": "passed",
+      "microphoneClosedAfterChecks": true
+    },
+    "android": {
+      "fixtureBuild": 36,
+      "samples": 316,
+      "sampleIntervalMs": 200,
+      "inputFrames": 12,
+      "externalModels": "deterministic fixture",
+      "nativeDrainBeforeCountdown": true,
+      "observedShortWaitMs": 3525,
+      "observedLongWaitMs": 8113,
+      "afterCompletionDuplicateInHistory": false,
+      "podcastAnswerOverlap": false,
+      "ignoredSpeechAndAnchoredFollowups": "passed",
+      "microphoneClosedAfterChecks": true
+    }
+  },
+  "iosRelease": {
+    "build": 37,
+    "nativeAndExpoVersionsMatch": true,
+    "signatureVerified": true,
+    "installed": true,
+    "launched": true,
+    "apiUrl": "https://asidefm.com",
+    "testApi": false,
+    "ota": false,
+    "temporaryDiagnosticHelper": false
+  },
+  "androidRelease": {
+    "build": 18,
+    "id": "2086c3fe-2b3b-480c-bd82-0c42320e5a55",
+    "status": "FINISHED",
+    "url": "https://expo.dev/accounts/jiahangzhang/projects/aside/builds/2086c3fe-2b3b-480c-bd82-0c42320e5a55",
+    "apkUrl": "https://expo.dev/artifacts/eas/csW2UB_RlBHz797RcU5tSK3GEkq0BMgJtM_wtO-h5dU.apk",
+    "sha256": "05631dd54afb7d4183a8e36c488d4b48f5533482b84011228c3a8cd7e7900f1f",
+    "signerCertificateSha256": "a1145c78a613303fc04edb9b6352d7a00ffa0b6c971ea59a03f50798df9e597f",
+    "package": "com.asidefm.app",
+    "upgradeFrom": 17,
+    "upgradeInstalled": true,
+    "readOnlyProductionUi": "real catalogue, transcript and Account passed; test marker absent",
+    "apiUrl": "https://asidefm.com",
+    "testApi": false,
+    "ota": false,
+    "temporaryDiagnosticHelper": false
+  },
+  "production": {
+    "version": "11ef1749-b9a4-4a87-bc99-a051993b3034",
+    "smoke": "website Origin, mobile email routing and Bearer validation passed",
+    "containers": "existing image retained"
+  },
+  "openItems": [
+    "Unfinished-answer duplicate supplier audio remains unresolved; both build-34 probes heard it. See continuous-barge-2026-09-18.json. No new PCM ownership mechanism was introduced in build 36/37/18.",
+    "Physical natural continuation, local barge-in quality, headset/call interruption and visible iOS lock-screen card remain acceptance checks.",
+    "Ad Hoc/TestFlight paid signing acceptance awaits Apple account approval."
+  ]
+}

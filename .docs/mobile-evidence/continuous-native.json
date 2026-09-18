@@ -1,0 +1,648 @@
+{
+  "ios": {
+    "run": 1789708115526,
+    "inputFrames": 30,
+    "sampleCount": 410,
+    "overlapSamples": 0,
+    "longAnswerWaitMs": 8166,
+    "snapshots": [
+      {
+        "platform": "ios",
+        "at": 1789708189251,
+        "player": {
+          "playing": false,
+          "positionMs": 5440.896084,
+          "volume": 1
+        },
+        "mode": "answering",
+        "interruption": {
+          "atMs": 4160.037501,
+          "resumeMs": 0,
+          "anchorId": "a0"
+        },
+        "resumeSeconds": null,
+        "busy": false,
+        "history": [
+          {
+            "id": "user:f4fbf4b8-da0a-41e7-8b7f-38f182ca2ad7",
+            "role": "user",
+            "text": "What is a biography 1789708115526?"
+          },
+          {
+            "id": "assistant:f4fbf4b8-da0a-41e7-8b7f-38f182ca2ad7",
+            "role": "assistant",
+            "text": "A life story 1789708115526."
+          }
+        ],
+        "diagnostics": {
+          "mode": "auto",
+          "active": true,
+          "status": "on",
+          "configured": true,
+          "error": "",
+          "microphoneConfig": {
+            "vadEnabled": true,
+            "vadMinRms": 0.003,
+            "vadThreshold": 0.8,
+            "threshold": 0.025,
+            "minSpeechMs": 120,
+            "silenceMs": 650,
+            "maxCaptureMs": 30000
+          },
+          "control": {
+            "owner": "server",
+            "status": "engaged"
+          },
+          "voice": {
+            "manual": false,
+            "audio": {
+              "active": true,
+              "bufferedMs": 731.5416666666666,
+              "drained": false,
+              "mode": 2,
+              "receivedFrames": 96768,
+              "generation": 1789708186066001,
+              "overflows": 0,
+              "inputLevel": 0,
+              "playedThroughFrame": 61654,
+              "pendingCaptionCharacters": 0
+            }
+          }
+        }
+      },
+      {
+        "platform": "ios",
+        "at": 1789708192051,
+        "player": {
+          "playing": false,
+          "positionMs": 5440.896084,
+          "volume": 1
+        },
+        "mode": "awaiting_followup",
+        "interruption": {
+          "atMs": 4160.037501,
+          "resumeMs": 0,
+          "anchorId": "a0"
+        },
+        "resumeSeconds": 3,
+        "busy": false,
+        "history": [
+          {
+            "id": "user:f4fbf4b8-da0a-41e7-8b7f-38f182ca2ad7",
+            "role": "user",
+            "text": "What is a biography 1789708115526?"
+          },
+          {
+            "id": "assistant:f4fbf4b8-da0a-41e7-8b7f-38f182ca2ad7",
+            "role": "assistant",
+            "text": "A life story 1789708115526."
+          }
+        ],
+        "diagnostics": {
+          "mode": "auto",
+          "active": true,
+          "status": "on",
+          "configured": true,
+          "error": "",
+          "microphoneConfig": {
+            "vadEnabled": true,
+            "vadMinRms": 0.003,
+            "vadThreshold": 0.8,
+            "threshold": 0.025,
+            "minSpeechMs": 120,
+            "silenceMs": 650,
+            "maxCaptureMs": 30000
+          },
+          "control": {
+            "owner": "server",
+            "status": "engaged"
+          },
+          "voice": {
+            "manual": false,
+            "audio": {
+              "active": false,
+              "bufferedMs": 731.5416666666666,
+              "drained": true,
+              "mode": 2,
+              "receivedFrames": 230912,
+              "generation": 1789708186066001,
+              "overflows": 0,
+              "inputLevel": 0,
+              "playedThroughFrame": 195798,
+              "pendingCaptionCharacters": 0
+            }
+          }
+        }
+      },
+      {
+        "platform": "ios",
+        "at": 1789708218835,
+        "player": {
+          "playing": false,
+          "positionMs": 15980.923459,
+          "volume": 1
+        },
+        "mode": "awaiting_followup",
+        "interruption": {
+          "atMs": 14500.803042,
+          "resumeMs": 10000,
+          "anchorId": "a1"
+        },
+        "resumeSeconds": 8,
+        "busy": false,
+        "history": [
+          {
+            "id": "user:f4fbf4b8-da0a-41e7-8b7f-38f182ca2ad7",
+            "role": "user",
+            "text": "What is a biography 1789708115526?"
+          },
+          {
+            "id": "assistant:f4fbf4b8-da0a-41e7-8b7f-38f182ca2ad7",
+            "role": "assistant",
+            "text": "A life story 1789708115526."
+          },
+          {
+            "id": "user:c7169912-7052-47ff-9d90-3280aedb3ab4",
+            "role": "user",
+            "text": "Follow-up one 1789708115526"
+          },
+          {
+            "id": "assistant:c7169912-7052-47ff-9d90-3280aedb3ab4",
+            "role": "assistant",
+            "text": "The first follow-up answer 1789708115526."
+          },
+          {
+            "id": "user:9d2e054c-7bc1-47db-8ff3-3fd88007b5e2",
+            "role": "user",
+            "text": "Follow-up two 1789708115526"
+          },
+          {
+            "id": "assistant:9d2e054c-7bc1-47db-8ff3-3fd88007b5e2",
+            "role": "assistant",
+            "text": "The second follow-up answer 1789708115526. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life."
+          }
+        ],
+        "diagnostics": {
+          "mode": "auto",
+          "active": true,
+          "status": "on",
+          "configured": true,
+          "error": "",
+          "microphoneConfig": {
+            "vadEnabled": true,
+            "vadMinRms": 0.003,
+            "vadThreshold": 0.8,
+            "threshold": 0.025,
+            "minSpeechMs": 120,
+            "silenceMs": 650,
+            "maxCaptureMs": 30000
+          },
+          "control": {
+            "owner": "server",
+            "status": "engaged"
+          },
+          "voice": {
+            "manual": false,
+            "audio": {
+              "active": false,
+              "bufferedMs": 200,
+              "drained": true,
+              "mode": 2,
+              "receivedFrames": 1518592,
+              "generation": 1789708186066001,
+              "overflows": 0,
+              "inputLevel": 0,
+              "playedThroughFrame": 1508992,
+              "pendingCaptionCharacters": 0
+            }
+          }
+        }
+      },
+      {
+        "platform": "ios",
+        "at": 1789708227001,
+        "player": {
+          "playing": true,
+          "positionMs": 10022.016000000001,
+          "volume": 1
+        },
+        "mode": "playing",
+        "resumeSeconds": null,
+        "busy": false,
+        "history": [
+          {
+            "id": "user:f4fbf4b8-da0a-41e7-8b7f-38f182ca2ad7",
+            "role": "user",
+            "text": "What is a biography 1789708115526?"
+          },
+          {
+            "id": "assistant:f4fbf4b8-da0a-41e7-8b7f-38f182ca2ad7",
+            "role": "assistant",
+            "text": "A life story 1789708115526."
+          },
+          {
+            "id": "user:c7169912-7052-47ff-9d90-3280aedb3ab4",
+            "role": "user",
+            "text": "Follow-up one 1789708115526"
+          },
+          {
+            "id": "assistant:c7169912-7052-47ff-9d90-3280aedb3ab4",
+            "role": "assistant",
+            "text": "The first follow-up answer 1789708115526."
+          },
+          {
+            "id": "user:9d2e054c-7bc1-47db-8ff3-3fd88007b5e2",
+            "role": "user",
+            "text": "Follow-up two 1789708115526"
+          },
+          {
+            "id": "assistant:9d2e054c-7bc1-47db-8ff3-3fd88007b5e2",
+            "role": "assistant",
+            "text": "The second follow-up answer 1789708115526. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life."
+          }
+        ],
+        "diagnostics": {
+          "mode": "auto",
+          "active": true,
+          "status": "on",
+          "configured": true,
+          "error": "",
+          "microphoneConfig": {
+            "vadEnabled": true,
+            "vadMinRms": 0.003,
+            "vadThreshold": 0.8,
+            "threshold": 0.025,
+            "minSpeechMs": 120,
+            "silenceMs": 650,
+            "maxCaptureMs": 30000
+          },
+          "control": {
+            "owner": "server",
+            "status": "engaged"
+          },
+          "voice": {
+            "manual": false,
+            "audio": {
+              "active": false,
+              "bufferedMs": 0,
+              "drained": false,
+              "mode": 0,
+              "receivedFrames": 1909760,
+              "generation": 1789708186066001,
+              "overflows": 0,
+              "inputLevel": 0,
+              "playedThroughFrame": 1894016,
+              "pendingCaptionCharacters": 0
+            }
+          }
+        }
+      }
+    ]
+  },
+  "android": {
+    "run": 1789708374531,
+    "inputFrames": 14,
+    "sampleCount": 294,
+    "overlapSamples": 0,
+    "longAnswerWaitMs": 8248,
+    "snapshots": [
+      {
+        "platform": "android",
+        "at": 1789708431657,
+        "player": {
+          "playing": false,
+          "positionMs": 6421.999931335449,
+          "volume": 1
+        },
+        "mode": "answering",
+        "interruption": {
+          "atMs": 4815.000057220459,
+          "resumeMs": 0,
+          "anchorId": "a0"
+        },
+        "resumeSeconds": null,
+        "busy": false,
+        "history": [
+          {
+            "id": "user:6150fcff-ae19-4b51-b162-47b33366b4e7",
+            "role": "user",
+            "text": "What is a biography 1789708266100?"
+          },
+          {
+            "id": "assistant:6150fcff-ae19-4b51-b162-47b33366b4e7",
+            "role": "assistant",
+            "text": "A life story 1789708266100."
+          },
+          {
+            "id": "user:46d31596-ddf7-4e3b-bcca-2e10e58766f9",
+            "role": "user",
+            "text": "What is a biography 1789708374531?"
+          },
+          {
+            "id": "assistant:46d31596-ddf7-4e3b-bcca-2e10e58766f9",
+            "role": "assistant",
+            "text": "A life story 1789708374531."
+          }
+        ],
+        "diagnostics": {
+          "mode": "auto",
+          "active": true,
+          "status": "on",
+          "configured": true,
+          "error": "",
+          "microphoneConfig": {
+            "vadEnabled": true,
+            "vadMinRms": 0.003,
+            "vadThreshold": 0.8,
+            "threshold": 0.025,
+            "minSpeechMs": 120,
+            "silenceMs": 650,
+            "maxCaptureMs": 30000
+          },
+          "control": {
+            "owner": "server",
+            "status": "engaged"
+          },
+          "voice": {
+            "manual": false,
+            "audio": {
+              "inputLevel": 0,
+              "generation": 1789708427607001,
+              "bufferedMs": 1060,
+              "playedThroughFrame": 11280,
+              "drained": false,
+              "receivedFrames": 19760,
+              "mode": 2,
+              "overflows": 0,
+              "active": true,
+              "pendingCaptionCharacters": 0
+            }
+          }
+        }
+      },
+      {
+        "platform": "android",
+        "at": 1789708434382,
+        "player": {
+          "playing": false,
+          "positionMs": 6421.999931335449,
+          "volume": 1
+        },
+        "mode": "awaiting_followup",
+        "interruption": {
+          "atMs": 4815.000057220459,
+          "resumeMs": 0,
+          "anchorId": "a0"
+        },
+        "resumeSeconds": 3,
+        "busy": false,
+        "history": [
+          {
+            "id": "user:6150fcff-ae19-4b51-b162-47b33366b4e7",
+            "role": "user",
+            "text": "What is a biography 1789708266100?"
+          },
+          {
+            "id": "assistant:6150fcff-ae19-4b51-b162-47b33366b4e7",
+            "role": "assistant",
+            "text": "A life story 1789708266100."
+          },
+          {
+            "id": "user:46d31596-ddf7-4e3b-bcca-2e10e58766f9",
+            "role": "user",
+            "text": "What is a biography 1789708374531?"
+          },
+          {
+            "id": "assistant:46d31596-ddf7-4e3b-bcca-2e10e58766f9",
+            "role": "assistant",
+            "text": "A life story 1789708374531."
+          }
+        ],
+        "diagnostics": {
+          "mode": "auto",
+          "active": true,
+          "status": "on",
+          "configured": true,
+          "error": "",
+          "microphoneConfig": {
+            "vadEnabled": true,
+            "vadMinRms": 0.003,
+            "vadThreshold": 0.8,
+            "threshold": 0.025,
+            "minSpeechMs": 120,
+            "silenceMs": 650,
+            "maxCaptureMs": 30000
+          },
+          "control": {
+            "owner": "server",
+            "status": "engaged"
+          },
+          "voice": {
+            "manual": false,
+            "audio": {
+              "inputLevel": 8.897326499702913e-05,
+              "generation": 1789708427607001,
+              "bufferedMs": 1060,
+              "playedThroughFrame": 33200,
+              "drained": true,
+              "receivedFrames": 41680,
+              "mode": 2,
+              "overflows": 0,
+              "active": false,
+              "pendingCaptionCharacters": 0
+            }
+          }
+        }
+      },
+      {
+        "platform": "android",
+        "at": 1789708452404,
+        "player": {
+          "playing": false,
+          "positionMs": 7353.000164031982,
+          "volume": 1
+        },
+        "mode": "awaiting_followup",
+        "interruption": {
+          "atMs": 5678.999900817871,
+          "resumeMs": 0,
+          "anchorId": "a0"
+        },
+        "resumeSeconds": 8,
+        "busy": false,
+        "history": [
+          {
+            "id": "user:6150fcff-ae19-4b51-b162-47b33366b4e7",
+            "role": "user",
+            "text": "What is a biography 1789708266100?"
+          },
+          {
+            "id": "assistant:6150fcff-ae19-4b51-b162-47b33366b4e7",
+            "role": "assistant",
+            "text": "A life story 1789708266100."
+          },
+          {
+            "id": "user:46d31596-ddf7-4e3b-bcca-2e10e58766f9",
+            "role": "user",
+            "text": "What is a biography 1789708374531?"
+          },
+          {
+            "id": "assistant:46d31596-ddf7-4e3b-bcca-2e10e58766f9",
+            "role": "assistant",
+            "text": "A life story 1789708374531."
+          },
+          {
+            "id": "user:cc8f7519-fd20-479c-9f0f-e54f70538007",
+            "role": "user",
+            "text": "Follow-up one 1789708374531"
+          },
+          {
+            "id": "assistant:cc8f7519-fd20-479c-9f0f-e54f70538007",
+            "role": "assistant",
+            "text": "The first follow-up answer 1789708374531."
+          },
+          {
+            "id": "user:b68be86f-ba5a-4058-92b1-0ef1ee8ca18d",
+            "role": "user",
+            "text": "Follow-up two 1789708374531"
+          },
+          {
+            "id": "assistant:b68be86f-ba5a-4058-92b1-0ef1ee8ca18d",
+            "role": "assistant",
+            "text": "The second follow-up answer 1789708374531. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life."
+          }
+        ],
+        "diagnostics": {
+          "mode": "auto",
+          "active": true,
+          "status": "on",
+          "configured": true,
+          "error": "",
+          "microphoneConfig": {
+            "vadEnabled": true,
+            "vadMinRms": 0.003,
+            "vadThreshold": 0.8,
+            "threshold": 0.025,
+            "minSpeechMs": 120,
+            "silenceMs": 650,
+            "maxCaptureMs": 30000
+          },
+          "control": {
+            "owner": "server",
+            "status": "engaged"
+          },
+          "voice": {
+            "manual": false,
+            "audio": {
+              "inputLevel": 8.897326499702913e-05,
+              "generation": 1789708427607001,
+              "bufferedMs": 713.25,
+              "playedThroughFrame": 178054,
+              "drained": true,
+              "receivedFrames": 183760,
+              "mode": 2,
+              "overflows": 0,
+              "active": false,
+              "pendingCaptionCharacters": 0
+            }
+          }
+        }
+      },
+      {
+        "platform": "android",
+        "at": 1789708460652,
+        "player": {
+          "playing": true,
+          "positionMs": 76.99999958276749,
+          "volume": 1
+        },
+        "mode": "playing",
+        "resumeSeconds": null,
+        "busy": false,
+        "history": [
+          {
+            "id": "user:6150fcff-ae19-4b51-b162-47b33366b4e7",
+            "role": "user",
+            "text": "What is a biography 1789708266100?"
+          },
+          {
+            "id": "assistant:6150fcff-ae19-4b51-b162-47b33366b4e7",
+            "role": "assistant",
+            "text": "A life story 1789708266100."
+          },
+          {
+            "id": "user:46d31596-ddf7-4e3b-bcca-2e10e58766f9",
+            "role": "user",
+            "text": "What is a biography 1789708374531?"
+          },
+          {
+            "id": "assistant:46d31596-ddf7-4e3b-bcca-2e10e58766f9",
+            "role": "assistant",
+            "text": "A life story 1789708374531."
+          },
+          {
+            "id": "user:cc8f7519-fd20-479c-9f0f-e54f70538007",
+            "role": "user",
+            "text": "Follow-up one 1789708374531"
+          },
+          {
+            "id": "assistant:cc8f7519-fd20-479c-9f0f-e54f70538007",
+            "role": "assistant",
+            "text": "The first follow-up answer 1789708374531."
+          },
+          {
+            "id": "user:b68be86f-ba5a-4058-92b1-0ef1ee8ca18d",
+            "role": "user",
+            "text": "Follow-up two 1789708374531"
+          },
+          {
+            "id": "assistant:b68be86f-ba5a-4058-92b1-0ef1ee8ca18d",
+            "role": "assistant",
+            "text": "The second follow-up answer 1789708374531. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life. A biography records the experiences and decisions of a person's life."
+          }
+        ],
+        "diagnostics": {
+          "mode": "auto",
+          "active": true,
+          "status": "on",
+          "configured": true,
+          "error": "",
+          "microphoneConfig": {
+            "vadEnabled": true,
+            "vadMinRms": 0.003,
+            "vadThreshold": 0.8,
+            "threshold": 0.025,
+            "minSpeechMs": 120,
+            "silenceMs": 650,
+            "maxCaptureMs": 30000
+          },
+          "control": {
+            "owner": "server",
+            "status": "engaged"
+          },
+          "voice": {
+            "manual": false,
+            "audio": {
+              "inputLevel": 0,
+              "generation": 1789708427607001,
+              "bufferedMs": 0,
+              "playedThroughFrame": 241734,
+              "drained": false,
+              "receivedFrames": 249600,
+              "mode": 0,
+              "overflows": 0,
+              "active": false,
+              "pendingCaptionCharacters": 0
+            }
+          }
+        }
+      }
+    ]
+  },
+  "iosRestart": {
+    "platform": "ios",
+    "orphanRetainedOnForceQuit": true,
+    "recoveredWithoutOpeningMicrophone": true,
+    "recoveryMs": 2231
+  }
+}

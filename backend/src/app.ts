@@ -357,7 +357,14 @@ export function createApp(store: Store, services?: BackendServices) {
         e.analysis,
         q.atMs,
         q.history,
-        q.control ? { trial: false } : undefined,
+        q.control
+          ? {
+              trial: false,
+              ...(q.control.client === "mobile"
+                ? { player: q.control.player }
+                : {}),
+            }
+          : undefined,
       );
       store.recordUsage(e.id, result.session.id, 0, false);
       if (q.control) {
@@ -367,7 +374,8 @@ export function createApp(store: Store, services?: BackendServices) {
           q.control,
           e.analysis,
           (event) => controls.get(id)?.socket?.send(JSON.stringify(event)),
-          (totals) => console.log(`live delegation ${id} ${describeCost(totals)}`),
+          (totals) =>
+            console.log(`live delegation ${id} ${describeCost(totals)}`),
           sessionPolicy.intentCalls,
         );
         const entry: {

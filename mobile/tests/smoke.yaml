@@ -111,6 +111,8 @@ appId: com.asidefm.app.dev
     visible: "Pause"
     timeout: 15000
 - tapOn:
+    id: back-library
+- tapOn:
     waitToSettleTimeoutMs: 1000
     id: "tab-account"
 - assertVisible: "${EMAIL}"

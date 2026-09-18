@@ -20,4 +20,8 @@ test("an untranslated recovery hint cannot hide a useful English cause", () => {
     errorMessage("测试 / Voice connection rejected。可以继续听节目。", "en"),
     "Voice connection rejected",
   );
+  assert.equal(
+    errorMessage("音频已被系统中断 / Audio was interrupted", "zh"),
+    "音频已被系统中断",
+  );
 });

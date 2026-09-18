@@ -67,6 +67,12 @@ appId: com.asidefm.app.dev
     waitToSettleTimeoutMs: 1000
     id: "dismiss-error"
     optional: true
+- tapOn:
+    id: player-options
+- tapOn:
+    id: followup-0
+- tapOn:
+    id: close-player-options
 - longPressOn:
     id: "hold-to-talk"
 - extendedWaitUntil:
@@ -85,3 +91,9 @@ appId: com.asidefm.app.dev
 - launchApp:
     stopApp: false
 - assertVisible: "Pause"
+- tapOn:
+    id: player-options
+- tapOn:
+    id: followup-3000
+- tapOn:
+    id: close-player-options

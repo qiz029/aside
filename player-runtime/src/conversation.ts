@@ -17,6 +17,7 @@ import {
   type ResponseLatency,
 } from "./response-latency";
 import type { RuntimeClock } from "./runtime-clock";
+import { SpokenCompletion } from "./spoken-completion";
 
 export type ConversationVoice = Pick<
   VoicePort,
@@ -39,6 +40,7 @@ interface ConversationHost {
     handledText: string,
   ): void;
   textAnswered(): void;
+  spokenFinished?(decisionId: string): void;
   error(message: string): void;
   changed(): void;
   log(message: string): void;
@@ -85,6 +87,8 @@ export class Conversation {
   /** The delegated backend has engaged but not yet reported its finished answer. */
   private liveOpen = false;
   private liveAnswerId?: string;
+  private spokenCompletion?: SpokenCompletion;
+  private completionReported = false;
   private liveReplyOwner?: string;
   private samples: ResponseLatency[] = [];
   private latency: ResponseLatencyTracker;
@@ -93,6 +97,7 @@ export class Conversation {
     private host: ConversationHost,
     private backend: PlayerBackend,
     private clock: RuntimeClock,
+    private spokenResume: "quiet" | "verified" = "quiet",
   ) {
     this.latency = new ResponseLatencyTracker(() => clock.now());
     this.followup = new FollowupTimer((deadline) => {
@@ -110,6 +115,8 @@ export class Conversation {
       answerPreview: this.answerPreview,
       busy: (!!this.pending && this.acceptedInput) || !!this.liveAnswerId,
       resumeHeld: this.held || this.bargedIn,
+      resumeNeedsConfirmation:
+        !!this.spokenCompletion && !this.spokenCompletion.complete,
       followupMs: this.waitMs,
       resumeSeconds:
         this.deadline === null
@@ -177,6 +184,8 @@ export class Conversation {
     this.pendingExpiry = undefined;
     this.liveOpen = false;
     this.liveAnswerId = undefined;
+    this.spokenCompletion = undefined;
+    this.completionReported = false;
     this.liveReplyOwner = undefined;
     this.latency.cancel();
     this.host.voice()?.setWorking(false);
@@ -235,7 +244,9 @@ export class Conversation {
   }
   private noteAnswer(text: string) {
     this.longAnswer =
-      text.length > 350 || (text.match(/[\u3400-\u9fff]/g)?.length ?? 0) > 180;
+      (this.spokenResume === "verified" && this.longAnswer) ||
+      text.length > 350 ||
+      (text.match(/[\u3400-\u9fff]/g)?.length ?? 0) > 180;
   }
   private addUser(text: string) {
     if (!this.acceptedInput && this.streamIds.user)
@@ -262,10 +273,10 @@ export class Conversation {
     ].slice(-100);
     this.history([...this.turns.filter((turn) => turn.id !== id), user]);
   }
-  submitText(text: string) {
+  submitText(text: string, speak = false) {
     this.recognizeQuestion(text);
     this.setDraft("");
-    void this.answer();
+    void this.answer(undefined, speak, this.spokenResume === "verified");
   }
   firstQuestion(text: string, explicit = false) {
     if (explicit) this.recognizeQuestion(text);
@@ -294,9 +305,13 @@ export class Conversation {
     // Keep space-only deltas so streamed words do not become "Heystop". They
     // do not invalidate an in-flight interpretation or start another request.
     if (role === "user" && !text.trim()) return;
-    if (role === "assistant")
+    if (role === "assistant") {
       this.noteAnswer(turns.find((turn) => turn.id === id)!.text);
-    else {
+      this.spokenCompletion?.transcript(
+        turns.find((turn) => turn.id === id)!.text,
+      );
+      this.confirmSpokenCompletion();
+    } else {
       if (this.pending) this.pending.abort();
       this.scheduleQuestion(120);
     }
@@ -333,6 +348,7 @@ export class Conversation {
     });
   }
   outputStarted() {
+    this.spokenCompletion?.outputStarted();
     this.outputIsAnswer =
       this.answerQueued || (!this.pending && !this.delegation);
     const sample = this.latency.output(this.outputIsAnswer);
@@ -348,9 +364,29 @@ export class Conversation {
   outputQuiet() {
     if (this.outputIsAnswer) {
       this.committed = this.snapshot.history;
-      this.answerQueued = false;
+      this.answerQueued =
+        !!this.spokenCompletion && !this.spokenCompletion.complete;
       this.scheduleFollowup();
     }
+  }
+  outputDrained() {
+    this.spokenCompletion?.outputDrained();
+    this.confirmSpokenCompletion();
+  }
+  private confirmSpokenCompletion() {
+    if (!this.spokenCompletion?.complete) return;
+    if (!this.completionReported && this.liveReplyOwner) {
+      this.completionReported = true;
+      this.host.spokenFinished?.(this.liveReplyOwner);
+    }
+    this.answerQueued = false;
+    this.scheduleFollowup();
+    this.host.changed();
+  }
+  private expectSpokenAnswer(answer?: string) {
+    this.spokenCompletion ??= new SpokenCompletion();
+    if (answer !== undefined) this.spokenCompletion.answer(answer);
+    this.confirmSpokenCompletion();
   }
   /** Why the follow-up window may not resume the podcast right now; empty when it may. */
   followupBlockers() {
@@ -365,8 +401,12 @@ export class Conversation {
       this.pending && "question in flight",
       this.livePending && "input awaiting a decision",
       this.liveOpen && "backend still answering",
+      this.liveAnswerId && "accepted answer pending",
       this.delegation && "delegation in flight",
       this.answerQueued && "answer not yet spoken",
+      this.spokenCompletion &&
+        !this.spokenCompletion.complete &&
+        "native answer playback unconfirmed",
       this.draft.trim() && "draft in composer",
       this.held && "held by listener",
       this.bargedIn && "held after barge-in",
@@ -377,7 +417,9 @@ export class Conversation {
       revision = this.host.playback().revision;
     // A long written answer earns reading time; a spoken one has been heard.
     const delay =
-      this.waitMs > 0 && this.longAnswer && !this.outputIsAnswer
+      this.waitMs > 0 &&
+      this.longAnswer &&
+      (this.spokenResume === "verified" || !this.outputIsAnswer)
         ? Math.max(this.waitMs, 8000)
         : this.waitMs;
     const eligible = () =>
@@ -434,6 +476,7 @@ export class Conversation {
     this.host.log("Backend delegation engaged");
     this.host.engage();
     this.answerQueued = true;
+    if (this.spokenResume === "verified") this.expectSpokenAnswer();
     this.bargedIn = false;
     // A quiet gap while the backend is still answering can be a lookup, not
     // the end of the reply: the follow-up window stays shut until `answered`.
@@ -455,6 +498,10 @@ export class Conversation {
       // what it said so far was at most a progress sentence: the answer audio
       // is still to come and must play out before the window opens.
       if (!this.host.playback().assistantSpeaking) this.answerQueued = true;
+      if (this.spokenResume === "verified") {
+        this.noteAnswer(answer);
+        this.expectSpokenAnswer(answer);
+      }
       this.scheduleFollowup();
     }
     this.host.changed();
@@ -499,6 +546,7 @@ export class Conversation {
     this.liveAnswerId = undefined;
     this.references = result.sources;
     this.noteAnswer(result.answer);
+    if (this.spokenCompletion) this.expectSpokenAnswer(result.answer);
     this.host.voice()?.setWorking(false);
     if (result.answer.trim())
       this.host.voice()?.append("commentary", result.answer, null);
@@ -533,7 +581,13 @@ export class Conversation {
         this.committed.splice(user + 1, 0, { id, role: "assistant", text });
     }
     this.history(turns);
-    if (id === this.streamIds.assistant) this.noteAnswer(text);
+    if (id === this.streamIds.assistant) {
+      this.noteAnswer(text);
+      if (heard) {
+        this.spokenCompletion?.transcript(text);
+        this.confirmSpokenCompletion();
+      }
+    }
   }
   private consumeResult(
     result: QuestionResult,
@@ -602,7 +656,10 @@ export class Conversation {
       // A server-pushed answer has no completion event, and GPT-Live may pause
       // to think before speaking again: silence cannot resume that one. An
       // answer this client fetched is complete, so its audio ending is the end.
-      if (serverOwned) this.hold();
+      if (this.spokenResume === "verified") {
+        this.bargedIn = false;
+        this.expectSpokenAnswer(result.answer);
+      } else if (serverOwned) this.hold();
       if (result.answer.trim())
         voice.append("commentary", result.answer, delegationId ?? null);
       voice.activity();
@@ -613,7 +670,11 @@ export class Conversation {
       this.host.textAnswered();
     }
   }
-  private async answer(delegationId?: string, speak = false) {
+  private async answer(
+    delegationId?: string,
+    speak = false,
+    streamText = false,
+  ) {
     this.followup.cancel();
     const episode = this.host.episode();
     if (!episode) return;
@@ -680,7 +741,7 @@ export class Conversation {
         },
         controller.signal,
         (phase) => progress.update(phase),
-        !(delegationId || speak)
+        !(delegationId || speak) || streamText
           ? (text) => {
               if (!valid()) return;
               this.answerPreview = text;

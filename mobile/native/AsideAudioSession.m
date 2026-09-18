@@ -50,4 +50,20 @@ RCT_EXPORT_METHOD(createSilentTrack:(RCTPromiseResolveBlock)resolve
       @"settings": @{}, @"peerConnectionId": @(-1) });
   });
 }
+RCT_EXPORT_METHOD(setInputEnabled:(BOOL)enabled resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject) {
+  NSError *error;
+  if (![[AsideSilentAudioDevice shared] setInputEnabled:enabled error:&error]) {
+    reject(@"input_audio", @"Couldn't start microphone input", error); return;
+  }
+  resolve(nil);
+}
+RCT_EXPORT_METHOD(resetOutput:(double)generation resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject) {
+  [[AsideSilentAudioDevice shared] resetOutput:(uint64_t)generation]; resolve(nil);
+}
+RCT_EXPORT_METHOD(outputCommand:(double)generation epoch:(double)epoch mode:(NSInteger)mode resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject) {
+  [[AsideSilentAudioDevice shared] outputCommand:mode generation:(uint64_t)generation epoch:(uint64_t)epoch]; resolve(nil);
+}
+RCT_EXPORT_METHOD(audioStatus:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject) {
+  resolve([[AsideSilentAudioDevice shared] audioStatus]);
+}
 @end

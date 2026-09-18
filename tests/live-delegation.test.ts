@@ -36,7 +36,7 @@ const state = (patch: Partial<LivePlayerState> = {}): LivePlayerState => ({
   config: createPlayerConfig(),
   ...patch,
 });
-function setup(debug = false, limit = 30) {
+function setup(debug = false, limit = 30, mobile = false) {
   let now = 0;
   const timers = new Map<number, { at: number; run: () => void }>();
   let next = 0;
@@ -83,6 +83,7 @@ function setup(debug = false, limit = 30) {
     },
     debug,
     limit,
+    mobile,
   );
   const advance = async (ms = 200) => {
     now += ms;
@@ -364,9 +365,10 @@ test("a fallback respects the session's existing request budget", async () => {
   assert.equal(s.events.at(-1)?.type, "error");
 });
 
+for (const mobile of [false, true])
 for (const initialDecision of ["wait_for_input", "ignore_input"])
-  test(`new speech after ${initialDecision} receives a second interpretation, not a repeated pause`, async () => {
-    const s = setup();
+  test(`${mobile ? "mobile" : "Web"}: new speech after ${initialDecision} receives a second interpretation, not a repeated pause`, async () => {
+    const s = setup(false, 30, mobile);
     s.speak("When");
     await s.advance(600);
     s.backend({ type: "response.created", response: {} });
@@ -556,8 +558,9 @@ test("a bare pause word stops the podcast before any delegation and the backend'
   s.delegation.close();
 });
 
-test("a pause word followed by a question engages on the follow-up only", async () => {
-  const s = setup();
+for (const mobile of [false, true])
+test(`${mobile ? "mobile" : "Web"}: a pause word followed by a question engages on the follow-up only`, async () => {
+  const s = setup(false, 30, mobile);
   s.speak("Hold on");
   await flush();
   assert.equal(s.decisions().length, 1);
@@ -572,6 +575,7 @@ test("a pause word followed by a question engages on the follow-up only", async 
   const [engage] = s.engages();
   assert.equal(engage.text, "What does that mean?");
   assert.equal(s.outputs()[0].accepted, true);
+  assert.equal(s.sent.filter((e) => e.type === "response.create").length, 1);
   s.delegation.close();
 });
 
@@ -612,6 +616,45 @@ test("resume waits for the client and a manual action cancels a pending report",
   s.delegation.close();
 });
 
+for (const invalidation of ["manual action", "new utterance", "session close"] as const) {
+  test(`mobile cannot revive an old tool follow-up after ${invalidation}`, async () => {
+    const s = setup(false, 30, true);
+    s.speak("Pause and explain that passage");
+    s.delegate();
+    s.call("control_podcast", {
+      commands: [{ type: "pause" }],
+      followUpQuestion: "Explain the old passage",
+    });
+    await flush();
+    const [old] = s.decisions();
+    assert.ok(old);
+    assert.equal(s.engages().length, 0, "waiting for the client execution report");
+    if (invalidation === "manual action") {
+      s.delegation.update(state({ sequence: 1, version: 1 }));
+    } else if (invalidation === "new utterance") {
+      s.delegation.receive({ type: "session.input_transcript.delta", delta: "A different question", start_ms: 2000, end_ms: 2200 });
+      s.delegate("d2");
+      s.ack(old.decisionId);
+    } else {
+      s.delegation.close();
+    }
+    await flush();
+    assert.equal(s.engages().length, 0, "a late execution report must not open old answer audio");
+    assert.equal(s.sent.filter((e) => e.type === "response.create").length, 0,
+      "the obsolete tool result must not request another paid answer");
+    if (invalidation !== "session close") {
+      assert.equal(s.outputs().length, 1, "settle the outstanding tool without continuing its old answer");
+    }
+    if (invalidation === "new utterance") {
+      s.backend({ type: "response.output_text.delta", delta: "The new answer." });
+      s.backend({ type: "response.completed", response: {} });
+      assert.equal(s.engages().length, 1, "the replacement question still works");
+      assert.equal(s.engages()[0].text, "A different question");
+    }
+    s.delegation.close();
+  });
+}
+
 test("the backend's transcript window follows playback with session.update, at most once per passage", async () => {
   const s = setup();
   s.delegation.update(state({ sequence: 1, positionMs: 47000 }));
@@ -630,6 +673,122 @@ test("the backend's transcript window follows playback with session.update, at m
   assert.match(s.sent[1].session.delegation.responses.instructions, /playheadMs 1000/);
   s.delegation.close();
 });
+
+test("mobile reports interruption and heard-answer state even while the playhead stays in one passage", async () => {
+  const s = setup(false, 30, true);
+  const updates = () => s.sent.filter((e) => e.type === "session.update");
+  s.delegation.update(state({ sequence: 1, wasPlaying: false, audibleSource: "none",
+    playback: { mode: "awaiting_followup", interrupted: true, resumeMs: 40000 },
+    assistant: { decisionId: "answer-1", text: "A biography is a life story.", state: "finished" },
+  }));
+  assert.equal(updates().length, 1, "state change must reach Responses without a passage change");
+  const instructions = updates()[0].session.delegation.responses.instructions;
+  assert.match(instructions, /"interrupted":true/);
+  assert.match(instructions, /"state":"finished"/);
+  assert.match(instructions, /A biography is a life story/);
+  for (let i = 2; i <= 21; i++) {
+    s.delegation.update(state({ sequence: i, positionMs: 45000 + i, wasPlaying: false, audibleSource: "none",
+      playback: { mode: "awaiting_followup", interrupted: true, resumeMs: 40000 },
+      assistant: { decisionId: "answer-1", text: "A biography is a life story.", state: "finished" },
+    }));
+    await s.advance(250);
+  }
+  assert.equal(updates().length, 1, "native status ticks do not resend context");
+  s.delegation.update(state({ sequence: 22, playback: { mode: "playing", interrupted: false } }));
+  assert.equal(updates().length, 2);
+  assert.match(updates()[1].session.delegation.responses.instructions, /"interrupted":false/);
+  assert.doesNotMatch(updates()[1].session.delegation.responses.instructions, /"decisionId":"answer-1"/);
+  s.delegation.close();
+});
+
+for (const mobile of [false, true])
+  test(`a second delegation for an already answered input is ${mobile ? "suppressed on mobile" : "unchanged on Web"}`, async () => {
+    const s = setup(false, 30, mobile);
+    s.speak("What is a novelist?");
+    await s.advance(600); // The same fallback/natural-delegation ordering as the device trace.
+    s.delegate("first");
+    s.backend({ type: "response.created", response: { id: "response-first" } });
+    s.backend({ type: "response.output_text.delta", delta: "A novelist writes novels." });
+    s.backend({ type: "response.completed", response: { id: "response-first" } });
+    s.delegate("duplicate");
+    s.backend({ type: "response.created", response: { id: "response-duplicate" } });
+    s.backend({ type: "response.output_text.delta", delta: "A novelist is a writer of novels." });
+    s.call("control_podcast", { commands: [{ type: "adjust_rate", direction: "faster" }] });
+    s.backend({ type: "response.completed", response: { id: "response-duplicate", usage: { input_tokens: 10, output_tokens: 5 } } });
+    assert.equal(s.engages().length, mobile ? 1 : 2);
+    assert.equal(s.events.filter((e) => e.type === "answered").length, mobile ? 1 : 2);
+    assert.equal(s.decisions().length, mobile ? 0 : 1);
+    assert.equal(s.costs.length, 1, "ignored supplier work remains billable and must be accounted for");
+    if (mobile) {
+      s.delegation.receive({ type: "session.input_transcript.delta", delta: "And a poet?", start_ms: 5000, end_ms: 5500 });
+      s.delegate("follow-up");
+      s.backend({ type: "response.output_text.delta", delta: "A poet writes poetry." });
+      s.backend({ type: "response.completed", response: {} });
+      assert.equal(s.engages().length, 2, "a genuine next utterance still answers");
+      assert.equal(s.engages()[1].text, "And a poet?");
+    }
+    s.delegation.close();
+  });
+
+for (const captionsFirst of [false, true])
+  test(`mobile corrects completion metadata only for a completed variant corroborated by output captions (${captionsFirst})`, async () => {
+    const s = setup(false, 30, true);
+    s.speak("What is a novelist?");
+    s.delegate("first");
+    s.backend({ type: "response.output_text.delta", delta: "A novelist writes novels." });
+    s.backend({ type: "response.completed", response: {} });
+    const first = s.events.find(e => e.type === "answered")!;
+    const variant = "A novelist is a writer of novels.";
+    const caption = () => s.delegation.receive({ type: "session.output_transcript.delta", delta: variant });
+    s.delegate("variant");
+    s.backend({ type: "response.created", response: {} });
+    s.backend({ type: "response.output_text.delta", delta: variant });
+    if (captionsFirst) caption();
+    assert.equal(s.events.filter(e => e.type === "answered").length, 1, "partial metadata or captions alone cannot change completion");
+    s.backend({ type: "response.completed", response: {} });
+    if (!captionsFirst) {
+      assert.equal(s.events.filter(e => e.type === "answered").length, 1, "an unspoken alternative remains ignored");
+      caption();
+    }
+    assert.deepEqual(s.events.filter(e => e.type === "answered"), [first, { ...first, answer: variant }]);
+    assert.equal(s.engages().length, 1, "the question, audio window and anchor are never reopened");
+    assert.equal(s.decisions().length, 0);
+    assert.equal(s.sent.length, 0, "observing an already-running response cannot create another paid request");
+    caption();
+    assert.equal(s.events.filter(e => e.type === "answered").length, 2, "the same variant is reported once");
+    s.delegation.close();
+  });
+
+for (const invalidation of ["tool", "failed", "new-input", "manual", "finished", "interrupted"])
+  test(`mobile does not use a replacement's completion metadata after ${invalidation}`, async () => {
+    const s = setup(false, 30, true);
+    s.speak("What is a novelist?");
+    s.delegate("first");
+    s.backend({ type: "response.output_text.delta", delta: "A novelist writes novels." });
+    s.backend({ type: "response.completed", response: {} });
+    const first = s.engages()[0];
+    s.delegate("variant");
+    s.backend({ type: "response.created", response: {} });
+    const variant = "A novelist is a writer of novels.";
+    s.backend({ type: "response.output_text.delta", delta: variant });
+    if (invalidation === "tool") s.call("resume_podcast", {});
+    s.backend({ type: invalidation === "failed" ? "response.failed" : "response.completed", response: {} });
+    if (invalidation === "new-input") s.speak("And a poet?");
+    if (invalidation === "manual") s.ack(first.decisionId, true, { version: 1 });
+    if (invalidation === "finished" || invalidation === "interrupted")
+      s.ack(first.decisionId, true, { assistant: { decisionId: first.decisionId, state: invalidation, text: "A novelist writes novels." } });
+    s.delegation.receive({ type: "session.output_transcript.delta", delta: variant });
+    if (invalidation === "new-input" || invalidation === "manual") {
+      s.backend({ type: "response.output_text.delta", delta: "A stale continuation" }, "variant");
+      s.call("resume_podcast", {});
+      await flush();
+    }
+    assert.equal(s.events.filter(e => e.type === "answered").length, 1);
+    assert.equal(s.engages().length, 1);
+    assert.equal(s.decisions().length, 0, "duplicate tools remain suppressed");
+    assert.equal(s.events.some(e => e.type === "error"), false, "a failed rejected response cannot end the active conversation");
+    s.delegation.close();
+  });
 
 test("the tool call cap ends the session with an explicit error", async () => {
   const s = setup(false, 2);
@@ -661,8 +820,9 @@ test("the fast classifier hears each utterance the backend sees and its first de
   s.delegation.close();
 });
 
-test("a confident fast ignore continues the podcast before the backend, which does not repeat it", async () => {
-  const s = setup();
+for (const mobile of [false, true])
+test(`${mobile ? "mobile" : "Web"}: a confident fast ignore continues the podcast before the backend, which does not repeat it`, async () => {
+  const s = setup(false, 30, mobile);
   s.speak("Honey, what should we have for dinner?");
   s.delegate();
   s.backend({ type: "response.created" });
@@ -679,8 +839,9 @@ test("a confident fast ignore continues the podcast before the backend, which do
   s.delegation.close();
 });
 
-test("the backend overrules a fast ignore by answering", async () => {
-  const s = setup();
+for (const mobile of [false, true])
+test(`${mobile ? "mobile" : "Web"}: the backend overrules a fast ignore by answering`, async () => {
+  const s = setup(false, 30, mobile);
   s.speak("Is that actually true?");
   s.delegate();
   s.backend({ type: "response.created" });
@@ -692,8 +853,9 @@ test("the backend overrules a fast ignore by answering", async () => {
   s.delegation.close();
 });
 
-test("the fast classifier never acts after the backend, on half a sentence, or on what only the backend can do", async () => {
-  const s = setup();
+for (const mobile of [false, true])
+test(`${mobile ? "mobile" : "Web"}: the fast classifier never acts after the backend, on half a sentence, or on what only the backend can do`, async () => {
+  const s = setup(false, 30, mobile);
   s.speak("Slow it down");
   s.delegate();
   s.backend({ type: "response.created" });
@@ -704,7 +866,7 @@ test("the fast classifier never acts after the backend, on half a sentence, or o
   assert.equal(s.shadowed[0].answer("ignore", 0.99), false, "the listener kept talking");
   assert.equal(s.decisions().length, 0);
 
-  const late = setup();
+  const late = setup(false, 30, mobile);
   late.speak("Hmm");
   late.delegate();
   late.backend({ type: "response.created" });
@@ -716,8 +878,9 @@ test("the fast classifier never acts after the backend, on half a sentence, or o
   late.delegation.close();
 });
 
-test("a fast pause or resume is applied once and its outcome answers the backend's own call", async () => {
-  const s = setup();
+for (const mobile of [false, true])
+test(`${mobile ? "mobile" : "Web"}: a fast pause or resume is applied once and its outcome answers the backend's own call`, async () => {
+  const s = setup(false, 30, mobile);
   s.speak("Stop it there for a second");
   s.delegate();
   s.backend({ type: "response.created" });
@@ -730,7 +893,7 @@ test("a fast pause or resume is applied once and its outcome answers the backend
   assert.equal(s.decisions().length, 1, "not paused twice");
   assert.equal(s.outputs()[0].accepted, true);
 
-  const r = setup();
+  const r = setup(false, 30, mobile);
   r.delegation.update(
     state({ sequence: 1, wasPlaying: false, playback: { mode: "awaiting_followup", interrupted: true } }),
   );

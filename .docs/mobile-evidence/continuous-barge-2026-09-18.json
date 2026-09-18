@@ -1,0 +1,98 @@
+{
+  "date": "2026-09-18",
+  "source": "5d747811b042ee3882ba06b55add9f9c37c3ed15",
+  "upstream": "bc951fd",
+  "agentPaidModelCalls": 0,
+  "agentEmailsSent": 0,
+  "localTests": 394,
+  "typesAndBoundaries": "passed",
+  "webVoiceTests": 22,
+  "ci": {
+    "url": "https://github.com/qiz029/aside/actions/runs/35318521978",
+    "conclusion": "success"
+  },
+  "bargeIn": "upstream #33 merged; explicit and mobile verified continuation policies covered for local speech, first-connection HTTP, late drain and next answer",
+  "native": {
+    "ios": {
+      "fixtureBuild": 34,
+      "samples": 309,
+      "sampleIntervalMs": 200,
+      "externalModels": "deterministic fixture",
+      "inputFrames": 17,
+      "nativeDrainBeforeCountdown": true,
+      "firstObservedCountdownToResumeMs": 3200,
+      "firstObservedLongCountdownToResumeMs": 7936,
+      "podcastAnswerOverlap": false,
+      "afterCompletionDuplicateInHistory": false,
+      "ignoredSpeechAndFollowups": "passed",
+      "duringPlaybackDuplicate": {
+        "duplicateInjectedWhileNativeActive": true,
+        "extraWasHeard": true,
+        "automaticResumePrevented": true,
+        "subsequentFollowupRecovered": true
+      },
+      "manualContinuationUi": "visible on ambiguous completion; Maestro assertion passed",
+      "fixtureMicrophoneClosedAfterChecks": true
+    },
+    "android": {
+      "fixtureBuild": 34,
+      "samples": 276,
+      "sampleIntervalMs": 200,
+      "externalModels": "deterministic fixture",
+      "inputFrames": 8,
+      "nativeDrainBeforeCountdown": true,
+      "firstObservedCountdownToResumeMs": 3267,
+      "firstObservedLongCountdownToResumeMs": 9182,
+      "podcastAnswerOverlap": false,
+      "afterCompletionDuplicateInHistory": false,
+      "ignoredSpeechAndFollowups": "passed",
+      "duringPlaybackDuplicate": {
+        "duplicateInjectedWhileNativeActive": true,
+        "extraWasHeard": true,
+        "automaticResumePrevented": true,
+        "subsequentFollowupRecovered": true
+      },
+      "manualContinuationUi": "visible on ambiguous completion; Maestro assertion passed",
+      "fixtureMicrophoneClosedAfterChecks": true
+    }
+  },
+  "iosRelease": {
+    "build": 35,
+    "nativeAndExpoVersionsMatch": true,
+    "signatureVerified": true,
+    "installed": true,
+    "launched": true,
+    "apiUrl": "https://asidefm.com",
+    "testApi": false,
+    "ota": false,
+    "temporaryDiagnosticHelper": false
+  },
+  "androidRelease": {
+    "build": 17,
+    "id": "e7ceac6c-d62f-4a0b-90e0-0cc51a67adbb",
+    "status": "FINISHED",
+    "url": "https://expo.dev/accounts/jiahangzhang/projects/aside/builds/e7ceac6c-d62f-4a0b-90e0-0cc51a67adbb",
+    "apkUrl": "https://expo.dev/artifacts/eas/82ly7i3320sYo1LGadIO8skQ9xlzyubS2bkSCOWa2kQ.apk",
+    "sha256": "f0ce0890b22762832b3de7a41edf9cfe1d362e77d2ce2a89d83577dcc41700f8",
+    "signerCertificateSha256": "a1145c78a613303fc04edb9b6352d7a00ffa0b6c971ea59a03f50798df9e597f",
+    "package": "com.asidefm.app",
+    "upgradeFrom": 16,
+    "upgradeInstalled": true,
+    "productionUi": "real public catalogue, transcript and Account passed; fixture absent",
+    "apiUrl": "https://asidefm.com",
+    "testApi": false,
+    "ota": false
+  },
+  "production": {
+    "version": "fc415100-4350-4820-a29b-8f51a4d5d764",
+    "smoke": "website Origin, mobile email routing and Bearer validation passed",
+    "containers": "existing image retained"
+  },
+  "limits": [
+    "A second supplier voice output during an unfinished admitted answer was heard in both native probes. Only after-completion duplicate suppression is established. This remains unresolved.",
+    "Both platforms keep the programme paused with visible Continue on ambiguous completion, then recover on a genuine follow-up; this does not establish that duplicate audio was filtered.",
+    "Application admission rejection does not cancel supplier work already started; usage remains recorded.",
+    "Physical natural continuation, new local barge-in quality, headset/call handling and visible iOS lock-screen card remain user acceptance checks.",
+    "Ad Hoc/TestFlight paid signing acceptance remains pending Apple account approval."
+  ]
+}

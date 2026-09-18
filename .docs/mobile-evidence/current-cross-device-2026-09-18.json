@@ -1,0 +1,39 @@
+{
+  "date": "2026-09-18",
+  "applicationSource": "f559178",
+  "nativeFixtureBuild": 38,
+  "nativeSource": "b685f13",
+  "fixtureBackendSource": "7ed30db",
+  "productionAudit": {
+    "readOnly": true,
+    "rowsWritten": 0,
+    "scope": "Only the user-designated acceptance account; aggregate counts, no transcript text or credentials copied to this evidence.",
+    "episodesWithProgress": 4,
+    "questions": 16,
+    "replies": 12,
+    "meaning": "Existing real questions and replies are persisted. Counts alone do not prove live model accuracy or production browser rendering."
+  },
+  "web": {
+    "messageCount": 16,
+    "allMessageTextsRestored": true,
+    "initialAnchorMs": 90000,
+    "bothConflictChoicesPassed": true,
+    "finalPositionMs": 90000,
+    "historyUnchanged": true,
+    "questionOrVoiceRequests": 0
+  },
+  "ios": {
+    "restartedApp": true,
+    "sameFixtureAccountAsAndroid": true,
+    "uniqueLatestQuestionAndAnswerVisible": true,
+    "progressControlMatched": "1:30",
+    "nativePositionMs": 90000,
+    "note": "Initial fixture-login flow completed functional assertions but failed its absolute screenshot path. A separate restart/restore flow with a relative screenshot path passed fully.",
+    "allRuntimeMessagesMatch": true,
+    "messageCount": 16,
+    "microphoneOff": true
+  },
+  "realModelCalls": 0,
+  "realEmails": 0,
+  "productCodeChanged": false
+}

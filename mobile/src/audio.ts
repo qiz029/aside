@@ -12,22 +12,31 @@ import { AudioSessionCoordinator, NativePlaybackEvents } from "./audio-session";
 export class AudioCoordinator extends AudioSessionCoordinator {
   constructor() {
     super({
-      configure: async (recording) => {
+      configure: async (recording, continuous, voice) => {
         // Reconfigure only after the previous audio unit has stopped. iOS can
         // reject activation when switching a still-active voice session.
         await setIsAudioActiveAsync(false);
         await setAudioModeAsync({
           allowsRecording: recording,
           playsInSilentMode: true,
-          shouldPlayInBackground: !recording,
-          interruptionMode: "doNotMix",
+          shouldPlayInBackground: !recording || !!continuous,
+          // A foreground voice lease owns Android focus for both media and RTC.
+          // Expo resumes ownership when that lease closes.
+          interruptionMode:
+            Platform.OS === "android" && voice ? "mixWithOthers" : "doNotMix",
           shouldRouteThroughEarpiece: false,
         });
       },
       activate: setIsAudioActiveAsync,
       enableAnswer: async (enabled) => {
-        if (Platform.OS === "ios")
-          await NativeModules.AsideAudioSession.setAnswerEnabled(enabled);
+        await NativeModules.AsideAudioSession.setAnswerEnabled(enabled);
+      },
+      enableInput: async (enabled) => {
+        await NativeModules.AsideAudioSession.setInputEnabled(enabled);
+      },
+      enableFocus: async (enabled) => {
+        if (Platform.OS === "android")
+          await NativeModules.AsideAudioSession.setVoiceFocusEnabled(enabled);
       },
     });
   }
@@ -49,7 +58,18 @@ export class NativePodcastAudio implements PodcastAudio {
   private fade?: () => void;
   private settling = false;
   private settleGeneration = 0;
-  constructor(readonly coordinator: AudioCoordinator) {}
+  constructor(readonly coordinator: AudioCoordinator) {
+    coordinator.bindPodcast({
+      pause: () => {
+        this.events.requestedPause();
+        this.player.pause();
+      },
+      resume: () => {
+        this.events.requestedPlay();
+        this.player.play();
+      },
+    });
+  }
   get positionMs() {
     return this.target ?? this.player.currentTime * 1000;
   }

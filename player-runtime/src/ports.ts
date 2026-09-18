@@ -71,6 +71,8 @@ export interface VoiceCallbacks {
   onDiagnostic?(message: string): void;
   onReady(): void;
   onOutput(active: boolean): void;
+  /** Native audio has played its last queued frame and remained quiet. Not a semantic turn end. */
+  onOutputDrained?(): void;
   onTranscript(
     role: Turn["role"],
     text: string,
@@ -78,6 +80,8 @@ export interface VoiceCallbacks {
   ): void;
   onDelegation(id: string): void;
   onError(message: string): void;
+  /** Native route/focus interruption: stop playback as well as capture. */
+  onInterruption?(): void;
   onSpeech(active: boolean): void;
   /** Submitted manual ASR text; may arrive before the answer connection is ready. */
   onQuestionRecognized?(text: string): void;
@@ -101,7 +105,7 @@ export interface VoicePort {
   close(): Promise<void>;
   cancelCapture(): void;
   mute(value: boolean): void;
-  /** Browser PCM gate: keep pending reply audio until the backend admits it. */
+  /** PCM gate: keep pending reply audio until the backend admits it. */
   prepareOutput?(): void;
   discardPendingOutput?(): void;
   interrupt(): void;

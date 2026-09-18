@@ -1,0 +1,107 @@
+{
+  "source": "ca82de82574592b3fdbf8dcb8128fb83a688a80b",
+  "upstream": "d726765",
+  "date": "2026-09-18",
+  "agentPaidModelCalls": 0,
+  "localTests": 390,
+  "typesAndBoundaries": "passed",
+  "cloudflareSideband": "Web and mobile paths passed after merge",
+  "ci": "https://github.com/qiz029/aside/actions/runs/35317294850",
+  "ciConclusion": "success",
+  "native": {
+    "ios": {
+      "fixtureExpoBuild": 32,
+      "samples": 284,
+      "externalModels": "deterministic fixture",
+      "transport": {
+        "ok": true,
+        "inputFrames": 13,
+        "outputSamples": 16320
+      },
+      "lastDrainBeforeCountdown": {
+        "active": false,
+        "bufferedMs": 778.6666666666666,
+        "drained": true,
+        "mode": 2,
+        "receivedFrames": 203776,
+        "overflows": 0,
+        "inputLevel": 0,
+        "playedThroughFrame": 166400
+      },
+      "firstObservedCountdownToResumeMs": 2983,
+      "firstObservedLongCountdownToResumeMs": 7943,
+      "sampleIntervalMs": 200,
+      "duplicateReplayInHistory": false,
+      "podcastAnswerOverlap": false,
+      "extendedFollowupsAndIgnore": "passed",
+      "nativeBundleVersion": "31 (stale generated plist in fixture only; fixed and verified as 33 in delivered physical build)"
+    },
+    "android": {
+      "fixtureExpoBuild": 32,
+      "samples": 253,
+      "externalModels": "deterministic fixture",
+      "transport": {
+        "ok": true,
+        "inputFrames": 11,
+        "outputSamples": 16320
+      },
+      "lastDrainBeforeCountdown": {
+        "inputLevel": 8.897326499702913e-05,
+        "bufferedMs": 820,
+        "playedThroughFrame": 29920,
+        "drained": true,
+        "receivedFrames": 36480,
+        "mode": 2,
+        "overflows": 0,
+        "active": false
+      },
+      "firstObservedCountdownToResumeMs": 3064,
+      "firstObservedLongCountdownToResumeMs": 8167,
+      "sampleIntervalMs": 200,
+      "duplicateReplayInHistory": false,
+      "podcastAnswerOverlap": false,
+      "extendedFollowupsAndIgnore": "passed"
+    }
+  },
+  "iosRelease": {
+    "nativeBuild": "33",
+    "expoBuild": "33",
+    "apiUrl": "https://asidefm.com",
+    "testApi": false,
+    "signatureVerified": true,
+    "installed": true,
+    "launch": "system refused because the phone is locked",
+    "temporaryDiagnosticHelper": false
+  },
+  "production": {
+    "version": "42684bff-0b1d-4a0e-91e7-c5c7261fcae8",
+    "smoke": "website Origin, mobile email routing and Bearer validation passed; no email or model request",
+    "containers": "existing image retained"
+  },
+  "androidRelease": {
+    "build": 16,
+    "buildId": "4b56aa15-5df6-46f7-9d4c-390907ffb945",
+    "status": "FINISHED",
+    "url": "https://expo.dev/accounts/jiahangzhang/projects/aside/builds/4b56aa15-5df6-46f7-9d4c-390907ffb945",
+    "apkUrl": "https://expo.dev/artifacts/eas/gFjShnF_S7xY3fEAU5Hi9XJz2qE0Ex-LpNDmC5b0dm8.apk",
+    "sha256": "83d28d10c6f846d500e99d567d6a0f0d43d22afa9988304cc8d89b87c47ac58f",
+    "signerCertificateSha256": "a1145c78a613303fc04edb9b6352d7a00ffa0b6c971ea59a03f50798df9e597f",
+    "apiUrl": "https://asidefm.com",
+    "testApi": false,
+    "ota": false,
+    "temporaryDiagnosticHelper": false,
+    "upgradeInstalled": true,
+    "readOnlyProductionUi": "passed: actual public catalogue, transcript and Account; fixture marker absent"
+  },
+  "limits": [
+    "Native replay injection occurs after verified playback completion; overlapping supplier responses before completion are not covered by this native replay scenario.",
+    "Suppressing application admission cannot cancel supplier work already started; rejected duplicate usage is still recorded.",
+    "Natural spoken continuation intent after the context correction remains a physical acceptance check.",
+    "Physical headset/call behavior and visible iOS lock-screen card remain device checks."
+  ],
+  "webVoiceRegression": {
+    "passed": 21,
+    "seconds": 90
+  },
+  "iosLocalCommand": "expo prebuild before expo run; regenerated native and Expo build 33 verified"
+}

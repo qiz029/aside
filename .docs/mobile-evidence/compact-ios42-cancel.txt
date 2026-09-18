@@ -1,0 +1,11 @@
+Running on iPhone 16 Pro - iOS 18.3 - 738E7FBC-4993-4B79-8ECD-3B22759F4A7A
+ > Flow cancel-capture
+Swiping in UP direction on id: hold-to-talk... COMPLETED
+Assert that "Play" is visible... COMPLETED
+Assert that "Recording.*|Connecting.*|Transcribing.*" is not visible... COMPLETED
+Take screenshot capture-cancelled... COMPLETED
+Press Home key... COMPLETED
+Launch app "com.asidefm.app.dev" without stopping app... COMPLETED
+Wait for animation to end... COMPLETED
+Assert that "Play" is visible... COMPLETED
+Take screenshot cancelled-foreground... COMPLETED

@@ -1,0 +1,18 @@
+Running on emulator-5554
+ > Flow composer-send
+Launch app "com.asidefm.app.dev"... COMPLETED
+Tap on id: public-library... COMPLETED
+Tap on id: episode-mobile-sample... COMPLETED
+Tap on id: question... COMPLETED
+Input text ${QUESTION}... COMPLETED
+Tap on id: send-question... COMPLETED
+Assert that "${QUESTION}" is visible... COMPLETED
+Assert that "A short answer" is visible... COMPLETED
+Assert that "Ask about what you heard?" is visible... COMPLETED
+Take screenshot compact-composer-sent... COMPLETED
+Tap on id: close-question... COMPLETED
+Assert that id: hold-to-talk is visible... COMPLETED
+Tap on id: question... COMPLETED
+Assert that "Ask about what you heard?" is visible... COMPLETED
+Tap on id: close-question... COMPLETED
+PASS: newly submitted native question completed; draft cleared and stayed empty after reopening.

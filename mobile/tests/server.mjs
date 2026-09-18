@@ -22,6 +22,10 @@ const networkCalls = [],
   controlEvents = [],
   usedProofs = new Set();
 const acknowledgeClose = true;
+const voicePeers = new Map();
+const deviceEvidence = new Map();
+const rtcOrigin = `http://127.0.0.1:${Number(process.env.RTC_PORT ?? 4312)}`;
+let voiceTurn = 0;
 const googleIdentity = {
   sub: "test-google",
   email: "test@example.com",
@@ -92,6 +96,9 @@ mf = new Miniflare(
       OPENAI_API_KEY: "test-placeholder",
       ALLOW_UPLOADS: "true",
       AUTH_EMAIL_FROM: "login@auth.asidefm.com",
+      ASIDE_LIVE_ACCOUNT_SESSION_SECONDS:
+        process.env.VOICE_SESSION_SECONDS ?? "120",
+      TRIAL_DAILY_LIMITS: process.env.TRIAL_DAILY_LIMITS ?? "true",
       GOOGLE_CLIENT_ID: "google-test-id",
       GOOGLE_CLIENT_SECRET: "google-test-secret",
     },
@@ -104,6 +111,136 @@ mf = new Miniflare(
         ? undefined
         : Buffer.from(await request.arrayBuffer());
       const bodyText = payload?.toString("utf8") ?? "";
+      if (new URL(request.url).hostname === "test-voice-control") {
+        if (new URL(request.url).pathname === "/__fixture/device") {
+          if (request.method === "GET")
+            return Response.json(Object.fromEntries(deviceEvidence));
+          const sample = JSON.parse(bodyText);
+          const samples = deviceEvidence.get(sample.platform) ?? [];
+          samples.push(sample);
+          deviceEvidence.set(sample.platform, samples.slice(-3000));
+          return Response.json({ ok: true });
+        }
+        if (request.method === "GET")
+          return Response.json({ sessions: [...voicePeers.keys()] });
+        const action = JSON.parse(bodyText);
+        const sessionId = action.sessionId ?? [...voicePeers.keys()].at(-1);
+        const socket = voicePeers.get(sessionId);
+        if (!socket)
+          return Response.json(
+            { error: "No attached fixture session" },
+            { status: 409 },
+          );
+        const send = (event) => socket.send(JSON.stringify(event));
+        const delegation = `fixture-${++voiceTurn}`;
+        const response = (event) =>
+          send({ type: "response.event", delegation_id: delegation, event });
+        const text = action.text ?? "What is a biography?";
+        const answer = action.answer ?? "A short answer";
+        const rtc = async (body) => {
+          const result = await fetch(`${rtcOrigin}/control`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sessionId, ...body }),
+          });
+          if (!result.ok) throw Error(`RTC fixture rejected ${result.status}`);
+          return result.json();
+        };
+        if (action.action === "status")
+          return Response.json(await rtc({ action: "status" }));
+        if (
+          !["question", "variant", "duplicate", "ignore", "resume"].includes(action.action)
+        )
+          return Response.json(
+            { error: "Unknown fixture action" },
+            { status: 400 },
+          );
+        // Supplier timestamps describe the real media clock. Artificially
+        // adjacent offsets merge distinct questions into one utterance.
+        const { outputSamples } = await rtc({ action: "status" });
+        const endMs = Math.round(outputSamples / 48);
+        const input = {
+          type: "session.input_transcript.delta",
+          delta: text,
+          start_ms: Math.max(0, endMs - 500),
+          end_ms: endMs,
+        };
+        if (action.action !== "duplicate") {
+          await rtc({ action: "event", event: input });
+          send(input);
+        }
+        send({
+          type: "session.delegation.created",
+          delegation: {
+            id: delegation,
+            target: "responses",
+            type: "delegation",
+          },
+        });
+        if (action.action === "variant") {
+          // Real device pattern: two complete backend formulations, one spoken
+          // reply. The second cannot re-admit the question or replace its anchor.
+          response({ type: "response.created", response: {} });
+          response({ type: "response.output_text.delta", delta: "An earlier unspoken formulation of this answer." });
+          response({ type: "response.completed", response: {} });
+          await new Promise(resolve => setTimeout(resolve, 150));
+          const variantId = `${delegation}-variant`;
+          send({ type: "session.delegation.created", delegation: { id: variantId, target: "responses" } });
+          for (const event of [
+            { type: "response.created", response: {} },
+            { type: "response.output_text.delta", delta: answer },
+            { type: "response.completed", response: {} },
+          ]) send({ type: "response.event", delegation_id: variantId, event });
+          const evidence = await rtc({ action: "answer", text: answer, duration: 2 });
+          send({ type: "session.output_transcript.delta", delta: answer });
+          return Response.json({ ok: true, delegation, ...evidence });
+        }
+        if (action.action === "duplicate") {
+          response({ type: "response.created", response: {} });
+          response({ type: "response.output_text.delta", delta: answer });
+          response({ type: "response.completed", response: { output: [] } });
+          return Response.json(
+            await rtc({ action: "answer", text: answer, duration: 1 }),
+          );
+        }
+        if (action.action === "question") {
+          // Deliberately start real audio BEFORE the server admits the reply.
+          // A muted media track would lose this prefix; the native PCM gate must retain it.
+          const evidence = await rtc({
+            action: "answer",
+            text: answer,
+            duration: 2,
+          });
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          response({
+            type: "response.output_item.done",
+            item: {
+              type: "function_call",
+              call_id: `${delegation}-tool`,
+              name: "search_podcast",
+              arguments: JSON.stringify({ query: "curiosity" }),
+            },
+          });
+          response({ type: "response.completed", response: { output: [] } });
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          response({ type: "response.created", response: {} });
+          response({ type: "response.output_text.delta", delta: answer });
+          response({ type: "response.completed", response: { output: [] } });
+          return Response.json({ ok: true, delegation, ...evidence });
+        }
+        response({
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            call_id: `${delegation}-tool`,
+            name:
+              action.action === "ignore" ? "ignore_input" : "resume_podcast",
+            arguments: "{}",
+          },
+        });
+        response({ type: "response.completed", response: { output: [] } });
+        return Response.json({ ok: true, delegation });
+      }
       if (request.url === "https://oauth2.googleapis.com/token")
         return Response.json({ access_token: "google-test-access" });
       if (request.url === "https://openidconnect.googleapis.com/v1/userinfo")
@@ -123,6 +260,9 @@ mf = new Miniflare(
       if (request.url.endsWith("/attach")) {
         const pair = new WebSocketPair();
         pair[1].accept();
+        const sessionId = new URL(request.url).pathname.split("/").at(-2);
+        voicePeers.set(sessionId, pair[1]);
+        pair[1].addEventListener("close", () => voicePeers.delete(sessionId));
         pair[1].addEventListener("message", (event) => {
           const data = JSON.parse(event.data);
           controlEvents.push(data);
@@ -178,7 +318,7 @@ mf = new Miniflare(
         });
       }
       if (request.url.endsWith("/live/sessions")) {
-        return fetch("http://127.0.0.1:4312/live", {
+        return fetch(`${rtcOrigin}/live`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: bodyText,

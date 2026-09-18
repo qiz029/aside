@@ -1,0 +1,29 @@
+# Run after continuous.mjs has established a live local fixture session.
+appId: com.asidefm.app.dev
+---
+- assertVisible: "Listening · just speak"
+- tapOn:
+    id: question
+- inputText: "A draft while listening"
+- assertVisible: "Listening · just speak"
+- assertVisible: Stop
+- takeScreenshot: voice-toolbar-keyboard
+- tapOn:
+    id: close-question
+- tapOn:
+    id: question
+- assertVisible: "A draft while listening"
+- eraseText
+# Stop is exercised while the keyboard is still visible.
+- tapOn:
+    id: toggle-conversation
+- assertNotVisible: "Listening · just speak"
+- assertVisible:
+    id: close-question
+- takeScreenshot: voice-toolbar-keyboard-stopped
+- tapOn:
+    id: close-question
+- assertVisible: Talk hands-free
+- assertVisible:
+    id: hold-to-talk
+- takeScreenshot: voice-toolbar-stopped

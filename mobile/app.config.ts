@@ -49,7 +49,7 @@ const config: ExpoConfig = {
       LSSupportsOpeningDocumentsInPlace: true,
       UIBackgroundModes: ["audio"],
       NSMicrophoneUsageDescription:
-        "Record a question while you hold the talk button.",
+        "Listen for your questions while conversation mode is on, or record a question while you hold the talk button.",
     },
   },
   android: {

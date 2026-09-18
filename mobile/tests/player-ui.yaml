@@ -1,0 +1,109 @@
+appId: com.asidefm.app.dev
+---
+- launchApp
+- tapOn:
+    id: public-library
+- scrollUntilVisible:
+    element:
+      id: episode-mobile-sample
+    direction: DOWN
+    visibilityPercentage: 100
+    centerElement: true
+- tapOn:
+    id: episode-mobile-sample
+- assertVisible: Talk hands-free
+- assertVisible:
+    id: hold-to-talk
+- assertNotVisible:
+    id: send-question
+- takeScreenshot: player-compact
+- tapOn:
+    id: question
+- inputText: "Can you explain the last sentence?"
+- assertVisible:
+    id: send-question
+- takeScreenshot: player-keyboard
+- tapOn:
+    id: close-question
+- assertVisible:
+    id: hold-to-talk
+- tapOn:
+    id: question
+- assertVisible: "Can you explain the last sentence?"
+- eraseText
+- tapOn:
+    id: close-question
+- tapOn:
+    id: player-options
+- assertVisible: Resume after answers
+- assertVisible:
+    id: close-player-options
+- scrollUntilVisible:
+    element:
+      id: followup-8000
+    direction: DOWN
+    visibilityPercentage: 100
+    centerElement: true
+- tapOn:
+    id: followup-8000
+- assertVisible:
+    id: followup-8000
+    selected: true
+- scrollUntilVisible:
+    element:
+      id: new-conversation
+    direction: DOWN
+    visibilityPercentage: 100
+    centerElement: true
+- takeScreenshot: player-options
+- tapOn:
+    id: close-player-options
+- tapOn:
+    id: back-library
+- tapOn:
+    id: tab-account
+- scrollUntilVisible:
+    element:
+      id: locale-zh
+    direction: DOWN
+- tapOn:
+    id: locale-zh
+- tapOn:
+    id: tab-library
+- scrollUntilVisible:
+    element:
+      id: continue-last
+    direction: DOWN
+    visibilityPercentage: 100
+    centerElement: true
+- tapOn:
+    id: continue-last
+- takeScreenshot: player-chinese
+- tapOn:
+    id: player-options
+- assertVisible: 回答后继续听
+- assertVisible:
+    id: close-player-options
+- scrollUntilVisible:
+    element:
+      id: followup-3000
+    direction: DOWN
+    visibilityPercentage: 100
+    centerElement: true
+- tapOn:
+    id: followup-3000
+- assertVisible:
+    id: followup-3000
+    selected: true
+- tapOn:
+    id: close-player-options
+- tapOn:
+    id: back-library
+- tapOn:
+    id: tab-account
+- scrollUntilVisible:
+    element:
+      id: locale-en
+    direction: DOWN
+- tapOn:
+    id: locale-en

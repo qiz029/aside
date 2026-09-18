@@ -1,0 +1,48 @@
+// Pinned react-native-webrtc 124 / org.jitsi:webrtc 124 adapter.
+// AGP instruments only these three audio classes; the original AAR is unchanged.
+import com.android.build.api.instrumentation.*
+import org.objectweb.asm.*
+
+abstract class AsideAudioVisitor implements AsmClassVisitorFactory<InstrumentationParameters.None> {
+    @Override boolean isInstrumentable(ClassData data) {
+        return data.className in [
+            'org.webrtc.audio.WebRtcAudioTrack$AudioTrackThread',
+            'org.webrtc.audio.WebRtcAudioRecord',
+            'org.webrtc.audio.WebRtcAudioRecord$AudioRecordThread'
+        ]
+    }
+    @Override ClassVisitor createClassVisitor(ClassContext context, ClassVisitor next) {
+        return new ClassVisitor(Opcodes.ASM9, next) {
+            @Override MethodVisitor visitMethod(int access, String name, String desc, String signature, String[] exceptions) {
+                return new MethodVisitor(Opcodes.ASM9, super.visitMethod(access, name, desc, signature, exceptions)) {
+                    @Override void visitMethodInsn(int opcode, String owner, String method, String descriptor, boolean isInterface) {
+                        if (owner == 'android/media/AudioTrack' && method == 'write' && descriptor == '(Ljava/nio/ByteBuffer;II)I') {
+                            super.visitMethodInsn(Opcodes.INVOKESTATIC, 'com/aside/audio/AsideAudioPipeline', 'write', '(Landroid/media/AudioTrack;Ljava/nio/ByteBuffer;II)I', false)
+                            return
+                        }
+                        if (owner == 'android/media/AudioRecord') {
+                            def hooks = [
+                                'startRecording()V': ['start', '(Landroid/media/AudioRecord;)V'],
+                                'stop()V': ['stop', '(Landroid/media/AudioRecord;)V'],
+                                'getRecordingState()I': ['state', '(Landroid/media/AudioRecord;)I'],
+                                'read(Ljava/nio/ByteBuffer;I)I': ['read', '(Landroid/media/AudioRecord;Ljava/nio/ByteBuffer;I)I']
+                            ]
+                            def hook = hooks[method + descriptor]
+                            if (hook) {
+                                super.visitMethodInsn(Opcodes.INVOKESTATIC, 'com/aside/audio/AsideAudioPipeline', hook[0], hook[1], false)
+                                return
+                            }
+                        }
+                        super.visitMethodInsn(opcode, owner, method, descriptor, isInterface)
+                    }
+                }
+            }
+        }
+    }
+}
+androidComponents {
+    onVariants(selector().all()) { variant ->
+        variant.instrumentation.transformClassesWith(AsideAudioVisitor, InstrumentationScope.ALL) {}
+        variant.instrumentation.setAsmFramesComputationMode(FramesComputationMode.COMPUTE_FRAMES_FOR_INSTRUMENTED_METHODS)
+    }
+}

@@ -94,6 +94,8 @@ export const liveSchema = z.object({
       debug: z.boolean().default(false),
       /** Older clients still receive a single complete decision. */
       earlyResponse: z.boolean().optional(),
+      /** Native conversation state and per-input admission; legacy Web stays unchanged. */
+      client: z.literal("mobile").optional(),
     })
     .optional(),
 });

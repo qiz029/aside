@@ -1,0 +1,31 @@
+# Already signed-in fixture app. Require a unique QUESTION and inspect the
+# checkpoint/observer afterwards to distinguish the new turn from old answers.
+appId: com.asidefm.app.dev
+---
+- launchApp
+- tapOn:
+    id: public-library
+- tapOn:
+    id: episode-mobile-sample
+- tapOn:
+    id: question
+- inputText: ${QUESTION}
+- tapOn:
+    id: send-question
+- extendedWaitUntil:
+    visible: ${QUESTION}
+    timeout: 20000
+- extendedWaitUntil:
+    visible: A short answer
+    timeout: 20000
+- assertVisible: "Ask about what you heard…"
+- takeScreenshot: compact-composer-sent
+- tapOn:
+    id: close-question
+- assertVisible:
+    id: hold-to-talk
+- tapOn:
+    id: question
+- assertVisible: "Ask about what you heard…"
+- tapOn:
+    id: close-question

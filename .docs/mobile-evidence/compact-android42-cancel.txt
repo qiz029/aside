@@ -1,0 +1,11 @@
+Running on emulator-5554
+ > Flow cancel-capture
+Swiping in UP direction on id: hold-to-talk... COMPLETED
+Assert that "Play" is visible... COMPLETED
+Assert that "Recording.*|Connecting.*|Transcribing.*" is not visible... COMPLETED
+Take screenshot capture-cancelled... COMPLETED
+Press Home key... COMPLETED
+Launch app "com.asidefm.app.dev" without stopping app... COMPLETED
+Wait for animation to end... COMPLETED
+Assert that "Play" is visible... COMPLETED
+Take screenshot cancelled-foreground... COMPLETED

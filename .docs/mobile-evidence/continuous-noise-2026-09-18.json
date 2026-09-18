@@ -1,0 +1,111 @@
+{
+  "date": "2026-09-18",
+  "runtimeSource": "b685f13d5bedb87fee053d2e3ce7195f71867a6c",
+  "verifiedSource": "b685f13",
+  "upstream": "6164f99",
+  "agentPaidModelCalls": 0,
+  "agentEmailsSent": 0,
+  "unitTests": 406,
+  "typesAndBoundaries": "passed",
+  "cloudflare": "both Web and mobile sideband regressions passed",
+  "ci": {
+    "url": "https://github.com/qiz029/aside/actions/runs/35320848578",
+    "conclusion": "success"
+  },
+  "web": {
+    "fullRunPassed": 69,
+    "fullRunTotal": 70,
+    "initialFailure": "obsolete assertion requiring no spoken auto-resume",
+    "testOnlyCorrection": "assert upstream countdown, then click explicit hold and verify no resume",
+    "focusedRerun": "passed",
+    "productSourceMatchesUpstream": true,
+    "latestAffectedVoiceRun": {
+      "passed": 23,
+      "source": "b685f13"
+    },
+    "fullRunSource": "5dbcfe2 with test-only correction cb5774a"
+  },
+  "mobilePolicy": {
+    "speechYield": "duck at 0.15 until admission",
+    "defaultFollowupMs": 3000,
+    "longAnswerMinimumMs": 8000,
+    "requiresNativeDrainAndMatchingFinalAnswer": true,
+    "nonFinalToolProgressCannotFinish": true,
+    "temporaryBargeInHoldClearsOnNextAnswer": true,
+    "explicitUserHoldPersists": true,
+    "pendingDecisionExpiryMs": 2000,
+    "noiseExpiryPreservesNativeCompletionGuards": true
+  },
+  "native": {
+    "ios": {
+      "fixtureBuild": 38,
+      "samples": 243,
+      "sampleIntervalMs": 200,
+      "inputFrames": 4,
+      "externalModels": "deterministic fixture",
+      "nativeDrainBeforeCountdown": true,
+      "observedShortWaitMs": 2934,
+      "observedLongWaitMs": 8050,
+      "afterCompletionDuplicateInHistory": false,
+      "podcastAnswerOverlap": false,
+      "ignoredSpeechAndAnchoredFollowups": "passed",
+      "microphoneClosedAfterChecks": true
+    },
+    "android": {
+      "fixtureBuild": 38,
+      "samples": 251,
+      "sampleIntervalMs": 200,
+      "inputFrames": 12,
+      "externalModels": "deterministic fixture",
+      "nativeDrainBeforeCountdown": true,
+      "observedShortWaitMs": 3273,
+      "observedLongWaitMs": 8233,
+      "afterCompletionDuplicateInHistory": false,
+      "podcastAnswerOverlap": false,
+      "ignoredSpeechAndAnchoredFollowups": "passed",
+      "microphoneClosedAfterChecks": true
+    }
+  },
+  "iosRelease": {
+    "build": 39,
+    "nativeAndExpoVersionsMatch": true,
+    "signatureVerified": true,
+    "installed": true,
+    "launched": true,
+    "apiUrl": "https://asidefm.com",
+    "testApi": false,
+    "ota": false,
+    "temporaryDiagnosticHelper": false
+  },
+  "androidRelease": {
+    "build": 19,
+    "id": "18115024-dfe0-4a7e-8671-4b38389d64ad",
+    "status": "FINISHED",
+    "url": "https://expo.dev/accounts/jiahangzhang/projects/aside/builds/18115024-dfe0-4a7e-8671-4b38389d64ad",
+    "apkUrl": "https://expo.dev/artifacts/eas/uzjmQNbKDXrVYWOmNMmD2HZp1mLKCN0ZUuO0FVXLYmY.apk",
+    "sha256": "740a167a733f6538f5ff818e625b2d623ad86657163cde152448ef379d785dd5",
+    "signerCertificateSha256": "a1145c78a613303fc04edb9b6352d7a00ffa0b6c971ea59a03f50798df9e597f",
+    "package": "com.asidefm.app",
+    "upgradeFrom": 18,
+    "upgradeInstalled": true,
+    "readOnlyProductionUi": "real catalogue, transcript and Account passed; test marker absent",
+    "apiUrl": "https://asidefm.com",
+    "testApi": false,
+    "ota": false,
+    "temporaryDiagnosticHelper": false
+  },
+  "production": {
+    "version": "3cc34209-2d82-4e88-8c5e-a0dedc7beda5",
+    "smoke": "website Origin, mobile email routing and Bearer validation passed",
+    "containers": "existing image retained",
+    "predecessor": "6c57ab56-114b-4bb8-9b19-ba30b1ae7755",
+    "predecessorAuthorChecked": true,
+    "predecessorSourceIncluded": true
+  },
+  "openItems": [
+    "Unfinished-answer duplicate supplier audio remains unresolved; both build-34 probes heard it. See continuous-barge-2026-09-18.json. No per-reply PCM ownership mechanism was introduced by the subsequent merges.",
+    "Physical natural continuation, local barge-in quality, headset/call interruption and visible iOS lock-screen card remain acceptance checks.",
+    "Ad Hoc/TestFlight paid signing acceptance awaits Apple account approval.",
+    "A deployment from main without PR #29 can remove its unmerged mobile backend policy; production provenance is recorded here."
+  ]
+}

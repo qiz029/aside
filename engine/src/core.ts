@@ -1,3 +1,4 @@
+export { normalizeSpokenText, matchesSpokenText } from "./spoken-text.js";
 export type Voice = "masculine" | "feminine" | "unknown";
 export const MAX_AUDIO_DURATION_MS = 5 * 60 * 60 * 1000;
 export const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;

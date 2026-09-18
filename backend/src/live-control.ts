@@ -43,6 +43,7 @@ export class LiveControl {
       },
       control.debug,
       callLimit,
+      control.client === "mobile",
     );
   }
   private eventTypes = new Set<string>();

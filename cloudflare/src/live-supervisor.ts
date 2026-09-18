@@ -110,7 +110,14 @@ export class LiveSupervisor extends DurableObject<Env> {
         analysis,
         atMs,
         history,
-        control ? { trial: !accountId } : undefined,
+        control
+          ? {
+              trial: !accountId,
+              ...(control.client === "mobile"
+                ? { player: control.player }
+                : {}),
+            }
+          : undefined,
       );
       state.session = result.session.id;
       // Connection creation must not consume the listener's session allowance.

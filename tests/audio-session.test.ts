@@ -17,6 +17,75 @@ function fixture() {
   });
   return { coordinator, events };
 }
+test("enabling conversation during playback does not turn category-change pauses into user stops", async () => {
+  const transport = new NativePlaybackEvents();
+  const actions: (string | null)[] = [];
+  let playing = false;
+  const c = new AudioSessionCoordinator({
+    configure: async () => {
+      playing = false;
+      actions.push(
+        transport.observe({ playing, isLoaded: true, isBuffering: false }),
+      );
+    },
+    activate: async () => {},
+  });
+  c.bindPodcast({
+    pause: () => {
+      transport.requestedPause();
+      playing = false;
+    },
+    resume: () => {
+      transport.requestedPlay();
+      playing = true;
+    },
+  });
+  await c.playPodcast();
+  transport.observe({ playing, isLoaded: true, isBuffering: false });
+  const owner = Symbol();
+  await c.listen(owner);
+  assert.equal(playing, true);
+  transport.observe({ playing, isLoaded: true, isBuffering: false });
+  await c.finishQuestion(owner);
+  assert.equal(playing, true);
+  assert.ok(actions.every((action) => action === null));
+  transport.observe({ playing, isLoaded: true, isBuffering: false });
+  assert.equal(
+    transport.observe({ playing: false, isLoaded: true, isBuffering: false }),
+    "pause",
+    "a later real system pause is still honored",
+  );
+});
+
+test("a user pause during category change prevents the automatic playback restore", async () => {
+  let release!: () => void;
+  let block = false,
+    resumed = 0;
+  const c = new AudioSessionCoordinator({
+    configure: async () => {
+      if (block)
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+    },
+    activate: async () => {},
+  });
+  c.bindPodcast({
+    pause: () => {},
+    resume: () => {
+      resumed++;
+    },
+  });
+  await c.playPodcast();
+  resumed = 0;
+  block = true;
+  const enabling = c.listen(Symbol());
+  await new Promise((resolve) => setImmediate(resolve));
+  await c.pausePodcast();
+  release();
+  await enabling;
+  assert.equal(resumed, 0);
+});
 test("pausing a podcast cannot release a newly acquired microphone", async () => {
   const { coordinator: c, events } = fixture();
   await c.playPodcast();
@@ -182,4 +251,85 @@ test("a delayed playing event after explicit pause cannot restart playback", () 
     events.observe({ playing: true, isLoaded: true, isBuffering: false }),
     "play",
   );
+});
+
+test("continuous input survives podcast duck/pause/resume without reactivating the audio session", async () => {
+  const events: string[] = [];
+  const c = new AudioSessionCoordinator({
+    configure: async (recording, continuous) => {
+      events.push(`configure:${recording}:${continuous}`);
+    },
+    activate: async (active) => {
+      events.push(`active:${active}`);
+    },
+    enableInput: async (input) => {
+      events.push(`input:${input}`);
+    },
+    enableAnswer: async (answer) => {
+      events.push(`answer:${answer}`);
+    },
+  });
+  await c.playPodcast();
+  const voice = Symbol();
+  await c.listen(voice);
+  assert.deepEqual(events.slice(-6), [
+    "answer:false",
+    "input:false",
+    "configure:true:true",
+    "active:true",
+    "input:true",
+    "answer:true",
+  ]);
+  events.length = 0;
+  await c.pausePodcast();
+  await c.answer(voice);
+  await c.playPodcast();
+  assert.deepEqual(
+    events,
+    [],
+    "no session category change in a continuous conversation",
+  );
+  await c.finishQuestion(voice);
+  assert.deepEqual(events, [
+    "answer:false",
+    "input:false",
+    "configure:false:false",
+    "active:true",
+  ]);
+});
+
+test("background/close during continuous preparation cannot activate capture late", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const inputs: boolean[] = [];
+  const c = new AudioSessionCoordinator({
+    configure: async (_recording, continuous) => {
+      if (continuous) await gate;
+    },
+    activate: async () => {},
+    enableInput: async (enabled) => {
+      inputs.push(enabled);
+    },
+  });
+  const owner = Symbol();
+  const pending = c.listen(owner);
+  await new Promise((resolve) => setImmediate(resolve));
+  const close = c.finishQuestion(owner);
+  release();
+  await pending;
+  await close;
+  assert.equal(inputs.includes(true), false);
+});
+
+test("late continuous cleanup cannot close a replacement microphone", async () => {
+  const { coordinator: c, events } = fixture();
+  const old = Symbol(),
+    next = Symbol();
+  await c.listen(old);
+  await c.listen(next);
+  events.length = 0;
+  await c.finishQuestion(old);
+  assert.deepEqual(events, []);
 });

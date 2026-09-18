@@ -1,5 +1,5 @@
 import type { Analysis, Turn } from "@aside/engine/core";
-import type { LiveResult } from "@aside/engine/contracts";
+import type { LiveResult, LivePlayerState } from "@aside/engine/contracts";
 import type { AnalysisPort } from "@aside/engine/server";
 import type { QuestionAnswerer } from "./question-service.js";
 import type { LiveSideband } from "./live-sideband.js";
@@ -16,7 +16,7 @@ export interface VoiceProvider {
     atMs: number,
     history?: Turn[],
     /** Present under server voice control: the session delegates to the question model. */
-    control?: { trial: boolean },
+    control?: { trial: boolean; player?: LivePlayerState },
   ): Promise<LiveResult>;
 }
 export interface BackendServices {

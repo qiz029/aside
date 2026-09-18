@@ -1,0 +1,74 @@
+{
+  "source": "145464afff5e6d42ca407a8d046dbc017f29327c",
+  "physicalIos": {
+    "build": 30,
+    "diagnostic": true,
+    "output": "built-in speaker",
+    "userConfirmed": "speaker questions work",
+    "clientProgrammeContextAppendsInRetainedTrace": 0,
+    "sessionClosed": true,
+    "supplierLiveSeconds": 89,
+    "nativeOutputObserved": true,
+    "inputConversionFailures": 0,
+    "limitations": [
+      "Retained trace begins 17.2 seconds into session; bounded diagnostic log omits earliest events.",
+      "One continuation utterance was interpreted as explanation; an explicit playback request subsequently resumed.",
+      "One input had two backend engage/answered pairs; this test does not establish duplicate-free delegation.",
+      "Raw user transcript and session identifiers are not committed."
+    ]
+  },
+  "localVerification": {
+    "unitTests": 380,
+    "typesAndBoundaries": "passed",
+    "cloudflareSideband": "passed",
+    "iosFixtureBuild": 30,
+    "nativeContinuous": "passed after restoring normal Xcode simulator signing; unsigned test package could not access keychain",
+    "iosTransport": {
+      "ok": true,
+      "delegation": "fixture-12",
+      "inputFrames": 8,
+      "outputSamples": 16320
+    },
+    "iosDrainedBeforeCountdown": true,
+    "observedCountdownToResumeMs": 2968,
+    "android": {
+      "build": 31,
+      "nativeContinuous": "passed",
+      "transport": {
+        "ok": true,
+        "delegation": "fixture-13",
+        "inputFrames": 21,
+        "outputSamples": 26880
+      },
+      "drainedBeforeCountdown": true,
+      "observedCountdownToResumeMs": 3467
+    }
+  },
+  "agentPaidModelCalls": 0,
+  "ci": "https://github.com/qiz029/aside/actions/runs/35315435658",
+  "normalIos": {
+    "build": 31,
+    "source": "9d7acb198788f5ea8afc61f89633d8240a70288a",
+    "installed": true,
+    "launched": true,
+    "signatureVerified": true,
+    "apiUrl": "https://asidefm.com",
+    "testApi": false,
+    "temporaryDiagnosticCode": false,
+    "deviceDiagnosticFileCleared": true
+  },
+  "androidDistribution": {
+    "build": 15,
+    "source": "9d7acb198788f5ea8afc61f89633d8240a70288a",
+    "buildId": "2a22f81b-56ad-4cf4-91e2-b3a9aa77f3d8",
+    "buildUrl": "https://expo.dev/accounts/jiahangzhang/projects/aside/builds/2a22f81b-56ad-4cf4-91e2-b3a9aa77f3d8",
+    "apkUrl": "https://expo.dev/artifacts/eas/9g6Mr-n3YKcA8rk0lc6OeZtZzl8b0Vr-lxOTr1XvVXo.apk",
+    "sha256": "b1c1d0faebbd67c3fdeaf680392d62701c18ef150944fb3fe899ef44f0f6d640",
+    "signerCertificateSha256": "a1145c78a613303fc04edb9b6352d7a00ffa0b6c971ea59a03f50798df9e597f",
+    "upgradeInstalled": true,
+    "apiUrl": "https://asidefm.com",
+    "testApi": false,
+    "temporaryDiagnosticCode": false,
+    "readOnlyOnlineUi": "passed: actual public library, transcript and account page; no fixture marker, email or model call"
+  }
+}

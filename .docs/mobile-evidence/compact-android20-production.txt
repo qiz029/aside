@@ -1,0 +1,16 @@
+Running on emulator-5554
+ > Flow online-public
+Launch app "${APP_ID}"... COMPLETED
+Assert that id: tab-library is visible... COMPLETED
+Tap on id: tab-library... COMPLETED
+Tap on id: public-library... COMPLETED
+Assert that id: episode-${EPISODE_ID} is visible... COMPLETED
+Assert that id: episode-mobile-sample is not visible... COMPLETED
+Take screenshot online-library... COMPLETED
+Tap on id: episode-${EPISODE_ID}... COMPLETED
+Assert that id: transcript is visible... COMPLETED
+Take screenshot online-episode... COMPLETED
+Tap on id: back-library... COMPLETED
+Tap on id: tab-account... COMPLETED
+Assert that id: test-environment is not visible... COMPLETED
+Take screenshot online-account... COMPLETED

@@ -20,6 +20,7 @@ import { z } from "zod";
 import type { QuestionTelemetry } from "./question-service.js";
 import { delegationInstructions } from "./dialogue-policy.js";
 import { LiveResponseTrigger } from "./live-response-trigger.js";
+import { SpokenAnswerVariants } from "./spoken-answer-variants.js";
 
 interface Ports {
   /** Push to the browser's NDJSON control stream. */
@@ -93,14 +94,19 @@ export class LiveDelegation {
   private contextAt = -1;
   private contextSentAt = Number.NEGATIVE_INFINITY;
   private contextTimer?: () => void;
+  private conversationKey = "";
+  private answeredInput?: { turnId: string; text: string };
+  private answerVariants?: SpokenAnswerVariants;
   constructor(
     private player: LivePlayerState,
     private analysis: Analysis,
     private ports: Ports,
     private debug = false,
     private limit = 30,
+    private mobile = false,
   ) {
     this.contextAt = this.passageAt(player.positionMs);
+    this.conversationKey = this.contextKey();
     this.responseTrigger = new LiveResponseTrigger({
       now: ports.now,
       after: ports.after,
@@ -120,6 +126,10 @@ export class LiveDelegation {
     switch (event.type) {
       case "session.input_transcript.delta":
         this.transcript(event);
+        return;
+      case "session.output_transcript.delta":
+        if (typeof event.delta === "string" && this.canObserveVariants())
+          this.answerVariants?.observe(event.delta);
         return;
       case "session.delegation.created":
         this.created(event);
@@ -296,6 +306,7 @@ export class LiveDelegation {
     this.text = this.separators = "";
     this.input = undefined;
     this.inputStartMs = undefined;
+    this.answerVariants = undefined;
   }
   /** Which utterance an event belongs to, so the browser can attribute Live captions. */
   private marker(delegation?: Delegation) {
@@ -334,6 +345,11 @@ export class LiveDelegation {
     if (delegation?.target && delegation.target !== "responses") return;
     const id = delegation?.id ?? crypto.randomUUID();
     if (this.retiredDelegations.has(id)) return;
+    if (this.mobile && this.alreadyAnswered()) {
+      if (this.canObserveVariants()) this.answerVariants?.start(id);
+      this.retire(id);
+      return;
+    }
     // A local pause already opened this utterance's delegation record.
     if (this.delegation?.id.startsWith("local:") && !this.delegation.engaged)
       this.delegation.id = id;
@@ -363,6 +379,15 @@ export class LiveDelegation {
     if (event.type === "response.completed" || event.type === "response.done") {
       const response = event.response as Record<string, any> | undefined;
       if (response?.usage) this.record(response);
+    }
+    if (id && this.retiredDelegations.has(id) && !this.answerVariants?.has(id))
+      return;
+    if (this.mobile && this.alreadyAnswered()) {
+      if (id) {
+        if (this.canObserveVariants()) this.answerVariants?.receive(id, event);
+        this.retire(id);
+      }
+      return;
     }
     if (id && this.retiredDelegations.has(id)) return;
     const starting = !this.delegation || (id && this.delegation.id !== id);
@@ -428,6 +453,7 @@ export class LiveDelegation {
       case "response.completed":
       case "response.done": {
         if (delegation.answer.trim() && delegation.engaged) {
+          const answer = delegation.answer;
           console.log("Aside voice delegated answer", {
             characters: delegation.answer.length,
             sources: delegation.sources.length,
@@ -440,6 +466,23 @@ export class LiveDelegation {
             final: !delegation.hasTools,
           });
           delegation.answer = "";
+          if (this.mobile && !delegation.hasTools) {
+            this.answeredInput = {
+              turnId: delegation.input.turnId,
+              text: delegation.text,
+            };
+            this.answerVariants = new SpokenAnswerVariants(
+              {
+                type: "answered",
+                decisionId: delegation.engaged,
+                answer,
+                sources: delegation.sources,
+                final: true,
+              },
+              (event) => this.ports.emit(event),
+            );
+            this.retire(delegation.id);
+          }
         } else if (!delegation.engaged && !delegation.ignored) {
           // A control-only turn: the voice's own acknowledgement, if any, must
           // not surface later at the front of the next real answer.
@@ -559,6 +602,22 @@ export class LiveDelegation {
       reasoningTokens: usage.output_tokens_details?.reasoning_tokens ?? 0,
     });
   }
+  private alreadyAnswered() {
+    return (
+      this.answeredInput?.turnId === this.input?.turnId &&
+      this.answeredInput?.text === this.text
+    );
+  }
+  private canObserveVariants() {
+    if (!this.mobile || !this.alreadyAnswered()) return false;
+    const assistant = this.player.assistant;
+    return (
+      !assistant ||
+      (assistant.decisionId === this.delegation?.engaged &&
+        assistant.state !== "finished" &&
+        assistant.state !== "interrupted")
+    );
+  }
   private engage(delegation: Delegation, text: string) {
     const decisionId = crypto.randomUUID();
     delegation.engaged = decisionId;
@@ -589,9 +648,22 @@ export class LiveDelegation {
       );
       return;
     }
+    const version = this.player.version;
+    const id = delegation.id;
+    // Awaiting a player acknowledgement can outlive this utterance. Its tool
+    // result still settles the pending call, but cannot open audio or ask the
+    // backend to continue an answer the mobile listener has replaced.
+    const isCurrent = () =>
+      !this.mobile ||
+      (!this.closed &&
+        this.player.version === version &&
+        this.delegation === delegation &&
+        delegation.id === id &&
+        !this.retiredDelegations.has(id) &&
+        this.input?.turnId === delegation.input.turnId);
     let output: unknown;
     try {
-      output = await this.execute(delegation, name, args);
+      output = await this.execute(delegation, name, args, isCurrent);
     } catch (error) {
       output = {
         error: error instanceof Error ? error.message : "Tool failed",
@@ -613,12 +685,14 @@ export class LiveDelegation {
         output: JSON.stringify(output),
       },
     });
-    this.ports.send({ type: "response.create", event_id: crypto.randomUUID() });
+    if (isCurrent())
+      this.ports.send({ type: "response.create", event_id: crypto.randomUUID() });
   }
   private async execute(
     delegation: Delegation,
     name: string,
     args: string,
+    isCurrent: () => boolean,
   ): Promise<unknown> {
     const parsed: unknown = JSON.parse(args || "{}");
     const atMs = delegation.input.positionMs;
@@ -674,7 +748,12 @@ export class LiveDelegation {
           tools: ["control_podcast"],
         });
       }
-      if (followUpQuestion && !delegation.engaged && !delegation.ignored)
+      if (
+        isCurrent() &&
+        followUpQuestion &&
+        !delegation.engaged &&
+        !delegation.ignored
+      )
         this.engage(delegation, followUpQuestion);
       return {
         accepted: result.applied,
@@ -814,12 +893,14 @@ export class LiveDelegation {
     }
     this.refreshContext();
   }
-  /** The backend's transcript window follows playback, at most once per passage and every 3 s. */
+  /** Passage updates coalesce for 3 s; mobile conversation transitions reach the backend immediately. */
   private refreshContext() {
     const at = this.passageAt(this.player.positionMs);
-    if (at === this.contextAt) return;
+    const key = this.contextKey();
+    const conversationChanged = this.mobile && key !== this.conversationKey;
+    if (at === this.contextAt && !conversationChanged) return;
     const due = this.contextSentAt + 3000 - this.ports.now();
-    if (due > 0) {
+    if (due > 0 && !conversationChanged) {
       this.contextTimer ??= this.ports.after(due, () => {
         this.contextTimer = undefined;
         this.refreshContext();
@@ -827,6 +908,7 @@ export class LiveDelegation {
       return;
     }
     this.contextAt = at;
+    this.conversationKey = key;
     this.contextSentAt = this.ports.now();
     this.ports.send({
       type: "session.update",
@@ -838,9 +920,28 @@ export class LiveDelegation {
             instructions: delegationInstructions(
               this.analysis,
               this.player.positionMs,
+              this.mobile ? this.player : undefined,
             ),
           },
         },
+      },
+    });
+  }
+  private contextKey() {
+    if (!this.mobile) return "";
+    // Position, sequence and streaming caption fragments must not create
+    // repeated updates at the native player's status cadence.
+    const { wasPlaying, audibleSource, playback, config, assistant } =
+      this.player;
+    return JSON.stringify({
+      wasPlaying,
+      audibleSource,
+      playback,
+      config,
+      assistant: assistant && {
+        decisionId: assistant.decisionId,
+        state: assistant.state,
+        ...(assistant.state === "finished" ? { text: assistant.text } : {}),
       },
     });
   }

@@ -1,0 +1,50 @@
+appId: com.asidefm.app.dev
+---
+- launchApp
+- tapOn:
+    id: public-library
+    waitToSettleTimeoutMs: 1000
+- tapOn:
+    id: episode-mobile-sample
+    waitToSettleTimeoutMs: 1000
+- tapOn:
+    id: player-options
+- tapOn:
+    id: followup-0
+- tapOn:
+    id: close-player-options
+- longPressOn:
+    id: hold-to-talk
+- extendedWaitUntil:
+    visible: A short answer
+    timeout: 45000
+- extendedWaitUntil:
+    visible:
+      id: manual-resume-hint
+    timeout: 10000
+- assertVisible: Play
+- assertNotVisible: "Resuming in.*"
+# Give the real RTC output time to finish, then verify silence keeps the
+# episode paused beyond the former 3/8-second auto-resume windows.
+- evalScript: ${output.answerWaitStarted = Date.now()}
+- repeat:
+    while:
+      true: ${Date.now() - output.answerWaitStarted < 10000}
+    commands:
+      - assertVisible: Play
+      - assertNotVisible: "Resuming in.*"
+- takeScreenshot: voice-waiting-for-listener
+- tapOn:
+    id: resume
+- extendedWaitUntil:
+    visible: Pause
+    timeout: 10000
+- assertVisible: A short answer
+- takeScreenshot: voice-explicit-resume
+
+- tapOn:
+    id: player-options
+- tapOn:
+    id: followup-3000
+- tapOn:
+    id: close-player-options

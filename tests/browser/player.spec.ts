@@ -665,8 +665,12 @@ for (const manual of [false]) {
     await page.evaluate(() => {
       (window as any).asideAnswerGain.gain.value = 0;
     });
-    // Quiet output is not a reply boundary: the spoken conversation stays
-    // held until the listener asks to continue, with no countdown offered.
+    // Main now starts a quiet window after the backend's final answer.
+    // The listener can still hold that window until an explicit continuation.
+    await expect(page.locator(".followup-window")).toContainText(
+      "秒后继续播放",
+    );
+    await page.getByRole("button", { name: "先别继续" }).click();
     await expect(page.locator(".followup-window")).toContainText(
       "准备好了，再继续听",
     );

@@ -31,3 +31,69 @@ Record actual simulator screenshots and flow reports. Keep unverified device/sig
 Manual scrolling temporarily suspends transcript auto-follow. A labeled action returns to the current passage; advancing playback must never repeatedly pull a reader away from the section they chose.
 
 At accessibility text sizes, content remains scalable and scrollable. The brand, navigation labels and transport labels have bounded scaling so the controls retain space for reading; the upload page scrolls to keep file selection and cancellation reachable on an iPhone SE.
+
+## Current review and skill shortlist — 2026-09-18
+
+The current [iOS conversation](mobile-screenshots/current-ios-restored-conversation.png)
+and [Android conversation](mobile-screenshots/continuous-android-latest-answer.png)
+show distinct reading, header and transport surfaces. Primary controls are readable.
+Visual acceptance remains open: the bottom area simultaneously exposes transport,
+continuation actions, continuous listening, text entry and hold-to-talk. In the
+Android continuation state it takes roughly half the screen. Large message padding
+also limits how much conversation is visible. These are hierarchy and density
+problems; changing accent colors alone will not resolve them. A future design pass
+should prioritize the active listening state and disclose secondary input methods
+on demand, while keeping an obvious pause and microphone-off action available.
+This review makes no product UI or navigation changes.
+
+Recommended references, inspected at their actual source:
+
+- [Expo native UI](https://github.com/expo/skills/blob/main/plugins/expo/skills/expo-native-ui/SKILL.md): platform controls, semantic surfaces, keyboard access and reachable actions. Use it to evaluate native behavior and visual hierarchy.
+- [Expo design system](https://github.com/expo/skills/blob/main/plugins/expo/skills/expo-design-system/SKILL.md): audit existing theme values, repeated components and their interaction states. Extend Aside's existing theme instead of adding a competing theme.
+
+Both belong to the [official Expo repository](https://github.com/expo/skills), which
+had 2,539 stars when checked. The [older `building-native-ui` listing](https://skills.sh/expo/skills/building-native-ui)
+reports 59.2K installs; that count is not a verified install count for either current
+skill name. Current-name counts were unavailable. Popularity supports discovery,
+but does not establish the quality of an Aside screen.
+
+Compatibility matters: Aside currently uses Expo SDK 54 and its own navigation.
+The current native UI skill includes SDK 56+ `@expo/ui` and Expo Router recipes.
+Do not apply those imports or migrate navigation as part of a visual review.
+The app's custom PCM and WebRTC modules require native builds; Expo Go is not an
+acceptance environment for this app.
+
+Optional targeted installation, following the repository's skills CLI syntax:
+
+```sh
+npx skills@latest add expo/skills --skill expo-native-ui --skill expo-design-system
+```
+
+No skill or plugin was installed during this review.
+
+## Compact question tools and accessibility correction — 2026-09-18
+
+The follow-up implementation replaces the idle status heading, permanently open
+text field and full-width recording row with one question toolbar. Hands-free
+conversation is primary; a labeled hold control and a text-entry icon remain
+directly reachable. The composer opens on demand and retains an unsent draft when
+closed. Active microphone status and Stop remain visible while typing. Recording
+guidance appears above a fixed-size hold target, preserving its position as capture
+starts. Continuation status and actions share one adaptive row. Completed messages
+have less padding, leaving more of the conversation visible.
+
+The maximum iOS accessibility text size revealed additional problems. The library's
+fixed heading and filters left too little list space to reach a complete episode
+card. They now scroll with the library. The player eyebrow and transport timestamps
+use bounded scaling as navigation metadata. Reading text retains system scaling.
+The options sheet has a bounded height, a persistent title/Done row, and scrollable
+content so the last option can be reached without losing the close action.
+
+Build 40 exercised continuous activation, native RTC, continuation and completed-answer
+replay suppression on both platforms. Build 42 includes the subsequent library/large-text corrections:
+Android normal-size and iPhone SE maximum-size UI flows pass, including actual
+setting selection, draft restoration, keyboard access and both languages. iOS's
+unique typed submission, real manual capture, ten-second hold and explicit resume
+also pass. Package delivery and remaining verification are tracked in the delivery
+record; these local fixtures are not distributed production builds. The review's
+remaining live-audio boundary and physical-device gates remain open.

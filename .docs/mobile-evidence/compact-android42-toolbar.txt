@@ -1,0 +1,27 @@
+Running on emulator-5554
+ > Flow aside-voice-toolbar-check
+Launch app "com.asidefm.app.dev"... COMPLETED
+Tap on id: public-library... COMPLETED
+Tap on id: episode-mobile-sample... COMPLETED
+Tap on id: toggle-conversation... COMPLETED
+Assert that "Listening ? just speak" is visible... COMPLETED
+Run /Users/jiahangzhang/Documents/ChatGPT/aside/mobile/tests/voice-toolbar.yaml...
+  Assert that "Listening ? just speak" is visible... COMPLETED
+  Tap on id: question... COMPLETED
+  Input text A draft while listening... COMPLETED
+  Assert that "Listening ? just speak" is visible... COMPLETED
+  Assert that "Stop" is visible... COMPLETED
+  Take screenshot voice-toolbar-keyboard... COMPLETED
+  Tap on id: close-question... COMPLETED
+  Tap on id: question... COMPLETED
+  Assert that "A draft while listening" is visible... COMPLETED
+  Erase text... COMPLETED
+  Tap on id: toggle-conversation... COMPLETED
+  Assert that "Listening ? just speak" is not visible... COMPLETED
+  Assert that id: close-question is visible... COMPLETED
+  Take screenshot voice-toolbar-keyboard-stopped... COMPLETED
+  Tap on id: close-question... COMPLETED
+  Assert that "Talk hands-free" is visible... COMPLETED
+  Assert that id: hold-to-talk is visible... COMPLETED
+  Take screenshot voice-toolbar-stopped... COMPLETED
+Run /Users/jiahangzhang/Documents/ChatGPT/aside/mobile/tests/voice-toolbar.yaml... COMPLETED

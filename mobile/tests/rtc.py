@@ -3,6 +3,7 @@ import asyncio
 import time
 import uuid
 import json
+import os
 from fractions import Fraction
 
 import numpy as np
@@ -11,6 +12,7 @@ from aiortc import AudioStreamTrack, RTCConfiguration, RTCPeerConnection, RTCSes
 from av import AudioFrame
 
 peers = set()
+sessions = {}
 
 
 class AnswerTrack(AudioStreamTrack):
@@ -40,9 +42,12 @@ class AnswerTrack(AudioStreamTrack):
 async def live(request):
     data = await request.json()
     peer = RTCPeerConnection(RTCConfiguration(iceServers=[]))
+    session_id = str(uuid.uuid4())
     peers.add(peer)
     input_ready = asyncio.Event()
     pending = set()
+    state = {"peer": peer, "inputReady": input_ready, "inputFrames": 0, "channel": None}
+    sessions[session_id] = state
 
     def spawn(coro):
         task = asyncio.create_task(coro)
@@ -55,12 +60,14 @@ async def live(request):
             try:
                 while True:
                     await audio.recv()
+                    state["inputFrames"] += 1
                     input_ready.set()
             except Exception:
                 pass
         spawn(consume())
 
     track = AnswerTrack()
+    state["track"] = track
     peer.addTrack(track)
 
     @peer.on("connectionstatechange")
@@ -70,9 +77,11 @@ async def live(request):
                 task.cancel()
             await peer.close()
             peers.discard(peer)
+            sessions.pop(session_id, None)
 
     @peer.on("datachannel")
     def channel_opened(channel):
+        state["channel"] = channel
         async def ready():
             while channel.readyState == "connecting":
                 await asyncio.sleep(0.02)
@@ -103,7 +112,24 @@ async def live(request):
 
     await peer.setRemoteDescription(RTCSessionDescription(sdp=data["transport"]["sdp"], type="offer"))
     await peer.setLocalDescription(await peer.createAnswer())
-    return web.json_response({"session": {"id": str(uuid.uuid4())}, "transport": {"sdp": peer.localDescription.sdp}})
+    return web.json_response({"session": {"id": session_id}, "transport": {"sdp": peer.localDescription.sdp}})
+
+
+async def control(request):
+    data = await request.json()
+    state = sessions.get(data.get("sessionId"))
+    if not state or not state["channel"] or state["channel"].readyState != "open":
+        return web.json_response({"error": "Session is not ready"}, status=409)
+    if data["action"] == "event":
+        state["channel"].send(json.dumps(data["event"]))
+    elif data["action"] == "answer":
+        try:
+            await asyncio.wait_for(state["inputReady"].wait(), 2)
+        except asyncio.TimeoutError:
+            return web.json_response({"error": "No input media clock"}, status=409)
+        state["track"].until = time.monotonic() + min(10, data.get("duration", 2))
+        state["channel"].send(json.dumps({"type": "session.output_transcript.delta", "delta": data["text"]}))
+    return web.json_response({"inputFrames": state["inputFrames"], "outputSamples": state["track"].samples})
 
 
 async def shutdown(_app):
@@ -112,6 +138,7 @@ async def shutdown(_app):
 
 app = web.Application()
 app.router.add_post("/live", live)
+app.router.add_post("/control", control)
 app.on_shutdown.append(shutdown)
 if __name__ == "__main__":
-    web.run_app(app, host="127.0.0.1", port=4312)
+    web.run_app(app, host="127.0.0.1", port=int(os.environ.get("PORT", "4312")))

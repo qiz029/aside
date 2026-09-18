@@ -1,0 +1,73 @@
+{
+  "date": "2026-09-18",
+  "source": "7ed30db8baf35506f68e9925903917d22a45415f",
+  "main": "25e1621540515fd576d4dc006b4694b1759e5e73",
+  "ci": {
+    "url": "https://github.com/qiz029/aside/actions/runs/35323289839",
+    "conclusion": "success"
+  },
+  "checks": {
+    "localTests": 421,
+    "typesAndBoundaries": "passed",
+    "focusedCloudflareSidebandTests": 2,
+    "webProductMatchesMain": true
+  },
+  "scenario": "Two completed backend formulations; only the later formulation is spoken. Same admitted decision, updated completion metadata, native drain before continuation.",
+  "fixtureBuild": 38,
+  "modelOutput": "synthetic",
+  "agentPaidModelRequests": 0,
+  "agentEmailRequests": 0,
+  "native": [
+    {
+      "platform": "ios",
+      "rawEvidenceSha256": "3a3d738f240e9e6d2c910825f2963fee8d8351cf7d1986695970c5397c90ca3f",
+      "inputFrames": 17,
+      "outputSamples": 24960,
+      "observedWaitMs": 3001,
+      "samplingMs": 200,
+      "nativeDrainedBeforeCountdown": true,
+      "historyRoles": [
+        "user",
+        "assistant"
+      ],
+      "heardAnswerMatches": true,
+      "programmeReplyOverlap": false,
+      "completedAnswerReplayEnteredHistory": false,
+      "microphoneRetainedOnResume": true
+    },
+    {
+      "platform": "android",
+      "rawEvidenceSha256": "e3511bd95d6552e65e639eace6181144349932209e69ef0f533ba4dcc375bff6",
+      "inputFrames": 17,
+      "outputSamples": 24960,
+      "observedWaitMs": 3101,
+      "samplingMs": 200,
+      "nativeDrainedBeforeCountdown": true,
+      "historyRoles": [
+        "user",
+        "assistant"
+      ],
+      "heardAnswerMatches": true,
+      "programmeReplyOverlap": false,
+      "completedAnswerReplayEnteredHistory": false,
+      "microphoneRetainedOnResume": true
+    }
+  ],
+  "production": {
+    "previousVersion": "99cfb905-8c75-41f5-ae4c-5866777f657a",
+    "version": "62fe977a-e6e6-42a2-ad06-dbf1febcb115",
+    "mediaRollout": "none",
+    "existingSecrets": "retained",
+    "authSmokeChecks": 4
+  },
+  "compatibleCandidates": {
+    "ios": 39,
+    "android": 19
+  },
+  "limitations": [
+    "Does not suppress two actually audible overlapping supplier replies.",
+    "Does not establish production intent accuracy or physical audio route behavior.",
+    "Physical natural continuation, barge-in quality, headset/call interruption and visible iOS lock-screen card await acceptance.",
+    "Paid Apple Ad Hoc/TestFlight signing remains pending."
+  ]
+}

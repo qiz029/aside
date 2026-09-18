@@ -2,6 +2,7 @@ import OpenAI, { toFile } from "openai";
 import { z } from "zod";
 import { liveStartupHistory } from "@aside/engine/server";
 import type { Analysis, Turn } from "@aside/engine/core";
+import type { LivePlayerState } from "@aside/engine/contracts";
 import type { QuestionModel, ModelReply } from "./question-model.js";
 import {
   ResponsesPreload,
@@ -233,18 +234,20 @@ export class InteractiveProvider implements QuestionModel {
     a: Analysis,
     atMs: number,
     history: Turn[] = [],
-    control?: { trial: boolean },
+    control?: { trial: boolean; player?: LivePlayerState },
   ) {
     const delegation = control
       ? {
           type: "responses",
           responses: {
             model: this.model,
-            instructions: delegationInstructions(a, atMs),
+            instructions: delegationInstructions(a, atMs, control.player),
             tools: questionTools.filter((tool) => tool.type !== "web_search"),
             tool_choice: "auto",
             parallel_tool_calls: false,
-            max_output_tokens: control.trial ? TRIAL_OUTPUT_TOKENS : OUTPUT_TOKENS,
+            max_output_tokens: control.trial
+              ? TRIAL_OUTPUT_TOKENS
+              : OUTPUT_TOKENS,
             reasoning: { effort: this.effort },
             service_tier: SERVICE_TIER,
           },

@@ -1,0 +1,29 @@
+# Run after extended continuous acceptance so the list contains a long answer.
+# QUESTION must be unique for this run; an old visible answer cannot pass it.
+appId: com.asidefm.app.dev
+---
+- launchApp
+- tapOn:
+    id: public-library
+- tapOn:
+    id: episode-mobile-sample
+- tapOn:
+    id: question
+- inputText: ${QUESTION}
+- tapOn:
+    id: send-question
+    waitToSettleTimeoutMs: 100
+- extendedWaitUntil:
+    visible: "^A short$"
+    timeout: 15000
+- assertVisible: ${QUESTION}
+- assertVisible: "Ask about what you heard…"
+# Old complete answers are still in history; wait for this request's stream.
+- extendedWaitUntil:
+    notVisible:
+      id: answer-stream
+    timeout: 45000
+- assertVisible: "^A short answer$"
+- assertVisible: ${QUESTION}
+- assertVisible: "Ask about what you heard…"
+- takeScreenshot: long-history-latest-answer

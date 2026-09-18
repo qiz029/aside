@@ -6,7 +6,10 @@ import {
   type ListeningMode,
   type VoicePort,
 } from "../frontend/src/listening-session.js";
-import { attention } from "@aside/player-runtime/listening-session";
+import {
+  attention,
+  type SessionOptions,
+} from "@aside/player-runtime/listening-session";
 import type { RuntimeClock } from "../frontend/src/runtime-clock.js";
 import type { VoiceCallbacks } from "@aside/player-runtime/ports";
 import type { PlayerBackend } from "../frontend/src/player-api.js";
@@ -48,9 +51,9 @@ class Clock implements RuntimeClock {
     this.time = end;
   }
 }
-const flush = async () => {
-  for (let i = 0; i < 8; i++) await Promise.resolve();
-};
+// Drain promise chains completely; adding a native timeout adapter must not
+// change how far a fixture thinks a serialized acknowledgement progressed.
+const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 const episode: Episode = {
   id: "test",
   title: "播客",
@@ -100,6 +103,8 @@ function setup(
   playerConfig?: Partial<PlayerConfig>,
   debugRecognition = false,
   server = false,
+  spokenResume: "quiet" | "verified" = "quiet",
+  options: Pick<SessionOptions, "speechYield" | "followupMs"> = {},
 ) {
   const clock = new Clock();
   const audio = {
@@ -264,6 +269,8 @@ function setup(
     mode,
     playerConfig,
     clock,
+    spokenResume,
+    ...options,
     voiceFactory(_mic, _config, cb, remote) {
       createLive = () => remote.create("mock");
       voiceCount++;
@@ -363,6 +370,66 @@ function setup(
     },
   };
 }
+
+test("mobile delegates live context to the server across transcript gaps and player actions", async (t) => {
+  const s = setup(
+    "auto",
+    undefined,
+    undefined,
+    false,
+    true,
+    "verified",
+  );
+  t.after(() => s.session.dispose());
+  s.session.start();
+  await flush();
+  // Reproduce native status callbacks in a gap between transcript passages.
+  // Previously undefined was compared with the stored -1 sentinel, appending
+  // the same programme text to GPT-Live on every 250 ms tick during speech.
+  for (let i = 0; i < 20; i++) {
+    s.audio.positionMs += 250;
+    s.clock.advance(250);
+    s.session.audioTick();
+    await flush();
+  }
+  s.session.seek(42000);
+  await flush();
+  assert.deepEqual(
+    s.commands.filter((c) => c.startsWith("thinking:")),
+    [],
+  );
+  assert.ok(
+    s.updates.length >= 5,
+    "backend still receives the moving playhead",
+  );
+  assert.equal(s.serverState.positionMs, 42000);
+  assert.equal(s.serverState.wasPlaying, false);
+  await s.session.dispose();
+});
+
+test("client context remains available for non-server automatic and manual questions", async (t) => {
+  for (const mode of ["auto", "manual"] as const) {
+    const s = setup(
+      mode,
+      undefined,
+      undefined,
+      false,
+      mode === "manual",
+      "verified",
+    );
+    t.after(() => s.session.dispose());
+    s.session.start();
+    if (mode === "manual") await s.session.beginManual();
+    await flush();
+    s.callbacks.onReady();
+    assert.ok(
+      s.commands.some(
+        (c) => c.startsWith("thinking:") && c.includes("已听原文"),
+      ),
+    );
+    await s.session.dispose();
+  }
+});
 
 test("loading a checkpoint publishes only its complete state to persistence subscribers", () => {
   const s = setup();
@@ -1400,7 +1467,11 @@ test("server stream owns voice decisions; frontend captions, delegation and VAD 
   s.clock.advance(2000);
   await flush();
   assert.equal(s.requests.length, 0);
-  assert.equal(s.audio.playing, false, "speech stops the podcast; the server decides what it was");
+  assert.equal(
+    s.audio.playing,
+    false,
+    "speech stops the podcast; the server decides what it was",
+  );
   s.push({
     type: "observing",
     version: s.serverState.version,
@@ -1539,8 +1610,13 @@ test("under server control the voice is never handed the podcast text, which it 
   client.session.dispose();
 });
 
-test("an early ignore that the backend overrules still becomes an answered question", async () => {
-  const s = setup("auto", undefined, undefined, false, true);
+for (const mobile of [false, true])
+test(`${mobile ? "mobile" : "Web"}: an early ignore that the backend overrules still becomes an answered question`, async () => {
+  const s = setup(
+    "auto", undefined, undefined, false, true,
+    mobile ? "verified" : "quiet",
+    { speechYield: mobile ? "duck" : "pause" },
+  );
   s.session.start();
   await flush();
   const input = { turnId: "server-turn", startMs: 0 };
@@ -1549,7 +1625,8 @@ test("an early ignore that the backend overrules still becomes an answered quest
   s.push({ type: "observing", version: s.serverState.version, input });
   s.push({ type: "classifying", version: s.serverState.version, input });
   await flush();
-  assert.equal(s.audio.playing, false, "speech stops the podcast");
+  assert.equal(s.audio.playing, mobile, "mobile ducks speech; Web pauses before admission");
+  if (mobile) assert.ok(s.audio.level > 0 && s.audio.level < 1);
   s.callbacks.onSpeech(false);
   s.push({
     type: "decision",
@@ -1637,7 +1714,11 @@ test("a delegated engage pauses the podcast, opens the reply window without clie
   s.callbacks.onOutput(false);
   await flush();
   assert.equal(s.session.getSnapshot().history.at(-1)?.role, "assistant");
-  assert.equal(s.session.getSnapshot().resumeSeconds, 3, "a finished answer opens the follow-up window");
+  assert.equal(
+    s.session.getSnapshot().resumeSeconds,
+    3,
+    "a finished answer opens the follow-up window",
+  );
   const stale = {
     type: "engage" as const,
     version: s.serverState.version + 5,
@@ -1734,33 +1815,35 @@ test("a cold first question answered through HTTP keeps its spoken history in a 
   );
 });
 
-test("barge-in also cuts a first-connection HTTP answer without a Live reply ID", async (t) => {
-  const s = setup("auto", undefined, undefined, false, true);
-  t.after(() => s.session.dispose());
-  const connected = s.holdLive();
-  s.session.start();
-  await flush();
-  s.callbacks.onSpeech(true);
-  s.callbacks.onSpeech(false);
-  connected();
-  await flush();
-  s.callbacks.onFirstQuestion("Explain this story");
-  s.answer(0, "A planned reply");
-  await flush();
-  s.callbacks.onOutput(true);
-  s.callbacks.onTranscript("assistant", "The heard prefix");
-  s.commands.length = 0;
-  s.callbacks.onSpeech(true);
-  assert.ok(s.commands.includes("interrupt"));
-  assert.equal(s.commands.includes("prepareOutput"), false);
-  s.callbacks.onTranscript("assistant", " unheard tail");
-  assert.deepEqual(
-    s.session.checkpoint().history.map((t) => t.text),
-    ["Explain this story", "The heard prefix"],
-  );
-  s.callbacks.onSpeech(false);
-  assert.equal(s.commands.at(-1), "prepareOutput");
-});
+for (const spokenResume of ["quiet", "verified"] as const) {
+  test(`barge-in also cuts a first-connection HTTP answer without a Live reply ID (${spokenResume})`, async (t) => {
+    const s = setup("auto", undefined, undefined, false, true, spokenResume);
+    t.after(() => s.session.dispose());
+    const connected = s.holdLive();
+    s.session.start();
+    await flush();
+    s.callbacks.onSpeech(true);
+    s.callbacks.onSpeech(false);
+    connected();
+    await flush();
+    s.callbacks.onFirstQuestion("Explain this story");
+    s.answer(0, "A planned reply");
+    await flush();
+    s.callbacks.onOutput(true);
+    s.callbacks.onTranscript("assistant", "The heard prefix");
+    s.commands.length = 0;
+    s.callbacks.onSpeech(true);
+    assert.ok(s.commands.includes("interrupt"));
+    assert.equal(s.commands.includes("prepareOutput"), false);
+    s.callbacks.onTranscript("assistant", " unheard tail");
+    assert.deepEqual(
+      s.session.checkpoint().history.map((t) => t.text),
+      ["Explain this story", "The heard prefix"],
+    );
+    s.callbacks.onSpeech(false);
+    assert.equal(s.commands.at(-1), "prepareOutput");
+  });
+}
 
 test("an ignored server interpretation cannot resume the podcast after voice output goes quiet", async () => {
   const s = setup("auto", undefined, undefined, false, true);
@@ -1964,7 +2047,11 @@ test("hearing someone speak stops the podcast at once, and bystander talk or noi
   await flush();
   s.callbacks.onSpeech(true);
   assert.equal(s.audio.playing, false, "stopped before any transcript");
-  assert.equal(s.session.getSnapshot().state.mode, "playing", "a soft yield is not an interruption");
+  assert.equal(
+    s.session.getSnapshot().state.mode,
+    "playing",
+    "a soft yield is not an interruption",
+  );
   // A long utterance outlasts the hold without the podcast coming back over it.
   s.clock.advance(attention.holdMs * 3);
   assert.equal(s.audio.playing, false);
@@ -2018,10 +2105,17 @@ test("a question after the speech stop becomes an interruption at the position w
   });
   await flush();
   assert.equal(s.audio.playing, false);
-  assert.ok(s.session.getSnapshot().state.interruption, "the soft stop became an interruption");
+  assert.ok(
+    s.session.getSnapshot().state.interruption,
+    "the soft stop became an interruption",
+  );
   s.clock.advance(attention.holdMs * 2);
   await flush();
-  assert.equal(s.audio.playing, false, "the expired hold cannot restart an interrupted podcast");
+  assert.equal(
+    s.audio.playing,
+    false,
+    "the expired hold cannot restart an interrupted podcast",
+  );
   s.session.dispose();
 });
 
@@ -2372,97 +2466,101 @@ test("interrupting a spoken reply reports the admitted prefix, never its planned
   s.session.dispose();
 });
 
-test("local speech cuts an audible Live reply before any transcript or backend decision", async (t) => {
-  const s = setup("auto", undefined, undefined, false, true);
-  t.after(() => s.session.dispose());
-  s.session.start();
-  await flush();
-  const first = s.decision("answer");
-  s.push(first);
-  await flush();
-  s.callbacks.onOutput(true);
-  s.callbacks.onTranscript("assistant", "The part you heard");
-  const revision = s.serverState.revision;
-  s.commands.length = 0;
+for (const spokenResume of ["quiet", "verified"] as const) {
+  test(`local speech cuts an audible Live reply before any transcript or backend decision (${spokenResume})`, async (t) => {
+    const s = setup("auto", undefined, undefined, false, true, spokenResume);
+    t.after(() => s.session.dispose());
+    s.session.start();
+    await flush();
+    const first = s.decision("answer");
+    s.push(first);
+    await flush();
+    s.callbacks.onOutput(true);
+    s.callbacks.onTranscript("assistant", "The part you heard");
+    const revision = s.serverState.revision;
+    s.commands.length = 0;
 
-  s.callbacks.onSpeech(true);
-  assert.ok(
-    s.commands.includes("interrupt"),
-    "stop locally, without a server round trip",
-  );
-  assert.ok(s.commands.includes("mute:true"));
-  assert.equal(
-    s.commands.includes("prepareOutput"),
-    false,
-    "drop old audio while the listener speaks",
-  );
-  s.callbacks.onSpeech(true);
-  assert.equal(s.commands.filter((c) => c === "interrupt").length, 1);
-  s.callbacks.onInputTranscript?.("Wait, another question");
-  s.push({ type: "observing", version: s.serverState.version });
-  assert.equal(s.commands.includes("prepareOutput"), false);
-  s.callbacks.onTranscript("assistant", " unheard old tail");
-  s.callbacks.onOutput(true);
-  s.push({
-    type: "answered",
-    decisionId: first.decisionId,
-    answer: "The unheard planned ending",
-    sources: [{ text: "A late reference", startMs: 20000 }],
-  });
-  assert.deepEqual(s.session.getSnapshot().sources, []);
-  await flush();
-  assert.equal(s.serverState.audibleSource, "none");
-  assert.equal(
-    s.serverState.revision,
-    revision,
-    "local audio gating must not stale the new backend decision",
-  );
-  assert.deepEqual(s.serverState.assistant, {
-    decisionId: first.decisionId,
-    text: "The part you heard",
-    state: "interrupted",
-  });
-  assert.deepEqual(
-    s.session.checkpoint().history.map((t) => t.text),
-    [first.text, "The part you heard"],
-  );
+    s.callbacks.onSpeech(true);
+    assert.ok(
+      s.commands.includes("interrupt"),
+      "stop locally, without a server round trip",
+    );
+    assert.ok(s.commands.includes("mute:true"));
+    assert.equal(
+      s.commands.includes("prepareOutput"),
+      false,
+      "drop old audio while the listener speaks",
+    );
+    s.callbacks.onSpeech(true);
+    assert.equal(s.commands.filter((c) => c === "interrupt").length, 1);
+    s.callbacks.onInputTranscript?.("Wait, another question");
+    s.push({ type: "observing", version: s.serverState.version });
+    assert.equal(s.commands.includes("prepareOutput"), false);
+    s.callbacks.onTranscript("assistant", " unheard old tail");
+    s.callbacks.onOutput(true);
+    s.push({
+      type: "answered",
+      decisionId: first.decisionId,
+      answer: "The unheard planned ending",
+      sources: [{ text: "A late reference", startMs: 20000 }],
+    });
+    assert.deepEqual(s.session.getSnapshot().sources, []);
+    await flush();
+    assert.equal(s.serverState.audibleSource, "none");
+    assert.equal(
+      s.serverState.revision,
+      revision,
+      "local audio gating must not stale the new backend decision",
+    );
+    assert.deepEqual(s.serverState.assistant, {
+      decisionId: first.decisionId,
+      text: "The part you heard",
+      state: "interrupted",
+    });
+    assert.deepEqual(
+      s.session.checkpoint().history.map((t) => t.text),
+      [first.text, "The part you heard"],
+    );
 
-  s.callbacks.onSpeech(false);
-  assert.equal(
-    s.commands.at(-1),
-    "prepareOutput",
-    "retain the next reply's prefix after speech ends",
-  );
-  s.push(s.decision("ignore"));
-  s.clock.advance(10000);
-  await flush();
-  assert.equal(
-    s.audio.playing,
-    false,
-    "ignored input does not resume either audio source",
-  );
-  s.commands.length = 0;
-  const next = { ...s.decision("answer"), text: "The new question" };
-  s.push(next);
-  await flush();
-  assert.ok(s.commands.includes("mute:false"));
-  s.callbacks.onOutput(true);
-  s.callbacks.onTranscript("assistant", "The new reply from its first word");
-  s.clock.advance(250);
-  await flush();
-  assert.equal(s.serverState.assistant?.state, "speaking");
-  assert.deepEqual(
-    s.session.checkpoint().history.map((t) => t.text),
-    [
-      first.text,
-      "The part you heard",
-      next.text,
-      "The new reply from its first word",
-    ],
-  );
-  assert.equal(s.requests.length, 0);
-  s.session.dispose();
-});
+    s.callbacks.onSpeech(false);
+    assert.equal(
+      s.commands.at(-1),
+      "prepareOutput",
+      "retain the next reply's prefix after speech ends",
+    );
+    s.push(s.decision("ignore"));
+    s.callbacks.onOutput(false);
+    s.callbacks.onOutputDrained?.();
+    s.clock.advance(10000);
+    await flush();
+    assert.equal(
+      s.audio.playing,
+      false,
+      "ignored input does not resume either audio source",
+    );
+    s.commands.length = 0;
+    const next = { ...s.decision("answer"), text: "The new question" };
+    s.push(next);
+    await flush();
+    assert.ok(s.commands.includes("mute:false"));
+    s.callbacks.onOutput(true);
+    s.callbacks.onTranscript("assistant", "The new reply from its first word");
+    s.clock.advance(250);
+    await flush();
+    assert.equal(s.serverState.assistant?.state, "speaking");
+    assert.deepEqual(
+      s.session.checkpoint().history.map((t) => t.text),
+      [
+        first.text,
+        "The part you heard",
+        next.text,
+        "The new reply from its first word",
+      ],
+    );
+    assert.equal(s.requests.length, 0);
+    s.session.dispose();
+  });
+}
 
 test("cancelling a queued reply before audio starts does not report its transcript as spoken", async () => {
   const s = setup("auto", undefined, undefined, false, true);
@@ -2808,6 +2906,340 @@ test("new conversation preserves playing audio and never opens a microphone that
   assert.equal(s.voiceCount, 0);
 });
 
+async function mobileSpoken() {
+  const s = setup("auto", undefined, undefined, false, true, "verified");
+  s.session.start();
+  await flush();
+  const decisionId = crypto.randomUUID();
+  s.push({
+    type: "engage",
+    version: s.serverState.version,
+    revision: s.serverState.revision,
+    decisionId,
+    player: { ...s.serverState, source: "voice", turnId: "mobile-turn" },
+    text: "What is a biography?",
+  });
+  await flush();
+  const answer = (text = "A biography is a life story.") => {
+    s.push({ type: "answered", decisionId, answer: text, sources: [] });
+  };
+  const hear = (text = "A biography is a life story.", drain = true) => {
+    s.callbacks.onOutput(true);
+    s.callbacks.onTranscript("assistant", text);
+    s.callbacks.onOutput(false);
+    if (drain) s.callbacks.onOutputDrained?.();
+  };
+  return { ...s, answer, hear, decisionId };
+}
+
+for (const metadataLast of [false, true])
+  test(`a corroborated spoken formulation keeps one mobile turn and waits for native drain (${metadataLast})`, async (t) => {
+    const s = await mobileSpoken();
+    t.after(() => s.session.dispose());
+    const anchor = s.session.checkpoint().resumeMs;
+    s.answer("A biography is a life story.");
+    const spoken = "A biography tells the story of another person's life.";
+    s.hear(spoken, false);
+    const confirm = () => s.push({ type: "answered", decisionId: s.decisionId, answer: spoken, sources: [], final: true });
+    if (!metadataLast) confirm();
+    s.clock.advance(10000);
+    await flush();
+    assert.equal(s.audio.playing, false);
+    assert.equal(s.session.getSnapshot().resumeSeconds, null, "metadata never substitutes for native drain");
+    s.callbacks.onOutputDrained?.();
+    if (metadataLast) {
+      assert.equal(s.session.getSnapshot().resumeSeconds, null, "unmatched speech cannot resume");
+      confirm();
+    }
+    assert.equal(s.session.getSnapshot().resumeSeconds, 3);
+    assert.equal(s.session.checkpoint().resumeMs, anchor);
+    assert.deepEqual(s.session.checkpoint().history.map(({ role, text }) => [role, text]), [
+      ["user", "What is a biography?"], ["assistant", spoken],
+    ]);
+    s.clock.advance(3000);
+    await flush();
+    assert.equal(s.audio.playing, true);
+    assert.equal(s.audio.positionMs, anchor);
+    assert.equal(s.session.getSnapshot().listeningActive, true);
+    confirm();
+    s.callbacks.onOutput(true);
+    s.callbacks.onTranscript("assistant", "A late duplicate must stay muted.");
+    assert.equal(s.session.checkpoint().history.length, 2);
+    assert.equal(s.session.getSnapshot().state.assistantSpeaking, false);
+  });
+
+test("mobile reports a verified answer as finished and closes its audio window before a late replay", async (t) => {
+  for (const metadataLast of [false, true]) {
+    const s = await mobileSpoken();
+    t.after(() => s.session.dispose());
+    if (!metadataLast) s.answer();
+    s.hear();
+    if (metadataLast) s.answer();
+    await flush();
+    assert.equal(s.updates.at(-1)?.player.assistant?.state, "finished");
+    assert.equal(
+      s.updates.at(-1)?.player.assistant?.text,
+      "A biography is a life story.",
+    );
+    const history = s.session.checkpoint().history;
+    s.callbacks.onOutput(true);
+    s.callbacks.onTranscript("assistant", "Unrequested repeated answer.");
+    s.callbacks.onOutput(false);
+    s.callbacks.onOutputDrained?.();
+    assert.deepEqual(s.session.checkpoint().history, history);
+    assert.equal(s.session.getSnapshot().state.assistantSpeaking, false);
+    s.clock.advance(3000);
+    await flush();
+    assert.equal(s.audio.playing, true);
+    assert.equal(s.session.getSnapshot().listeningActive, true);
+  }
+});
+
+test("native interruption cancels a mobile answer and never resumes or reopens the microphone on late drain", async (t) => {
+  const s = await mobileSpoken();
+  t.after(() => s.session.dispose());
+  const anchor = s.session.checkpoint().resumeMs;
+  const previous = s.callbacks;
+  s.answer();
+  previous.onOutput(true);
+  previous.onTranscript("assistant", "A biography");
+  previous.onInterruption?.();
+  previous.onOutput(false);
+  previous.onOutputDrained?.();
+  s.clock.advance(30000);
+  await flush();
+  assert.equal(s.audio.playing, false);
+  assert.equal(s.session.getSnapshot().state.mode, "paused");
+  assert.equal(s.session.checkpoint().resumeMs, anchor);
+  assert.equal(s.session.getSnapshot().listeningActive, false);
+  assert.equal(s.session.getSnapshot().resumeSeconds, null);
+});
+
+test("mobile lock-screen playback after background never reopens continuous capture", async (t) => {
+  const s = setup("auto", undefined, undefined, false, true, "verified");
+  t.after(() => s.session.dispose());
+  s.session.start();
+  await flush();
+  assert.equal(s.voiceCount, 1);
+  s.session.background();
+  assert.equal(s.audio.playing, true, "native podcast keeps playing");
+  assert.equal(s.session.getSnapshot().listeningMode, "manual");
+  assert.equal(s.session.getSnapshot().liveStatus, "off");
+  s.session.stop(); // lock-screen pause
+  s.session.start(); // lock-screen play
+  await flush();
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.voiceCount, 1);
+  assert.equal(s.session.getSnapshot().liveStatus, "off");
+  await s.session.enableContinuous(); // explicit foreground consent
+  await flush();
+  assert.equal(s.voiceCount, 2);
+  assert.equal(s.session.getSnapshot().listeningActive, true);
+});
+
+test("backgrounding a mobile answer preserves its anchor for a microphone-free system resume", async (t) => {
+  const s = await mobileSpoken();
+  t.after(() => s.session.dispose());
+  const anchor = s.session.checkpoint().resumeMs;
+  s.session.background();
+  assert.equal(s.audio.playing, false);
+  s.session.start();
+  s.clock.advance(1);
+  await flush();
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.audio.positionMs, anchor);
+  assert.equal(s.session.getSnapshot().liveStatus, "off");
+  assert.equal(s.voiceCount, 1);
+});
+
+test("mobile resumes only after the final answer's native playout and follow-up window", async (t) => {
+  const s = await mobileSpoken();
+  t.after(() => s.session.dispose());
+  s.hear("Let me check that.");
+  s.clock.advance(15000);
+  assert.equal(s.audio.playing, false);
+  s.answer();
+  s.hear(" A biography is a life story.", false);
+  s.clock.advance(15000);
+  assert.equal(s.audio.playing, false, "captions cannot outrun native audio");
+  s.callbacks.onOutputDrained?.();
+  assert.equal(s.session.getSnapshot().resumeSeconds, 3);
+  s.clock.advance(2999);
+  assert.equal(s.audio.playing, false);
+  s.clock.advance(1);
+  await flush();
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.audio.positionMs, 20000, "resume from the semantic anchor");
+  assert.equal(
+    s.session.getSnapshot().listeningActive,
+    true,
+    "microphone stays enabled",
+  );
+});
+
+test("mobile's unconfirmed or paraphrased answer stays paused with a visible reason", async (t) => {
+  const s = await mobileSpoken();
+  t.after(() => s.session.dispose());
+  s.answer();
+  s.hear("A biography tells someone's story.");
+  s.clock.advance(10000);
+  await flush();
+  assert.equal(s.audio.playing, false);
+  assert.equal(s.session.getSnapshot().resumeNeedsConfirmation, true);
+  assert.equal(s.session.getSnapshot().resumeSeconds, null);
+});
+
+test("mobile long answers wait at least eight seconds, including when metadata arrives last", async (t) => {
+  const s = await mobileSpoken();
+  t.after(() => s.session.dispose());
+  const long = "A biography explains a person's life in context. ".repeat(9);
+  s.hear(long);
+  s.answer(long);
+  assert.equal(s.session.getSnapshot().resumeSeconds, 8);
+  s.clock.advance(7999);
+  assert.equal(s.audio.playing, false);
+  s.clock.advance(1);
+  await flush();
+  assert.equal(s.audio.playing, true);
+});
+
+test("mobile manual hold persists after a verified spoken answer and late completion", async (t) => {
+  const s = await mobileSpoken();
+  t.after(() => s.session.dispose());
+  s.session.holdResume();
+  s.answer();
+  s.hear();
+  s.clock.advance(30000);
+  await flush();
+  assert.equal(s.audio.playing, false);
+  assert.equal(s.session.getSnapshot().resumeHeld, true);
+});
+
+test("mobile draft and a newly admitted reply cancel a pending automatic continuation", async (t) => {
+  const s = await mobileSpoken();
+  t.after(() => s.session.dispose());
+  s.answer();
+  s.hear();
+  s.clock.advance(1000);
+  const player = s.updates.at(-1)!.player;
+  const decisionId = "new-follow-up";
+  s.push({
+    type: "engage",
+    version: player.version,
+    revision: player.revision,
+    decisionId,
+    player: { ...player, source: "voice", turnId: "new-input" },
+    text: "And an autobiography?",
+  });
+  await flush();
+  s.callbacks.onOutput(true);
+  s.clock.advance(10000);
+  assert.equal(s.audio.playing, false);
+  s.push({
+    type: "answered",
+    decisionId,
+    answer: "The author tells their own life story.",
+    sources: [],
+  });
+  s.callbacks.onTranscript(
+    "assistant",
+    "The author tells their own life story.",
+  );
+  s.callbacks.onOutput(false);
+  s.callbacks.onOutputDrained?.();
+  s.session.setQuestion("A follow-up I am typing");
+  s.clock.advance(10000);
+  await flush();
+  assert.equal(s.audio.playing, false);
+  assert.equal(s.session.getSnapshot().resumeSeconds, null);
+});
+
+test("mobile typed questions stream, clear the composer and speak through an already-connected Live session", async (t) => {
+  const s = setup("auto", undefined, undefined, false, true, "verified");
+  t.after(() => s.session.dispose());
+  await s.session.enableContinuous();
+  await flush();
+  s.session.setQuestion("Explain this sentence");
+  s.session.submitQuestion(s.session.getSnapshot().question, true);
+  assert.equal(s.session.getSnapshot().question, "");
+  assert.equal(s.requests.length, 1);
+  s.requests[0].preview!("A streamed");
+  assert.equal(s.session.getSnapshot().answerPreview, "A streamed");
+  s.requests[0].resolve({
+    action: "answer",
+    revision: s.requests[0].data.revision,
+    answer: "A streamed answer to the typed question.",
+    sources: [],
+    tools: [],
+  });
+  await flush();
+  assert.ok(
+    s.commands.includes("commentary:A streamed answer to the typed question."),
+  );
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript(
+    "assistant",
+    "A streamed answer to the typed question.",
+  );
+  s.callbacks.onOutput(false);
+  s.callbacks.onOutputDrained?.();
+  await flush();
+  assert.deepEqual(
+    s.session.checkpoint().history.map(({ role, text }) => [role, text]),
+    [
+      ["user", "Explain this sentence"],
+      ["assistant", "A streamed answer to the typed question."],
+    ],
+  );
+  assert.equal(s.session.getSnapshot().resumeSeconds, 3);
+  assert.equal(
+    s.liveRequests.length,
+    1,
+    "the typed question reuses the existing connection",
+  );
+});
+
+test("mobile buffers admitted audio until the native podcast fade is complete", async (t) => {
+  const s = setup("auto", undefined, undefined, false, true, "verified");
+  t.after(() => s.session.dispose());
+  s.session.start();
+  await flush();
+  let finish!: () => void;
+  s.audio.settle = async () => {
+    await new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    s.audio.playing = false;
+  };
+  s.commands.length = 0;
+  s.push({
+    type: "engage",
+    version: s.serverState.version,
+    revision: s.serverState.revision,
+    decisionId: "fade-turn",
+    player: { ...s.serverState, source: "voice", turnId: "fade-input" },
+    text: "Explain that",
+  });
+  await flush();
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.commands.includes("mute:false"), false);
+  finish();
+  await flush();
+  assert.equal(s.audio.playing, false);
+  assert.ok(s.commands.includes("mute:false"));
+});
+
+test("native play at the end of an episode restarts it from the beginning", async (t) => {
+  const s = setup("off", undefined, undefined, false, false, "verified");
+  t.after(() => s.session.dispose());
+  s.session.load(episode, { positionMs: episode.durationMs - 2, history: [] });
+  s.session.metadataLoaded();
+  s.session.start();
+  await flush();
+  assert.equal(s.audio.positionMs, 0);
+  assert.equal(s.audio.playing, true);
+});
+
 function engaged(s: ReturnType<typeof setup>) {
   const decisionId = crypto.randomUUID();
   s.push({
@@ -2835,24 +3267,51 @@ test("a delegated answer resumes the podcast after a quiet follow-up window, nev
   assert.equal(s.session.getSnapshot().resumeSeconds, null);
   s.clock.advance(10000);
   await flush();
-  assert.equal(s.audio.playing, false, "silence before `answered` is not the end");
+  assert.equal(
+    s.audio.playing,
+    false,
+    "silence before `answered` is not the end",
+  );
   // Text and a tool call in one response: more of the reply is still coming.
-  s.push({ type: "answered", decisionId, answer: "One moment.", sources: [], final: false });
+  s.push({
+    type: "answered",
+    decisionId,
+    answer: "One moment.",
+    sources: [],
+    final: false,
+  });
   await flush();
   s.clock.advance(10000);
   await flush();
-  assert.equal(s.audio.playing, false, "a non-final answer keeps the window shut");
-  s.push({ type: "answered", decisionId, answer: "A biography is a life story.", sources: [] });
+  assert.equal(
+    s.audio.playing,
+    false,
+    "a non-final answer keeps the window shut",
+  );
+  s.push({
+    type: "answered",
+    decisionId,
+    answer: "A biography is a life story.",
+    sources: [],
+  });
   await flush();
   s.clock.advance(10000);
   await flush();
-  assert.equal(s.audio.playing, false, "the answer text is ready but has not been spoken yet");
+  assert.equal(
+    s.audio.playing,
+    false,
+    "the answer text is ready but has not been spoken yet",
+  );
   s.callbacks.onOutput(true);
   s.callbacks.onTranscript("assistant", " A biography is a life story.");
   await flush();
   s.clock.advance(10000);
   await flush();
-  assert.equal(s.audio.playing, false, "never while the answer is being spoken");
+  assert.equal(
+    s.audio.playing,
+    false,
+    "never while the answer is being spoken",
+  );
   s.callbacks.onOutput(false);
   assert.equal(s.session.getSnapshot().resumeSeconds, 3);
   s.clock.advance(3000);
@@ -2867,7 +3326,12 @@ test("speech or a held window stops a delegated answer from resuming the podcast
   await flush();
   const decisionId = engaged(s);
   await flush();
-  s.push({ type: "answered", decisionId, answer: "A biography is a life story.", sources: [] });
+  s.push({
+    type: "answered",
+    decisionId,
+    answer: "A biography is a life story.",
+    sources: [],
+  });
   s.callbacks.onOutput(true);
   s.callbacks.onOutput(false);
   assert.equal(s.session.getSnapshot().resumeSeconds, 3);
@@ -2879,7 +3343,11 @@ test("speech or a held window stops a delegated answer from resuming the podcast
   // The server decides what that speech was; background talk reopens the window.
   s.push(s.decision("ignore"));
   await flush();
-  assert.equal(s.session.getSnapshot().resumeSeconds, 3, "the window restarts after speech");
+  assert.equal(
+    s.session.getSnapshot().resumeSeconds,
+    3,
+    "the window restarts after speech",
+  );
   s.session.holdResume();
   s.clock.advance(10000);
   await flush();
@@ -2893,7 +3361,12 @@ test("a barge-in holds the podcast only until the listener's next answered quest
   await flush();
   const first = engaged(s);
   await flush();
-  s.push({ type: "answered", decisionId: first, answer: "A long first answer.", sources: [] });
+  s.push({
+    type: "answered",
+    decisionId: first,
+    answer: "A long first answer.",
+    sources: [],
+  });
   s.callbacks.onOutput(true);
   s.callbacks.onTranscript("assistant", "A long first");
   // The listener talks over the reply; the backend finds nothing addressed to it.
@@ -2908,7 +3381,12 @@ test("a barge-in holds the podcast only until the listener's next answered quest
   // Their next question is answered in full: that answer resumes the podcast.
   const second = engaged(s);
   await flush();
-  s.push({ type: "answered", decisionId: second, answer: "The second answer.", sources: [] });
+  s.push({
+    type: "answered",
+    decisionId: second,
+    answer: "The second answer.",
+    sources: [],
+  });
   s.callbacks.onOutput(true);
   s.callbacks.onTranscript("assistant", "The second answer.");
   s.callbacks.onOutput(false);
@@ -2918,6 +3396,132 @@ test("a barge-in holds the podcast only until the listener's next answered quest
   assert.equal(s.audio.playing, true);
 });
 
+test("mobile keeps speech ducking and its three-second default when server defaults change", async (t) => {
+  const s = setup(
+    "auto",
+    undefined,
+    undefined,
+    false,
+    true,
+    "verified",
+    {
+      speechYield: "duck",
+      followupMs: 3000,
+    },
+  );
+  t.after(() => s.session.dispose());
+  s.session.configure({
+    liveConfigured: true,
+    microphone: { threshold: 0.025, minSpeechMs: 120, silenceMs: 650 },
+    voiceLifecycle: {
+      preRollMs: 750,
+      graceMs: 5000,
+      idleCloseMs: 60000,
+      autoResumeMs: 2000,
+    },
+  });
+  assert.equal(s.session.getSnapshot().followupMs, 3000);
+  s.session.start();
+  await flush();
+  s.callbacks.onSpeech(true);
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.audio.level, 0.15);
+  s.push({ type: "classifying", version: s.serverState.version });
+  assert.equal(s.audio.level, 0.15);
+  s.callbacks.onSpeech(false);
+  s.push(s.decision("ignore"));
+  await flush();
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.audio.level, 1);
+});
+
+test("mobile cannot finish on a drained progress answer when the backend says tools follow", async (t) => {
+  const s = setup("auto", undefined, undefined, false, true, "verified");
+  t.after(() => s.session.dispose());
+  s.session.start();
+  await flush();
+  const decisionId = engaged(s);
+  await flush();
+  s.push({
+    type: "answered",
+    decisionId,
+    answer: "One moment.",
+    sources: [],
+    final: false,
+  });
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", "One moment.");
+  s.callbacks.onOutput(false);
+  s.callbacks.onOutputDrained?.();
+  s.clock.advance(10000);
+  await flush();
+  assert.equal(s.audio.playing, false);
+  assert.equal(s.session.getSnapshot().resumeSeconds, null);
+  assert.notEqual(s.updates.at(-1)?.player.assistant?.state, "finished");
+  s.push({
+    type: "answered",
+    decisionId,
+    answer: "A biography is a life story.",
+    sources: [],
+    final: true,
+  });
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", " A biography is a life story.");
+  s.callbacks.onOutput(false);
+  s.callbacks.onOutputDrained?.();
+  assert.equal(s.session.getSnapshot().resumeSeconds, 3);
+  s.clock.advance(3000);
+  await flush();
+  assert.equal(s.audio.playing, true);
+});
+
+for (const explicitHold of [false, true]) {
+  test(`mobile's next answered question lifts a barge-in hold but preserves a user hold (${explicitHold})`, async (t) => {
+    const s = setup("auto", undefined, undefined, false, true, "verified");
+    t.after(() => s.session.dispose());
+    s.session.start();
+    await flush();
+    const first = engaged(s);
+    await flush();
+    s.push({
+      type: "answered",
+      decisionId: first,
+      answer: "The full old answer.",
+      sources: [],
+    });
+    s.callbacks.onOutput(true);
+    s.callbacks.onTranscript("assistant", "The full");
+    s.callbacks.onSpeech(true);
+    s.callbacks.onOutput(false);
+    s.callbacks.onSpeech(false);
+    s.push(s.decision("ignore"));
+    s.clock.advance(10000);
+    await flush();
+    assert.equal(s.audio.playing, false);
+    if (explicitHold) s.session.holdResume();
+    const next = engaged(s);
+    await flush();
+    s.push({
+      type: "answered",
+      decisionId: next,
+      answer: "The next answer.",
+      sources: [],
+    });
+    s.callbacks.onOutput(true);
+    s.callbacks.onTranscript("assistant", "The next answer.");
+    s.callbacks.onOutput(false);
+    s.callbacks.onOutputDrained?.();
+    assert.equal(s.session.getSnapshot().resumeHeld, explicitHold);
+    assert.equal(
+      s.session.getSnapshot().resumeSeconds,
+      explicitHold ? null : 3,
+    );
+    s.clock.advance(3000);
+    await flush();
+    assert.equal(s.audio.playing, !explicitHold);
+  });
+}
+
 test("a noise after the answer that never reaches a decision cannot strand the podcast", async (t) => {
   const s = setup("auto", undefined, undefined, false, true);
   t.after(() => s.session.dispose());
@@ -2925,7 +3529,12 @@ test("a noise after the answer that never reaches a decision cannot strand the p
   await flush();
   const decisionId = engaged(s);
   await flush();
-  s.push({ type: "answered", decisionId, answer: "A biography is a life story.", sources: [] });
+  s.push({
+    type: "answered",
+    decisionId,
+    answer: "A biography is a life story.",
+    sources: [],
+  });
   s.callbacks.onOutput(true);
   s.callbacks.onOutput(false);
   assert.equal(s.session.getSnapshot().resumeSeconds, 3);
@@ -2942,8 +3551,34 @@ test("a noise after the answer that never reaches a decision cannot strand the p
   assert.equal(s.audio.playing, false);
   s.clock.advance(1);
   assert.equal(s.session.getSnapshot().resumeSeconds, 3, "the window reopens");
-  assert.deepEqual((await s.session.voiceDiagnostics()).autoResume.blockedBy, []);
+  assert.deepEqual(
+    (await s.session.voiceDiagnostics()).autoResume.blockedBy,
+    [],
+  );
   s.clock.advance(3000);
   await flush();
   assert.equal(s.audio.playing, true);
 });
+
+for (const drained of [false, true]) {
+  test(`mobile noise expiry never bypasses native completion (${drained})`, async (t) => {
+    const s = await mobileSpoken();
+    t.after(() => s.session.dispose());
+    s.answer();
+    s.hear(undefined, drained);
+    s.callbacks.onSpeech(true);
+    assert.equal(s.session.getSnapshot().resumeSeconds, null);
+    s.callbacks.onSpeech(false);
+    s.clock.advance(pendingDecisionMs);
+    await flush();
+    assert.equal(s.session.getSnapshot().resumeSeconds, drained ? 3 : null);
+    const blockers = (await s.session.voiceDiagnostics()).autoResume.blockedBy;
+    assert.equal(
+      blockers.includes("native answer playback unconfirmed"),
+      !drained,
+    );
+    s.clock.advance(3000);
+    await flush();
+    assert.equal(s.audio.playing, drained);
+  });
+}

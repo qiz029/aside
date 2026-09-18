@@ -1,0 +1,1 @@
+PASS: Android history restored in web; both checkpoint conflict choices verified against real Worker CAS.

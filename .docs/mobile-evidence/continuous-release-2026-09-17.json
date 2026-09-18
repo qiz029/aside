@@ -1,0 +1,117 @@
+{
+  "source": "8bc7f96254225ff2c4874cafcb844db700e1ec56",
+  "fixture": {
+    "iosBuild": 26,
+    "androidBuild": 26,
+    "nativeContinuous": "passed on both",
+    "manualCaptureAndContinuation": "passed on both",
+    "uniqueTypedStreamingAndVisibleLatestReply": "passed on both"
+  },
+  "backgroundPlayback": {
+    "ios": {
+      "build": 18,
+      "elapsedSeconds": 1802.175,
+      "nativePositionMs": 1805762.7860039999,
+      "nativePlaying": true
+    },
+    "android": {
+      "build": 18,
+      "elapsedSeconds": 1802.295,
+      "nativePositionMs": 1808758,
+      "nativePlaying": true
+    }
+  },
+  "systemControls": {
+    "android": "verified system media pause",
+    "ios": "verified on build 26 using OS media commands: pause/play/pause, native positions and Now Playing rate 0/1/0; visible lock-screen card is not rendered by this simulator",
+    "iosCommandTrace": [
+      {
+        "command": "pause",
+        "nativePlayer": {
+          "playing": false,
+          "positionMs": 177578.69903299998,
+          "volume": 1
+        },
+        "mode": "paused",
+        "systemInfo": {
+          "kMRMediaRemoteNowPlayingInfoTitle": "A quiet half hour",
+          "kMRMediaRemoteNowPlayingInfoPlaybackRate": 0,
+          "kMRMediaRemoteNowPlayingInfoElapsedTime": 177.578699033,
+          "kMRMediaRemoteNowPlayingInfoDuration": 1859.9773333333333
+        },
+        "seconds": 1.832
+      },
+      {
+        "command": "play",
+        "nativePlayer": {
+          "playing": true,
+          "positionMs": 178524.42606599999,
+          "volume": 1
+        },
+        "mode": "paused",
+        "systemInfo": {
+          "kMRMediaRemoteNowPlayingInfoTitle": "A quiet half hour",
+          "kMRMediaRemoteNowPlayingInfoPlaybackRate": 1,
+          "kMRMediaRemoteNowPlayingInfoElapsedTime": 178.000232358,
+          "kMRMediaRemoteNowPlayingInfoDuration": 1859.9773333333333
+        },
+        "seconds": 1.609
+      },
+      {
+        "command": "pause",
+        "nativePlayer": {
+          "playing": false,
+          "positionMs": 179641.652774,
+          "volume": 1
+        },
+        "mode": "paused",
+        "systemInfo": {
+          "kMRMediaRemoteNowPlayingInfoTitle": "A quiet half hour",
+          "kMRMediaRemoteNowPlayingInfoPlaybackRate": 0,
+          "kMRMediaRemoteNowPlayingInfoElapsedTime": 179.641652774,
+          "kMRMediaRemoteNowPlayingInfoDuration": 1859.9773333333333
+        },
+        "seconds": 1.565
+      }
+    ],
+    "iosSettledPlay": {
+      "at": 1789711920782,
+      "player": {
+        "playing": true,
+        "positionMs": 186391.486802,
+        "volume": 1
+      },
+      "mode": "playing",
+      "live": "off"
+    }
+  },
+  "androidDistribution": {
+    "build": 14,
+    "package": "com.asidefm.app",
+    "easBuild": "36f69b5e-4251-4dd8-bb28-260ef4bf6e51",
+    "url": "https://expo.dev/accounts/jiahangzhang/projects/aside/builds/36f69b5e-4251-4dd8-bb28-260ef4bf6e51",
+    "apkSha256": "4e1a0fe76a476da9dfadd13a4b2c94dfe6dad7a8528985cd6667db5720d9984d",
+    "signerSha256": "a1145c78a613303fc04edb9b6352d7a00ffa0b6c971ea59a03f50798df9e597f",
+    "upgradeInstall": "passed; existing data retained",
+    "apiUrl": "https://asidefm.com",
+    "testApi": false,
+    "otaUpdates": false,
+    "readOnlyProductionUi": "passed; catalogue, transcript and Account; no email or model calls"
+  },
+  "physicalIos": {
+    "device": "iPhone 14 Plus",
+    "releaseBuild": 27,
+    "diagnosticBuild": 28,
+    "status": "blocked: speech ducks episode but no Responses delegation or answer; waiting for instrumented reproduction",
+    "diagnosticBuildDistributable": false
+  },
+  "checks": {
+    "unitTests": 360,
+    "typeAndBoundaries": "passed",
+    "browserFull": 66,
+    "browserVoiceAfterUpstreamMerge": 19,
+    "ciRun": 35311785451,
+    "ciConclusion": "SUCCESS"
+  },
+  "paidTestsByAgentInContinuousFeature": 0
+}

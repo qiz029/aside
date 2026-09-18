@@ -14,6 +14,15 @@ export class TestMedia extends BaseMedia {
 }
 export default {
   async fetch(request: Request, env: any, ctx: ExecutionContext) {
+    const url = new URL(request.url);
+    if (
+      url.pathname === "/__fixture/voice" ||
+      url.pathname === "/__fixture/device"
+    ) {
+      url.hostname = "test-voice-control";
+      url.port = "";
+      return fetch(new Request(url, request));
+    }
     const response = await api.fetch(request, env, ctx);
     if (
       new URL(request.url).pathname === "/api/auth/mobile/email/start" &&

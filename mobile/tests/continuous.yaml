@@ -1,0 +1,37 @@
+# Run through continuous.mjs so each assertion uses a new real RTC turn.
+appId: com.asidefm.app.dev
+---
+- launchApp
+- tapOn:
+    id: public-library
+    waitToSettleTimeoutMs: 500
+- tapOn:
+    id: episode-mobile-sample
+    waitToSettleTimeoutMs: 500
+- tapOn:
+    id: player-options
+    waitToSettleTimeoutMs: 500
+- tapOn:
+    id: followup-3000
+    waitToSettleTimeoutMs: 500
+- tapOn:
+    id: close-player-options
+    waitToSettleTimeoutMs: 500
+- tapOn:
+    id: play-toggle
+    waitToSettleTimeoutMs: 500
+- tapOn:
+    id: toggle-conversation
+    waitToSettleTimeoutMs: 500
+- extendedWaitUntil:
+    visible: "Listening · just speak"
+    timeout: 20000
+- extendedWaitUntil:
+    visible: ${ANSWER}
+    timeout: 30000
+- assertVisible: ${QUESTION}
+- extendedWaitUntil:
+    visible: "Pause"
+    timeout: 15000
+- assertVisible: "Listening · just speak"
+- takeScreenshot: continuous-answer-resumed
