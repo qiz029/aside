@@ -462,3 +462,5 @@ node scripts/admin-usage.mjs --days 30 --json
 本地验证：`npm run check`、300 项单元测试、Cloudflare 集成 50 项（重写 sideband 用例：委派配置、工具回报等执行回报、engage/answered、账本；一次运行中上传额度用例偶发失败，单跑通过）、Playwright voice-remote 19 项与 player 4 项通过。真服务探针：WebSocket 主连接与 aiortc WebRTC 主连接加 sideband 各若干会话，全部委派、工具选择正确，说完到答案开口 1.2 到 2.7 秒，暂停 1.3 秒。
 
 未验证：生产真人麦克风端到端；Live 对中文短控制词的委派稳定性（保留本地快速暂停作保险）；控制类工具后 Live 偶尔的口头确认。取证：`wrangler tail` 中 `Aside voice delegation created`、`Aside voice engage`、`Aside voice tool call`、`Aside voice decision acknowledged`。
+
+补记（同日）：PR #26 合并为 `f9d7e65` 后，从 main 重新构建部署，生产 Worker `f23f3306-c32d-4326-a8d2-b102d614bd12`（`--containers-rollout=none`）。此前线上 `ba53d62c` 来自变基前的同一改动，功能一致但不含 #25 合入后的构建；现在线上与 main 一致。`/api/health` 200，`npm run test:mobile-service` 4 项通过。语言与暂停词修复（`d71c2c1`、`34f784e`）也在此版本内。
