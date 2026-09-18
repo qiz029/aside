@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mockPlayer } from "./remote-fixture";
 import { LiveIntent } from "../../backend/src/live-intent";
+import { QuestionService } from "../../backend/src/question-service";
 import type {
   LiveControlEvent,
   QuestionRequest,
@@ -13,7 +14,10 @@ test.use({ locale: "en-US", launchOptions: { args: ["--mute-audio"] } });
 async function setupRemote(
   page: Page,
   debug = false,
-  respond?: (q: QuestionRequest) => QuestionResult | Promise<QuestionResult>,
+  respond?: (
+    q: QuestionRequest,
+    accept: () => boolean,
+  ) => QuestionResult | Promise<QuestionResult>,
   acknowledgeClose = true,
   origin = "",
 ) {
@@ -146,9 +150,9 @@ async function setupRemote(
       {
         // This substitutes only the model. Scheduling and state/ack handling use
         // the production server coordinator; it never receives browser captions.
-        answer: async (q) => {
+        answer: async (q, _signal, accept) => {
           inputs.push(q);
-          if (respond) return respond(q);
+          if (respond) return respond(q, accept);
           const text = q.history.at(-1)!.text.toLowerCase();
           const commands =
             text.includes("dinner") ||
@@ -335,6 +339,88 @@ async function setupRemote(
     questionRequests: () => questionRequests,
   };
 }
+
+test("the voice can respond while its full backend answer remains unresolved", async ({
+  page,
+}) => {
+  let finish!: () => void;
+  let answerReady = false;
+  const phases: string[] = [];
+  const service = new QuestionService({
+    reply: async (input) => {
+      if (input.toolChoice === "required") {
+        phases.push("admission");
+        return {
+          id: "admitted",
+          answer: "",
+          calls: [{ id: "accept", name: "accept_question", arguments: "{}" }],
+          sources: [],
+          searchedWeb: false,
+        };
+      }
+      phases.push("answer");
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      answerReady = true;
+      return {
+        id: "answer",
+        answer: "Here is the explanation.",
+        calls: [],
+        sources: [],
+        searchedWeb: false,
+      };
+    },
+  });
+  const s = await setupRemote(page, true, (q, accept) =>
+    service.answer(
+      {
+        version: "1",
+        source: "demo",
+        summary: "",
+        hostStyle: "",
+        speakers: [],
+        voice: "feminine",
+        voiceReason: "test",
+        anchors: [],
+        passages: [],
+      },
+      q,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      accept,
+    ),
+  );
+  await page.locator(".debug-toggle").click();
+  await s.speak(["Why is he called Ah Q?"]);
+  await expect.poll(() => s.acknowledgements.length).toBe(1);
+  expect(phases).toEqual(["admission", "answer"]);
+  expect(answerReady).toBe(false);
+  await s.reply("Let me think about that.");
+  await expect(page.locator(".message.assistant p")).toHaveText(
+    "Let me think about that.",
+  );
+  expect(
+    answerReady,
+    "the full answer is deliberately held until speech is observable",
+  ).toBe(false);
+  expect(await s.audio.evaluate((a: HTMLAudioElement) => a.paused)).toBe(true);
+  finish();
+  await expect.poll(() => answerReady).toBe(true);
+  await s.reply(" Here is the explanation.");
+  await expect(page.locator(".message p")).toHaveText([
+    "Why is he called Ah Q?",
+    "Let me think about that. Here is the explanation.",
+  ]);
+  expect(
+    s.acknowledgements.length,
+    "completion cannot start a duplicate turn",
+  ).toBe(1);
+  expect(s.questionRequests()).toBe(0);
+  expect(s.errors).toEqual([]);
+});
 
 test("an interrupted reply and early progress stay on opposite sides of the new question", async ({
   page,

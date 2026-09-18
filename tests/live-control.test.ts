@@ -32,6 +32,67 @@ const flush = async () => {
   for (let i = 0; i < 20; i++) await Promise.resolve();
 };
 
+test("early-response clients receive admission then completion on NDJSON; old clients retain the single-result contract", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  for (const earlyResponse of [true, false]) {
+    let finish!: () => void;
+    const events: LiveControlEvent[] = [];
+    const c = new LiveControl(
+      "session",
+      { player, debug: false, earlyResponse },
+      analysis,
+      [],
+      {
+        answer: async (
+          _analysis,
+          q,
+          _signal,
+          _progress,
+          _telemetry,
+          _preview,
+          accept,
+        ) => {
+          assert.equal(!!accept, earlyResponse);
+          if (accept) assert.equal(accept(), true);
+          await new Promise<void>((resolve) => {
+            finish = resolve;
+          });
+          return {
+            action: "answer",
+            revision: q.revision,
+            answer: "The answer",
+            tools: [],
+            sources: [],
+          };
+        },
+      },
+      () => {},
+    );
+    const reading = readLiveControl(c.subscribe(), (e) => events.push(e));
+    c.receive({
+      type: "session.input_transcript.delta",
+      delta: "Why?",
+      start_ms: 0,
+      end_ms: 100,
+    });
+    t.mock.timers.tick(160);
+    await flush();
+    const early = events.find((e) => e.type === "decision");
+    assert.equal(!!early, earlyResponse);
+    if (early)
+      c.update({
+        sessionId: "session",
+        player: { ...player, sequence: 1, revision: 1 },
+        acknowledgement: { decisionId: early.decisionId, applied: true },
+      });
+    finish();
+    await flush();
+    assert.equal(events.at(-1)?.type, earlyResponse ? "answer" : "decision");
+    c.close();
+    await reading;
+  }
+});
+
 test("a longer session admits more than 30 intent calls while retaining its configured cap", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
   let calls = 0;

@@ -1121,6 +1121,18 @@ export class ListeningSession {
     if (!this.answerWindow) this.voice?.prepareOutput?.();
   }
   private receiveControl(event: LiveControlEvent) {
+    if (event.type === "answer") {
+      if (
+        event.version !== this.controlVersion ||
+        !this.answerWindow ||
+        this.spokenReply?.decisionId !== event.decisionId ||
+        this.spokenReply.state === "interrupted"
+      )
+        return;
+      this.conversation.completeLive(event.decisionId, event.result);
+      this.log("Backend answer prepared for the accepted voice turn");
+      return;
+    }
     if (event.type === "observing" || event.type === "classifying") {
       if (event.version !== this.controlVersion) return;
       if (event.input) {
@@ -1189,7 +1201,12 @@ export class ListeningSession {
           state: "queued",
         };
       }
-      this.conversation.receiveLive(event.result, event.text, event.decisionId);
+      this.conversation.receiveLive(
+        event.result,
+        event.text,
+        event.decisionId,
+        event.answerPending,
+      );
       this.reconcileLiveTranscript();
       if (event.result.action === "answer" && this.spokenReply?.text) {
         // These captions already passed the audio gate while classification
@@ -1462,6 +1479,7 @@ export class ListeningSession {
                   control: {
                     player: this.livePlayerState(),
                     debug: this.debugRecognition,
+                    earlyResponse: true,
                   },
                 }
               : {}),

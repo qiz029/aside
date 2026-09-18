@@ -33,8 +33,16 @@ export class LiveControl {
       control.player,
       history,
       {
-        answer: (data, signal) =>
-          questions.answer(analysis, data, signal, undefined, telemetry),
+        answer: (data, signal, onAccept) =>
+          questions.answer(
+            analysis,
+            data,
+            signal,
+            undefined,
+            telemetry,
+            undefined,
+            control.earlyResponse ? onAccept : undefined,
+          ),
         emit: (event) => this.emit(event),
         context,
         now: Date.now,

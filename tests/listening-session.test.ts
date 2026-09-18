@@ -1765,6 +1765,95 @@ test("under server voice control only a backend answer is heard or recorded", as
   s.session.dispose();
 });
 
+test("early admission opens speech before the answer, then completes the same bubble exactly once", async (t) => {
+  const s = setup("auto", undefined, undefined, false, true);
+  t.after(() => s.session.dispose());
+  s.session.start();
+  await flush();
+  assert.equal(s.liveRequests[0].control?.earlyResponse, true);
+  const decision = s.decision("answer");
+  decision.answerPending = true;
+  decision.result.answer = "";
+  s.push(decision);
+  await flush();
+  assert.equal(
+    s.commands.filter((c) => c.startsWith("mute:")).at(-1),
+    "mute:false",
+  );
+  assert.equal(s.audio.playing, false);
+  assert.equal(s.session.getSnapshot().busy, true);
+  assert.equal(
+    s.commands.includes("commentary:"),
+    false,
+    "no empty result is sent to Live",
+  );
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", "让我想一下。");
+  assert.deepEqual(
+    s.session.getSnapshot().history.map((t) => t.text),
+    [decision.text, "让我想一下。"],
+  );
+  const complete: Extract<LiveControlEvent, { type: "answer" }> = {
+    type: "answer",
+    version: decision.version,
+    decisionId: decision.decisionId,
+    result: {
+      action: "answer",
+      revision: decision.result.revision,
+      answer: "真实答案",
+      sources: [],
+      tools: [],
+    },
+  };
+  s.push(complete);
+  s.push(complete);
+  assert.equal(s.commands.filter((c) => c === "commentary:真实答案").length, 1);
+  assert.equal(s.session.getSnapshot().busy, false);
+  assert.deepEqual(
+    s.session.checkpoint().history.map((t) => t.text),
+    [decision.text, "让我想一下。"],
+    "planned answer is not recorded as heard",
+  );
+  s.callbacks.onTranscript("assistant", "解释来了。");
+  assert.deepEqual(
+    s.session.getSnapshot().history.map((t) => t.text),
+    [decision.text, "让我想一下。解释来了。"],
+  );
+  assert.equal(s.requests.length, 0);
+});
+
+test("a cancelled early answer cannot inject late content after resume or a replacement question", async (t) => {
+  const s = setup("auto", undefined, undefined, false, true);
+  t.after(() => s.session.dispose());
+  s.session.start();
+  await flush();
+  const first = s.decision("answer");
+  first.answerPending = true;
+  first.result.answer = "";
+  s.push(first);
+  await flush();
+  const next = s.decision("answer");
+  s.push(next);
+  await flush();
+  s.push({
+    type: "answer",
+    version: first.version,
+    decisionId: first.decisionId,
+    result: {
+      action: "answer",
+      revision: first.result.revision,
+      answer: "Stale answer",
+      sources: [],
+      tools: [],
+    },
+  });
+  assert.equal(s.commands.includes("commentary:Stale answer"), false);
+  s.session.executePlayerCommand({ type: "play" });
+  s.clock.advance(0);
+  await flush();
+  assert.equal(s.session.getSnapshot().busy, false);
+});
+
 test("interrupting a speaking answer puts early progress after its own question and preserves the heard prefix", async (t) => {
   const s = setup("auto", undefined, undefined, false, true);
   t.after(() => s.session.dispose());

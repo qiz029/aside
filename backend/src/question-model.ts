@@ -52,6 +52,8 @@ export interface QuestionModel {
     instructions: string;
     tools: QuestionTool[];
     signal?: AbortSignal;
+    reasoningEffort?: "low" | "medium";
+    toolChoice?: "required";
     onText?: (delta: string) => void;
   }): Promise<ModelReply>;
 }

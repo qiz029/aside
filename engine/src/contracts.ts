@@ -92,6 +92,8 @@ export const liveSchema = z.object({
     .object({
       player: livePlayerStateSchema,
       debug: z.boolean().default(false),
+      /** Older clients still receive a single complete decision. */
+      earlyResponse: z.boolean().optional(),
     })
     .optional(),
 });
@@ -197,6 +199,13 @@ export const liveControlEventSchema = z.discriminatedUnion("type", [
     player: playerInputSchema,
     text: z.string(),
     result: questionResultSchema,
+    answerPending: z.boolean().optional(),
+  }),
+  z.object({
+    type: z.literal("answer"),
+    version: revisionSchema,
+    decisionId: z.string(),
+    result: z.object({ ...answerFields, action: z.literal("answer") }),
   }),
   z.object({ type: z.literal("error"), error: z.string() }),
   z.object({ type: z.literal("closed") }),

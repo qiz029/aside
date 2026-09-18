@@ -97,6 +97,27 @@ test("OpenAI adapter maps question input, tool output, citations and cancellatio
   assert.equal(calls.mock.callCount(), 2);
 });
 
+test("the fast admission round uses required tools and low reasoning while ordinary answers keep their settings", async (t) => {
+  const provider = new OpenAIProvider("test-placeholder", "test-model");
+  const bodies: Record<string, unknown>[] = [];
+  t.mock.method(provider.client.responses, "create", async (body: unknown) => {
+    bodies.push(body as Record<string, unknown>);
+    return { id: "r", output_text: "", output: [] };
+  });
+  await provider.reply({
+    instructions: "Decide",
+    tools: [],
+    toolResults: [],
+    reasoningEffort: "low",
+    toolChoice: "required",
+  });
+  await provider.reply({ instructions: "Answer", tools: [], toolResults: [] });
+  assert.deepEqual(bodies[0].reasoning, { effort: "low" });
+  assert.equal(bodies[0].tool_choice, "required");
+  assert.deepEqual(bodies[1].reasoning, { effort: "medium" });
+  assert.equal(bodies[1].tool_choice, undefined);
+});
+
 test("the served tier and token usage come back with the reply", async (t) => {
   const provider = new OpenAIProvider("test-placeholder", "test-model");
   t.mock.method(provider.client.responses, "create", async () => ({
@@ -129,9 +150,8 @@ test("the served tier and token usage come back with the reply", async (t) => {
 });
 
 test("an exhausted output budget fails instead of resolving to a silent answer", async (t) => {
-  const { InteractiveProvider } = await import(
-    "../backend/src/interactive-provider.js"
-  );
+  const { InteractiveProvider } =
+    await import("../backend/src/interactive-provider.js");
   const request: Parameters<QuestionModel["reply"]>[0] = {
     instructions: "政策",
     tools: [],
@@ -290,17 +310,34 @@ test("OpenAI text streaming exposes real SDK deltas before the final response", 
   const { streamedResponse } = await import("./fixtures/streamed-response.js");
   const provider = new OpenAIProvider("test-placeholder", "test-model");
   const received: string[] = [];
-  t.mock.method(provider.client.responses, "create", async (body: any, options: any) => {
-    assert.equal(body.stream, true);
-    const OpenAI = (await import("openai")).default;
-    const client = new OpenAI({ apiKey: "fixture", fetch: async () => streamedResponse("Hello world", 10) });
-    return client.responses.create(body, options);
-  });
+  t.mock.method(
+    provider.client.responses,
+    "create",
+    async (body: any, options: any) => {
+      assert.equal(body.stream, true);
+      const OpenAI = (await import("openai")).default;
+      const client = new OpenAI({
+        apiKey: "fixture",
+        fetch: async () => streamedResponse("Hello world", 10),
+      });
+      return client.responses.create(body, options);
+    },
+  );
   let resolved = false;
-  const pending = provider.reply({ instructions: "test", tools: [], toolResults: [], onText(delta) {
-    assert.equal(resolved, false);
-    received.push(delta);
-  } }).then((result) => { resolved = true; return result; });
+  const pending = provider
+    .reply({
+      instructions: "test",
+      tools: [],
+      toolResults: [],
+      onText(delta) {
+        assert.equal(resolved, false);
+        received.push(delta);
+      },
+    })
+    .then((result) => {
+      resolved = true;
+      return result;
+    });
   const result = await pending;
   assert.ok(received.length > 1);
   assert.equal(received.join(""), "Hello world");

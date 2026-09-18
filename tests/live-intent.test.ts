@@ -30,6 +30,7 @@ function setup(debug = false, limit = 30) {
   const requests: {
     data: QuestionRequest;
     signal: AbortSignal;
+    accept: () => boolean;
     resolve: (r: QuestionResult) => void;
     reject: (e: Error) => void;
   }[] = [];
@@ -39,9 +40,9 @@ function setup(debug = false, limit = 30) {
     state(),
     [],
     {
-      answer: (data, signal) =>
+      answer: (data, signal, accept) =>
         new Promise((resolve, reject) =>
-          requests.push({ data, signal, resolve, reject }),
+          requests.push({ data, signal, accept, resolve, reject }),
         ),
       emit: (event) => events.push(event),
       context: (text) => notes.push(text),
@@ -92,6 +93,135 @@ function setup(debug = false, limit = 30) {
   };
   return { intent, events, requests, speak, finish, advance, notes };
 }
+
+test("admission is pushed before answer completion; progress and ignored bystanders do not restart its work", async () => {
+  const s = setup();
+  s.speak("Why Ah Q?", 1000, 1500);
+  await s.advance();
+  assert.equal(s.requests[0].accept(), true);
+  const admitted = s.events.find((e) => e.type === "decision")!;
+  assert.equal(admitted.answerPending, true);
+  assert.equal(admitted.result.answer, "");
+  s.intent.update(
+    state({
+      sequence: 1,
+      revision: 2,
+      wasPlaying: false,
+      assistant: {
+        decisionId: admitted.decisionId,
+        state: "speaking",
+        text: "Let me think.",
+      },
+    }),
+    { decisionId: admitted.decisionId, applied: true },
+  );
+  s.speak("Honey, dinner?", 4000, 4500);
+  await s.advance();
+  assert.equal(
+    s.requests.length,
+    2,
+    "answer generation cannot occupy the intent slot",
+  );
+  assert.equal(
+    s.requests[0].signal.aborted,
+    false,
+    "bystander observation cannot cancel an accepted answer",
+  );
+  await s.finish("ignore", 1);
+  await s.finish("answer", 0);
+  const result = s.events.at(-1)!;
+  assert.equal(result.type, "answer");
+  assert.equal(result.decisionId, admitted.decisionId);
+  assert.equal(result.result.answer, "A response");
+  assert.equal(
+    s.events.filter(
+      (e) => e.type === "decision" && e.result.action === "answer",
+    ).length,
+    1,
+  );
+  s.intent.close();
+});
+
+test("a fast answer waits only for admission acknowledgement, and old clients still get one complete decision", async () => {
+  const s = setup();
+  s.speak("Explain");
+  await s.advance();
+  s.requests[0].accept();
+  const admitted = s.events.find((e) => e.type === "decision")!;
+  await s.finish("answer");
+  assert.equal(
+    s.events.some((e) => e.type === "answer"),
+    false,
+  );
+  // New input before the acknowledgement must not lose the admission receipt.
+  s.speak("Background", 3000, 3100);
+  s.intent.update(state({ sequence: 1, revision: 2 }), {
+    decisionId: admitted.decisionId,
+    applied: true,
+  });
+  assert.equal(s.events.at(-1)?.type, "answer");
+  s.intent.close();
+  const old = setup();
+  old.speak("Explain");
+  await old.advance();
+  await old.finish("answer");
+  const full = old.events.find((e) => e.type === "decision")!;
+  assert.equal(full.answerPending, undefined);
+  assert.equal(full.result.answer, "A response");
+  old.intent.close();
+});
+
+test("new accepted controls and questions cancel the old answer; stale completions cannot speak", async () => {
+  for (const replacement of ["player_control", "answer"] as const) {
+    const s = setup();
+    s.speak("Explain", 0, 100);
+    await s.advance();
+    s.requests[0].accept();
+    const first = s.events.find((e) => e.type === "decision")!;
+    s.intent.update(state({ sequence: 1, revision: 2 }), {
+      decisionId: first.decisionId,
+      applied: true,
+    });
+    s.speak("New request", 3000, 3100);
+    await s.advance();
+    if (replacement === "answer") s.requests[1].accept();
+    else await s.finish(replacement, 1);
+    assert.equal(s.requests[0].signal.aborted, true);
+    await s.finish("answer", 0);
+    assert.equal(
+      s.events.some(
+        (e) => e.type === "answer" && e.decisionId === first.decisionId,
+      ),
+      false,
+    );
+    s.intent.close();
+    if (replacement === "answer")
+      assert.equal(s.requests[1].signal.aborted, true);
+  }
+});
+
+test("stale admission and rejected admission cannot start audible answers", async () => {
+  const s = setup();
+  s.speak("Explain");
+  await s.advance();
+  s.speak(" something else");
+  assert.equal(s.requests[0].accept(), false);
+  await s.finish("answer");
+  await s.advance();
+  s.requests[1].accept();
+  const decision = s.events.find((e) => e.type === "decision")!;
+  s.intent.update(state({ sequence: 1 }), {
+    decisionId: decision.decisionId,
+    applied: false,
+  });
+  assert.equal(s.requests[1].signal.aborted, true);
+  await s.finish("answer", 1);
+  assert.equal(
+    s.events.some((e) => e.type === "answer"),
+    false,
+  );
+  s.intent.close();
+});
 
 test("server classifies any transcript fragment without delegation, keywords or speech-end", async () => {
   const s = setup();

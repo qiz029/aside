@@ -71,6 +71,7 @@ export class Conversation {
   private answerQueued = false;
   private outputIsAnswer = false;
   private livePending = false;
+  private liveAnswerId?: string;
   private samples: ResponseLatency[] = [];
   private latency: ResponseLatencyTracker;
   private followup: FollowupTimer;
@@ -93,7 +94,7 @@ export class Conversation {
       sources: this.references,
       question: this.draft,
       answerPreview: this.answerPreview,
-      busy: !!this.pending && this.acceptedInput,
+      busy: (!!this.pending && this.acceptedInput) || !!this.liveAnswerId,
       resumeHeld: this.held,
       followupMs: this.waitMs,
       resumeSeconds:
@@ -153,6 +154,7 @@ export class Conversation {
     this.answerQueued = false;
     this.outputIsAnswer = false;
     this.livePending = false;
+    this.liveAnswerId = undefined;
     this.latency.cancel();
     this.host.voice()?.setWorking(false);
     this.host.changed();
@@ -350,7 +352,12 @@ export class Conversation {
     else this.scheduleFollowup();
   }
   /** A server decision arrives on the session stream; this never submits a question. */
-  receiveLive(result: QuestionResult, text: string, decisionId?: string) {
+  receiveLive(
+    result: QuestionResult,
+    text: string,
+    decisionId?: string,
+    answerPending = false,
+  ) {
     if (result.action === "ignore" || result.action === "wait") return;
     this.beginTurn(!this.host.playback().interruption);
     if (decisionId)
@@ -360,7 +367,33 @@ export class Conversation {
       };
     this.recognizeQuestion(text);
     this.submittedText = text;
+    if (answerPending && result.action === "answer")
+      this.liveAnswerId = decisionId;
     this.consumeResult(result, text, undefined, true, true);
+    if (this.liveAnswerId) {
+      this.host.voice()?.setWorking(true);
+      this.host
+        .voice()
+        ?.append(
+          "thinking",
+          "The app accepted the listener's latest question and opened this spoken turn. You may acknowledge it briefly and naturally now. The backend is preparing the verified answer; wait for its result before giving factual details. Do not invent a lookup, repeat acknowledgements or resume podcast playback.",
+          null,
+        );
+    }
+    this.host.changed();
+  }
+  completeLive(
+    decisionId: string,
+    result: Extract<QuestionResult, { action: "answer" }>,
+  ) {
+    if (this.liveAnswerId !== decisionId) return;
+    this.liveAnswerId = undefined;
+    this.references = result.sources;
+    this.noteAnswer(result.answer);
+    this.host.voice()?.setWorking(false);
+    if (result.answer.trim())
+      this.host.voice()?.append("commentary", result.answer, null);
+    this.host.voice()?.activity();
     this.host.changed();
   }
   /** Heard Live captions belong immediately after the question that owns them. */
@@ -461,7 +494,8 @@ export class Conversation {
       // Audio inactivity cannot authorize podcast playback; wait for an
       // explicit resume request throughout this spoken conversation.
       this.hold();
-      voice.append("commentary", result.answer, delegationId ?? null);
+      if (result.answer.trim())
+        voice.append("commentary", result.answer, delegationId ?? null);
       voice.activity();
       if (this.delegation === delegationId) this.delegation = undefined;
     } else {

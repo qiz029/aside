@@ -15,8 +15,13 @@ import type {
 import {
   questionInstructions,
   playerToolInstructions,
+  liveDecisionInstructions,
 } from "./dialogue-policy.js";
-import { questionTools } from "./question-tools.js";
+import {
+  questionTools,
+  liveDecisionTools,
+  liveAnswerTools,
+} from "./question-tools.js";
 /**
  * What one question actually cost. `tiers` is per round rather than a single
  * value so a downgrade partway through a tool loop stays visible.
@@ -52,6 +57,7 @@ export interface QuestionAnswerer {
     progress?: (phase: QuestionPhase) => void,
     telemetry?: (totals: QuestionTelemetry) => void,
     onAnswer?: (text: string) => void,
+    onAccept?: () => boolean,
   ): Promise<QuestionResult>;
 }
 /** Application policy: intent, heard-only retrieval, tool budget and sources. */
@@ -67,6 +73,7 @@ export class QuestionService implements QuestionAnswerer {
     progress?: (phase: QuestionPhase) => void,
     telemetry?: (totals: QuestionTelemetry) => void,
     onAnswer?: (text: string) => void,
+    onAccept?: () => boolean,
   ): Promise<QuestionResult> {
     signal?.throwIfAborted();
     const resume = (): QuestionResult => ({
@@ -109,6 +116,7 @@ export class QuestionService implements QuestionAnswerer {
         signal,
         progress,
         request.player?.source === "text" ? onAnswer : undefined,
+        request.player?.source === "voice" ? onAccept : undefined,
       );
     } finally {
       if (totals.rounds) telemetry?.(totals);
@@ -124,10 +132,12 @@ export class QuestionService implements QuestionAnswerer {
     signal?: AbortSignal,
     progress?: (phase: QuestionPhase) => void,
     onAnswer?: (text: string) => void,
+    onAccept?: () => boolean,
   ): Promise<QuestionResult> {
     let previousId: string | undefined;
     let toolResults: ToolResult[] = [];
-    for (let round = 0; round < this.rounds; round++) {
+    let deciding = !!onAccept;
+    for (let round = 0; round < this.rounds + (onAccept ? 1 : 0); round++) {
       signal?.throwIfAborted();
       progress?.(round === 0 ? "working" : "continuing");
       let preview = "";
@@ -145,8 +155,17 @@ export class QuestionService implements QuestionAnswerer {
             : undefined,
         previousId,
         toolResults,
-        instructions: questionInstructions + playerToolInstructions,
-        tools: questionTools,
+        instructions: deciding
+          ? liveDecisionInstructions + playerToolInstructions
+          : questionInstructions + playerToolInstructions,
+        tools: deciding
+          ? liveDecisionTools
+          : onAccept
+            ? liveAnswerTools
+            : questionTools,
+        ...(deciding
+          ? { reasoningEffort: "low" as const, toolChoice: "required" as const }
+          : {}),
         signal,
         ...(onAnswer
           ? {
@@ -174,7 +193,7 @@ export class QuestionService implements QuestionAnswerer {
           "wait_for_input",
         ].includes(call.name),
       );
-      if (terminal && response.calls.length > 1) {
+      if ((terminal || deciding) && response.calls.length > 1) {
         toolResults = response.calls.map((call) => ({
           callId: call.id,
           value: {
@@ -189,6 +208,37 @@ export class QuestionService implements QuestionAnswerer {
         let result: unknown;
         try {
           const args: unknown = JSON.parse(call.arguments);
+          const allowed = deciding
+            ? liveDecisionTools
+            : onAccept
+              ? liveAnswerTools
+              : questionTools;
+          if (
+            !allowed.some(
+              (tool) => tool.type === "function" && tool.name === call.name,
+            )
+          ) {
+            toolResults.push({
+              callId: call.id,
+              value: { error: "Unknown tool" },
+            });
+            continue;
+          }
+          if (call.name === "accept_question") {
+            z.object({}).strict().parse(args);
+            if (!onAccept!())
+              throw new DOMException("Admission superseded", "AbortError");
+            signal?.throwIfAborted();
+            deciding = false;
+            toolResults.push({
+              callId: call.id,
+              value: {
+                accepted: true,
+                note: "The app is opening the spoken conversation. Prepare the factual answer now; do not repeat an acknowledgement or request admission again.",
+              },
+            });
+            continue;
+          }
           if (call.name === "control_podcast") {
             const { commands, followUpQuestion } = z
               .object({
@@ -238,12 +288,14 @@ export class QuestionService implements QuestionAnswerer {
           if (Array.isArray(result))
             for (const passage of result)
               sources.push({ text: passage.text, startMs: passage.startMs });
-        } catch {
+        } catch (error) {
+          if (error instanceof Error && error.name === "AbortError")
+            throw error;
           result = { error: "Invalid tool arguments" };
         }
         toolResults.push({ callId: call.id, value: result });
       }
-      if (!response.calls.length)
+      if (!response.calls.length && !deciding)
         return {
           revision: request.revision,
           answer: response.answer,

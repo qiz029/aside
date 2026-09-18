@@ -83,3 +83,35 @@ export const questionTools: QuestionTool[] = [
   },
   { type: "web_search" },
 ];
+
+/** The first Live round decides whether to engage; it cannot do a lookup. */
+export const liveDecisionTools: QuestionTool[] = [
+  ...questionTools.filter(
+    (tool) =>
+      tool.type === "function" &&
+      [
+        "control_podcast",
+        "resume_podcast",
+        "ignore_input",
+        "wait_for_input",
+      ].includes(tool.name),
+  ),
+  {
+    type: "function",
+    name: "accept_question",
+    strict: true,
+    description:
+      "Confirm that the listener clearly addressed the assistant and wants a spoken response, including a brief clarification for an addressed ambiguous question. This opens the conversation immediately; facts and the full answer will be prepared afterward. Do not use for bystanders, incomplete addressee intent or playback controls.",
+    parameters: {
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    },
+  },
+];
+export const liveAnswerTools = questionTools.filter(
+  (tool) =>
+    tool.type === "web_search" ||
+    ["get_passage", "search_podcast"].includes(tool.name),
+);

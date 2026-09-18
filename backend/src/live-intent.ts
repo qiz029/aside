@@ -13,6 +13,7 @@ interface Ports {
   answer(
     request: QuestionRequest,
     signal: AbortSignal,
+    onAccept: () => boolean,
   ): Promise<QuestionResult>;
   emit(event: LiveControlEvent): void;
   context(text: string): void;
@@ -37,6 +38,12 @@ export class LiveIntent {
   private timer?: () => void;
   private acknowledgementTimer?: () => void;
   private waiting?: Extract<LiveControlEvent, { type: "decision" }>;
+  private answerTask?: {
+    decision: Extract<LiveControlEvent, { type: "decision" }>;
+    acknowledged: boolean;
+    controller: AbortController;
+    result?: Extract<QuestionResult, { action: "answer" }>;
+  };
   private closed = false;
   private calls = 0;
   private epoch = 0;
@@ -145,7 +152,10 @@ export class LiveIntent {
         });
       return;
     }
-    if (player.version !== this.player.version) this.resetTurn();
+    if (player.version !== this.player.version) {
+      this.cancelAnswer();
+      this.resetTurn();
+    }
     this.player = player;
     this.conversation.observe(player);
     if (ack && ack.decisionId !== this.waiting?.decisionId)
@@ -170,6 +180,10 @@ export class LiveIntent {
       this.conversation.accept(decision, ack.applied, player);
       if (ack.applied) {
         this.handled = decision.text;
+        if (this.answerTask?.decision.decisionId === decision.decisionId) {
+          this.answerTask.acknowledged = true;
+          this.deliverAnswer();
+        }
         this.ports.context(
           JSON.stringify({
             commandId: decision.decisionId,
@@ -190,7 +204,11 @@ export class LiveIntent {
             handledText: undefined,
           };
         }
-      } else this.resetTurn();
+      } else {
+        if (this.answerTask?.decision.decisionId === decision.decisionId)
+          this.cancelAnswer();
+        this.resetTurn();
+      }
       this.schedule();
     }
     // A short confirmation can arrive just before the last output snapshot.
@@ -199,7 +217,8 @@ export class LiveIntent {
   }
   private resetTurn() {
     // A decision the browser never answered is the trace of a broken round trip.
-    if (this.waiting)
+    const keepAdmission = this.waiting?.answerPending && this.answerTask;
+    if (this.waiting && !keepAdmission)
       console.warn("Aside voice decision dropped before acknowledgement", {
         action: this.waiting.result.action,
         afterMs: this.ports.now() - this.decidedAt,
@@ -207,13 +226,15 @@ export class LiveIntent {
       });
     this.epoch++;
     this.pending?.abort();
-    // Keep the occupied slot until its promise settles, even if a provider
-    // ignores cancellation. There is never more than one model call in flight.
+    // Keep the classification slot until cancellation settles. Accepted answer
+    // preparation is separate so it cannot block the next listener intent.
     this.timer?.();
     this.timer = undefined;
-    this.acknowledgementTimer?.();
-    this.acknowledgementTimer = undefined;
-    this.waiting = undefined;
+    if (!keepAdmission) {
+      this.acknowledgementTimer?.();
+      this.acknowledgementTimer = undefined;
+      this.waiting = undefined;
+    }
     this.text = this.evaluated = this.handled = this.refreshed = "";
     this.separators = "";
     this.input = undefined;
@@ -244,6 +265,63 @@ export class LiveIntent {
     console.error("Aside voice control ended", { error, call: this.calls });
     this.ports.emit({ type: "error", error });
     this.close();
+  }
+  private deliverAnswer() {
+    const task = this.answerTask;
+    if (!task?.acknowledged || !task.result) return;
+    this.ports.emit({
+      type: "answer",
+      version: task.decision.version,
+      decisionId: task.decision.decisionId,
+      result: task.result,
+    });
+    this.answerTask = undefined;
+  }
+  private cancelAnswer() {
+    this.answerTask?.controller.abort();
+    this.answerTask = undefined;
+  }
+  private decide(
+    decision: Extract<LiveControlEvent, { type: "decision" }>,
+    modelMs: number,
+  ) {
+    this.decidedAt = this.ports.now();
+    const { result } = decision;
+    if (
+      !decision.answerPending &&
+      result.action !== "ignore" &&
+      result.action !== "wait"
+    )
+      this.cancelAnswer();
+    console.log("Aside voice decision", {
+      action: result.action,
+      answerPending: !!decision.answerPending,
+      modelMs,
+      commands:
+        result.action === "player_control"
+          ? result.commands.map((command) => command.type)
+          : undefined,
+      characters: decision.text.length,
+      call: this.calls,
+      version: decision.version,
+      revision: result.revision,
+      wasPlaying: decision.player.wasPlaying,
+    });
+    if (result.action !== "ignore" && result.action !== "wait") {
+      this.waiting = decision;
+      this.acknowledgementTimer = this.ports.after(10000, () =>
+        this.fail(
+          "Playback acknowledgement timed out. Please reconnect the microphone.",
+        ),
+      );
+    }
+    this.ports.emit({
+      ...decision,
+      text:
+        result.action === "ignore" || result.action === "wait"
+          ? ""
+          : decision.text,
+    });
   }
   private async classify() {
     if (this.closed || !this.input || this.pending || this.waiting) return;
@@ -295,8 +373,69 @@ export class LiveIntent {
           }
         : {}),
     });
+    const startedAt = this.ports.now();
+    let admission: NonNullable<LiveIntent["answerTask"]> | undefined;
+    const valid = () =>
+      !this.closed &&
+      !controller.signal.aborted &&
+      epoch === this.epoch &&
+      text.trim() === this.text.trim();
+    const decision = (
+      result: QuestionResult,
+    ): Extract<LiveControlEvent, { type: "decision" }> => ({
+      type: "decision",
+      version,
+      input: { turnId: player.turnId, startMs: this.inputStartMs },
+      decisionId: crypto.randomUUID(),
+      player,
+      text,
+      result,
+    });
     try {
-      const result = await this.ports.answer(request, signal);
+      const result = await this.ports.answer(request, signal, () => {
+        if (admission) return valid();
+        if (
+          !valid() ||
+          (!refreshing && conversationRevision !== this.conversation.revision)
+        ) {
+          controller.abort();
+          return false;
+        }
+        const accepted = {
+          ...decision({
+            action: "answer",
+            revision: request.revision,
+            answer: "",
+            sources: [],
+            tools: ["accept_question"],
+          }),
+          answerPending: true,
+        };
+        this.cancelAnswer();
+        admission = this.answerTask = {
+          decision: accepted,
+          acknowledged: false,
+          controller,
+        };
+        // Continue preparing this answer independently of later intent checks.
+        if (this.pending === controller) this.pending = undefined;
+        this.decide(accepted, this.ports.now() - startedAt);
+        return true;
+      });
+      if (admission) {
+        // Its own admission, progress speech and playback updates cannot
+        // invalidate the already accepted question or restart its model work.
+        if (
+          this.closed ||
+          controller.signal.aborted ||
+          this.answerTask !== admission
+        )
+          return;
+        if (result.action !== "answer") throw Error("Invalid admitted answer");
+        admission.result = result;
+        this.deliverAnswer();
+        return;
+      }
       if (
         this.closed ||
         controller.signal.aborted ||
@@ -305,44 +444,13 @@ export class LiveIntent {
         text.trim() !== this.text.trim()
       )
         return;
-      const decision: Extract<LiveControlEvent, { type: "decision" }> = {
-        type: "decision",
-        version,
-        input: { turnId: player.turnId, startMs: this.inputStartMs },
-        decisionId: crypto.randomUUID(),
-        player,
-        text,
-        result,
-      };
-      this.decidedAt = this.ports.now();
-      // The listener's words stay out of the log; shape and timing are enough.
-      console.log("Aside voice decision", {
-        action: result.action,
-        commands:
-          result.action === "player_control"
-            ? result.commands.map((command) => command.type)
-            : undefined,
-        characters: text.length,
-        call: this.calls,
-        version,
-        revision: result.revision,
-        wasPlaying: player.wasPlaying,
-      });
-      if (result.action !== "ignore" && result.action !== "wait") {
-        this.waiting = decision;
-        this.acknowledgementTimer = this.ports.after(10000, () =>
-          this.fail(
-            "Playback acknowledgement timed out. Please reconnect the microphone.",
-          ),
-        );
-      }
-      this.ports.emit({
-        ...decision,
-        text:
-          result.action === "ignore" || result.action === "wait" ? "" : text,
-      });
+      this.decide(decision(result), this.ports.now() - startedAt);
     } catch (error) {
-      if (controller.signal.aborted || this.closed || epoch !== this.epoch)
+      if (
+        controller.signal.aborted ||
+        this.closed ||
+        (!admission && epoch !== this.epoch)
+      )
         return;
       const reason = error instanceof Error ? error.message : String(error);
       const timedOut = signal.aborted;
@@ -367,6 +475,7 @@ export class LiveIntent {
   }
   close() {
     this.closed = true;
+    this.cancelAnswer();
     this.resetTurn();
     this.conversation.clear();
     this.fragments.clear();
