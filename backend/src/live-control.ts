@@ -28,6 +28,7 @@ export class LiveControl {
     context: (text: string) => void,
     telemetry?: (totals: QuestionTelemetry) => void,
     intentLimit = 30,
+    private disposeQuestions?: () => void,
   ) {
     this.intent = new LiveIntent(
       control.player,
@@ -141,6 +142,7 @@ export class LiveControl {
     if (this.closed) return;
     this.closed = true;
     this.intent.close();
+    this.disposeQuestions?.();
     clearInterval(this.heartbeat);
     this.sink?.enqueue(this.encoder.encode('{"type":"closed"}\n'));
     this.sink?.close();

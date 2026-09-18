@@ -24,6 +24,7 @@ jobs:
       - run: npm run check
       - run: npm test
       - run: npm run test:player-coverage
+      - run: npm run test:preload-coverage
       - run: npm run build -w @aside/frontend
       - run: npm run test:cloudflare
       - run: docker build -f cloudflare/Dockerfile -t aside-media:ci .

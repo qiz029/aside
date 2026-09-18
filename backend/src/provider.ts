@@ -2,6 +2,7 @@ import type { AnalysisPort } from "@aside/engine/server";
 import type { Passage } from "@aside/engine/core";
 import { AudioProvider } from "./audio-provider.js";
 import { attachLiveSideband } from "./live-sideband.js";
+import { connectResponsesNode } from "./responses-node.js";
 /** Model adapter accepts bytes; persistence belongs to the repository. */
 export class OpenAIProvider extends AudioProvider implements AnalysisPort {
   attachLive(
@@ -15,7 +16,7 @@ export class OpenAIProvider extends AudioProvider implements AnalysisPort {
     key: string,
     model = process.env.ASIDE_BACKEND_MODEL || "gpt-5.6-luna",
   ) {
-    super(key, model);
+    super(key, model, false, (events) => connectResponsesNode(key, events));
   }
   async transcribe(audio: Uint8Array, offsetMs: number) {
     return this.transcribeAudio(audio, offsetMs);

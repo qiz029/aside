@@ -42,6 +42,12 @@ export interface ModelReply {
 }
 /** Only the data needed by this app's question loop, with no SDK types. */
 export interface QuestionModel {
+  prepareLive?(request: Parameters<QuestionModel["reply"]>[0]):
+    | {
+        model: QuestionModel;
+        close(): void;
+      }
+    | undefined;
   reply(request: {
     context?: ReturnType<typeof buildContext> & {
       player?: PlayerInput;

@@ -50,6 +50,16 @@ export const describeCost = (totals: QuestionTelemetry) =>
     `reasoning=${totals.reasoningTokens}`,
   ].join(" ");
 export interface QuestionAnswerer {
+  prepareLive?(
+    analysis: Analysis,
+    atMs: number,
+    history: QuestionRequest["history"],
+  ):
+    | {
+        questions: QuestionAnswerer;
+        close(): void;
+      }
+    | undefined;
   answer(
     analysis: Analysis,
     request: QuestionRequest,
@@ -66,6 +76,36 @@ export class QuestionService implements QuestionAnswerer {
     private model: QuestionModel,
     private rounds = 5,
   ) {}
+  prepareLive(
+    analysis: Analysis,
+    atMs: number,
+    history: QuestionRequest["history"],
+  ) {
+    try {
+      const prepared = this.model.prepareLive?.({
+        context: buildContext(
+          analysis,
+          atMs,
+          history.map(({ role, text }) => ({ role, text })),
+        ),
+        instructions: liveDecisionInstructions + playerToolInstructions,
+        tools: liveDecisionTools,
+        toolResults: [],
+        reasoningEffort: "low",
+        toolChoice: "required",
+      });
+      if (!prepared) return;
+      return {
+        questions: new QuestionService(prepared.model, this.rounds),
+        close: () => prepared.close(),
+      };
+    } catch {
+      // Preparation is optional, including failures before the transport opens.
+      // The normal request path still validates and sends the current context.
+      console.warn("Aside voice model preload unavailable");
+      return;
+    }
+  }
   async answer(
     analysis: Analysis,
     request: QuestionRequest,

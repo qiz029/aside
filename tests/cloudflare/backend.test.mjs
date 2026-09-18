@@ -36,6 +36,7 @@ let googleIdentity = {
 const controlEvents = [];
 const sidebands = new Map();
 let liveReply;
+let responsesSocket;
 const usedProofs = new Set();
 const origin = "https://aside.test";
 const testerIp = "192.0.2.10";
@@ -135,6 +136,13 @@ before(async () => {
             if (data.type === "session.close" && acknowledgeClose)
               pair[1].send(JSON.stringify({ type: "session.closed" }));
           });
+          return new WorkerResponse(null, { status: 101, webSocket: pair[0] });
+        }
+        if (request.url.endsWith("/responses") && request.headers.get("Upgrade") === "websocket") {
+          if (!responsesSocket) return new Response(null, { status: 503 });
+          const pair = new WebSocketPair();
+          pair[1].accept();
+          responsesSocket(pair[1]);
           return new WorkerResponse(null, { status: 101, webSocket: pair[0] });
         }
         if (request.url.endsWith("/responses") && liveReply) return liveReply(await request.json());
@@ -2768,5 +2776,84 @@ test("Live sideband pushes multiple decisions on one owner-bound NDJSON stream w
     liveReply = undefined;
     await reader?.cancel();
     if (sessionId) await a.request("/api/episodes/control-public/usage", "POST", { sessionId, seconds: 1, finalized: true });
+  }
+});
+
+test("Live preloads context before speech, forks only new input and closes its Responses connection", async () => {
+  const a = await visitor();
+  await seed("preloaded-live", "seed", true);
+  await a.request("/api/trial", "POST", { token: JSON.stringify({ cdata: a.id, nonce: crypto.randomUUID() }) }, { "cf-connecting-ip": testerIp });
+  const { createPlayerConfig } = await import("../../engine/src/player.ts");
+  const player = { version: 0, sequence: 0, revision: 1, positionMs: 1000, wasPlaying: true, audibleSource: "podcast", config: createPlayerConfig() };
+  const frames = [];
+  let socketClosed = false, finishAnswer, answerStarted;
+  const started = new Promise(resolve => { answerStarted = resolve; });
+  responsesSocket = socket => {
+    socket.addEventListener("close", () => { socketClosed = true; });
+    socket.addEventListener("message", event => {
+      const frame = JSON.parse(event.data); frames.push(frame);
+      const warmup = frame.generate === false;
+      socket.send(JSON.stringify({ type: "response.completed", stream_id: frame.stream_id, response: {
+        id: warmup ? "prepared-context" : "accepted-question", status: "completed",
+        output: warmup ? [] : [{ type: "function_call", call_id: "admit", name: "accept_question", arguments: "{}" }],
+      } }));
+    });
+  };
+  liveReply = async body => {
+    assert.equal(body.previous_response_id, "accepted-question");
+    answerStarted();
+    await new Promise(resolve => { finishAnswer = resolve; });
+    return Response.json({ id: "finished-answer", output_text: "The explanation", output: [] });
+  };
+  let reader, sessionId;
+  try {
+    const created = await a.request("/api/episodes/preloaded-live/live", "POST", {
+      sdp: "offer", atMs: 1000, history: [], control: { player, earlyResponse: true },
+    }, { "cf-connecting-ip": testerIp });
+    assert.equal(created.status, 200, await created.clone().text());
+    sessionId = (await created.json()).session.id;
+    const path = `/api/episodes/preloaded-live/live-control?sessionId=${sessionId}`;
+    reader = (await a.request(path)).body.getReader();
+    let buffered = "";
+    const next = async type => {
+      for (;;) {
+        while (buffered.includes("\n")) {
+          const at = buffered.indexOf("\n"), line = buffered.slice(0, at); buffered = buffered.slice(at + 1);
+          const event = JSON.parse(line);
+          assert.notEqual(event.type, "error", event.error);
+          if (event.type === type) return event;
+        }
+        const { value, done } = await reader.read(); assert.equal(done, false);
+        buffered += new TextDecoder().decode(value);
+      }
+    };
+    await next("ready");
+    for (let i = 0; i < 100 && !frames.length; i++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(frames.length, 1, "known context is sent before any user speech");
+    assert.equal(frames[0].generate, false);
+    assert.ok(frames[0].tools.some(t => t.name === "accept_question"));
+    const base = JSON.parse(frames[0].input[0].content);
+    sidebands.get(sessionId).send(JSON.stringify({ type: "session.input_transcript.delta", delta: "Why Ah Q?", start_ms: 0, end_ms: 200 }));
+    const decision = await next("decision");
+    await started;
+    assert.equal(decision.answerPending, true, "warm admission still releases before the answer");
+    assert.equal(frames.length, 2);
+    assert.equal(frames[1].previous_response_id, "prepared-context");
+    const delta = JSON.parse(frames[1].input[0].content);
+    assert.equal(delta.contextUpdate.hostStyle, undefined);
+    assert.equal(delta.contextUpdate.recentTranscript, undefined);
+    assert.deepEqual([...base.history, ...delta.historyAppend], [{ role: "user", text: "Why Ah Q?" }]);
+    assert.equal(delta.contextUpdate.player.wasPlaying, true);
+    assert.equal((await a.request(path, "PUT", { sessionId, player: { ...player, sequence: 1, revision: 2, wasPlaying: false }, acknowledgement: { decisionId: decision.decisionId, applied: true } })).status, 200);
+    finishAnswer();
+    assert.equal((await next("answer")).result.answer, "The explanation");
+    sidebands.get(sessionId).send(JSON.stringify({ type: "session.closed" }));
+    await next("closed");
+    for (let i = 0; i < 100 && !socketClosed; i++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(socketClosed, true);
+  } finally {
+    finishAnswer?.(); responsesSocket = undefined; liveReply = undefined;
+    await reader?.cancel();
+    if (sessionId) await a.request("/api/episodes/preloaded-live/usage", "POST", { sessionId, seconds: 1, finalized: true });
   }
 });

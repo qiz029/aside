@@ -4,6 +4,11 @@ import { liveStartupHistory } from "@aside/engine/server";
 import type { Analysis, Turn } from "@aside/engine/core";
 import type { QuestionModel, ModelReply } from "./question-model.js";
 import {
+  ResponsesPreload,
+  contextDelta,
+  type ConnectResponses,
+} from "./response-preload.js";
+import {
   hostPerspective,
   playerInteractionInstructions,
 } from "./dialogue-policy.js";
@@ -40,12 +45,31 @@ export class InteractiveProvider implements QuestionModel {
     key: string,
     readonly model = "gpt-5.6-luna",
     readonly trial = false,
+    private connectResponses?: ConnectResponses,
   ) {
     this.client = new OpenAI({ apiKey: key, maxRetries: 0, timeout: 90000 });
+  }
+  prepareLive(request: Parameters<QuestionModel["reply"]>[0]) {
+    if (!this.connectResponses || !request.context) return;
+    const base = request.context;
+    const preload = new ResponsesPreload(
+      this.parameters(request),
+      this.connectResponses,
+    );
+    return {
+      model: {
+        reply: (input: Parameters<QuestionModel["reply"]>[0]) =>
+          this.replyPrepared(input, preload, base),
+      },
+      close: () => preload.close(),
+    };
   }
   async reply(
     request: Parameters<QuestionModel["reply"]>[0],
   ): Promise<ModelReply> {
+    return this.replyPrepared(request);
+  }
+  private parameters(request: Parameters<QuestionModel["reply"]>[0]) {
     const input: OpenAI.Responses.ResponseInput = request.context
       ? [{ role: "user", content: JSON.stringify(request.context) }]
       : request.toolResults.map((result) => ({
@@ -58,7 +82,7 @@ export class InteractiveProvider implements QuestionModel {
       new TextEncoder().encode(JSON.stringify(input)).length > 32000
     )
       throw Error("Trial context too large");
-    const parameters = {
+    return {
       model: this.model,
       instructions: request.instructions,
       input,
@@ -72,16 +96,52 @@ export class InteractiveProvider implements QuestionModel {
       service_tier: SERVICE_TIER,
       parallel_tool_calls: false,
     } satisfies OpenAI.Responses.ResponseCreateParamsNonStreaming;
-    const response = request.onText
-      ? await this.client.responses
-          .stream(parameters, { signal: request.signal })
-          .on("response.output_text.delta", (event) =>
-            request.onText?.(event.delta),
+  }
+  private async replyPrepared(
+    request: Parameters<QuestionModel["reply"]>[0],
+    preload?: ResponsesPreload,
+    base?: NonNullable<Parameters<QuestionModel["reply"]>[0]["context"]>,
+  ): Promise<ModelReply> {
+    request.signal?.throwIfAborted();
+    const parameters = this.parameters(request);
+    // Facts still use their existing independent HTTP continuation. A slow
+    // answer must never occupy the warmed intent connection's active lane.
+    const prepared =
+      preload && request.toolChoice === "required"
+        ? await preload.reply(
+            {
+              ...parameters,
+              input: request.context
+                ? [
+                    {
+                      role: "user",
+                      content: JSON.stringify(
+                        contextDelta(base!, request.context),
+                      ),
+                    },
+                  ]
+                : parameters.input,
+            },
+            request.signal,
           )
-          .finalResponse()
-      : await this.client.responses.create(parameters, {
-          signal: request.signal,
-        });
+        : undefined;
+    request.signal?.throwIfAborted();
+    if (preload && request.toolChoice === "required")
+      console.log("Aside voice model preload", {
+        state: prepared ? "used" : "fallback",
+      });
+    const response =
+      prepared ??
+      (request.onText
+        ? await this.client.responses
+            .stream(parameters, { signal: request.signal })
+            .on("response.output_text.delta", (event) =>
+              request.onText?.(event.delta),
+            )
+            .finalResponse()
+        : await this.client.responses.create(parameters, {
+            signal: request.signal,
+          }));
     // Reasoning shares the output budget, so an exhausted turn can carry neither
     // an answer nor a tool call. Failing here reaches the caller's error path
     // instead of resolving to an empty answer that nothing ever speaks.
@@ -110,7 +170,17 @@ export class InteractiveProvider implements QuestionModel {
     return {
       id: response.id,
       model: this.model,
-      answer: response.output_text,
+      answer:
+        response.output_text ??
+        response.output
+          .flatMap((item) =>
+            item.type === "message"
+              ? item.content
+                  .filter((part) => part.type === "output_text")
+                  .map((part) => part.text)
+              : [],
+          )
+          .join(""),
       sources,
       calls,
       searchedWeb,

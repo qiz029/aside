@@ -352,65 +352,75 @@ export function createApp(store: Store, services?: BackendServices) {
       const q = liveSchema.parse(req.body);
       if (q.control && !services.voice.attachLive)
         throw Error("Server voice control is unavailable");
-      const result = await services.voice.createLive(
-        q.sdp,
-        e.analysis,
-        q.atMs,
-        q.history,
-      );
-      store.recordUsage(e.id, result.session.id, 0, false);
-      if (q.control) {
-        const id = result.session.id;
-        const control = new LiveControl(
-          id,
-          q.control,
+      const prepared = q.control?.earlyResponse
+        ? services.questions.prepareLive?.(e.analysis, q.atMs, q.history)
+        : undefined;
+      try {
+        const result = await services.voice.createLive(
+          q.sdp,
           e.analysis,
+          q.atMs,
           q.history,
-          services.questions,
-          (text) =>
-            controls.get(id)?.socket?.send(
-              JSON.stringify({
-                type: "session.thinking.append",
-                delegation_id: null,
-                content: text,
-              }),
-            ),
-          (totals) => console.log(`live intent ${id} ${describeCost(totals)}`),
-          sessionPolicy.intentCalls,
         );
-        const entry: {
-          episode: string;
-          control: LiveControl;
-          socket?: LiveSideband;
-          timer: ReturnType<typeof setTimeout>;
-        } = {
-          episode: e.id,
-          control,
-          timer: setTimeout(() => {
-            entry.socket?.send(JSON.stringify({ type: "session.close" }));
-            closeControl(id, liveSessionExpired);
-          }, sessionPolicy.seconds * 1000),
-        };
-        controls.set(id, entry);
-        try {
-          entry.socket = await services.voice.attachLive!(
+        store.recordUsage(e.id, result.session.id, 0, false);
+        if (q.control) {
+          const id = result.session.id;
+          const control = new LiveControl(
             id,
-            (event) => {
-              if (event.type === "session.closed") closeControl(id);
-              else control.receive(event);
-            },
-            () =>
-              closeControl(
-                id,
-                "Live sideband disconnected. Please reconnect the microphone.",
+            q.control,
+            e.analysis,
+            q.history,
+            prepared?.questions ?? services.questions,
+            (text) =>
+              controls.get(id)?.socket?.send(
+                JSON.stringify({
+                  type: "session.thinking.append",
+                  delegation_id: null,
+                  content: text,
+                }),
               ),
+            (totals) =>
+              console.log(`live intent ${id} ${describeCost(totals)}`),
+            sessionPolicy.intentCalls,
+            prepared?.close,
           );
-        } catch (error) {
-          closeControl(id);
-          throw error;
+          const entry: {
+            episode: string;
+            control: LiveControl;
+            socket?: LiveSideband;
+            timer: ReturnType<typeof setTimeout>;
+          } = {
+            episode: e.id,
+            control,
+            timer: setTimeout(() => {
+              entry.socket?.send(JSON.stringify({ type: "session.close" }));
+              closeControl(id, liveSessionExpired);
+            }, sessionPolicy.seconds * 1000),
+          };
+          controls.set(id, entry);
+          try {
+            entry.socket = await services.voice.attachLive!(
+              id,
+              (event) => {
+                if (event.type === "session.closed") closeControl(id);
+                else control.receive(event);
+              },
+              () =>
+                closeControl(
+                  id,
+                  "Live sideband disconnected. Please reconnect the microphone.",
+                ),
+            );
+          } catch (error) {
+            closeControl(id);
+            throw error;
+          }
         }
+        return { ...result, ...(q.control ? { control: true } : {}) };
+      } catch (error) {
+        prepared?.close();
+        throw error;
       }
-      return { ...result, ...(q.control ? { control: true } : {}) };
     },
   );
   app.route<{ Params: { id: string }; Querystring: { sessionId?: string } }>({

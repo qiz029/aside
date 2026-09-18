@@ -33,9 +33,10 @@
     "export:demo": "node --import tsx scripts/export-public-demo.ts",
     "check:mobile": "npm run check -w @aside/mobile",
     "postinstall": "node mobile/scripts/patch-audio.mjs",
-    "test:remote-coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-include='backend/src/question-service.ts' --test-coverage-include='backend/src/question-tools.ts' --test-coverage-include='backend/src/dialogue-policy.ts' --test-coverage-include='backend/src/interactive-provider.ts' --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-functions=80 tests/question-service.test.ts tests/provider.test.ts tests/early-voice.test.ts",
+    "test:remote-coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-include='backend/src/question-service.ts' --test-coverage-include='backend/src/question-tools.ts' --test-coverage-include='backend/src/dialogue-policy.ts' --test-coverage-include='backend/src/interactive-provider.ts' --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-functions=80 tests/question-service.test.ts tests/provider.test.ts tests/early-voice.test.ts tests/response-preload.test.ts",
     "eval:voice-conversation": "node --import tsx scripts/eval-voice-conversation.ts",
-    "test:voice-control-coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-include='backend/src/live-*.ts' --test-coverage-include='backend/src/websocket-upgrade.ts' --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-functions=80 tests/live-intent.test.ts tests/live-conversation.test.ts tests/live-control.test.ts tests/live-session-policy.test.ts tests/websocket-upgrade.test.ts"
+    "test:voice-control-coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-include='backend/src/live-*.ts' --test-coverage-include='backend/src/websocket-upgrade.ts' --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-functions=80 tests/live-intent.test.ts tests/live-conversation.test.ts tests/live-control.test.ts tests/live-session-policy.test.ts tests/websocket-upgrade.test.ts",
+    "test:preload-coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-include='backend/src/response-preload.ts' --test-coverage-include='backend/src/responses-*.ts' --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-functions=80 tests/response-preload.test.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260911.1",

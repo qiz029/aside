@@ -40,13 +40,14 @@ sequenceDiagram
 
 ## 协议
 
-`POST /live` 的可选 `control` 含 `player` 和 `debug`。`player` 包括 `version`（手动操作使旧结果失效）、递增 `sequence`（忽略乱序状态更新）、播放 `revision`、`positionMs`、`wasPlaying`、`audibleSource` 和播放器配置。
+`POST /live` 的可选 `control` 含 `player`、`debug` 和 `earlyResponse`。新版 runtime 设置 `earlyResponse:true`：后端先判断是否接话，再异步准备答案；旧客户端保持完整结果的一次性决定。`player` 包括 `version`（手动操作使旧结果失效）、递增 `sequence`（忽略乱序状态更新）、播放 `revision`、`positionMs`、`wasPlaying`、`audibleSource` 和播放器配置。
 
 `GET /live-control?sessionId=…` 返回持续的 `application/x-ndjson`：
 
 - `ready`：会话通道就绪，之后才启用 Live 麦克风输入。
 - `observing`、`classifying`：后端已收到片段、已开始判断；仅 `debug:true` 带诊断原文。
 - `decision`：`decisionId`、`version`、输入时的 `player` 快照、被接受的 `text` 和原有 `QuestionResult`。`ignore`、`wait` 不携带原文，不暂停播放；`classifying` 起播客轻微降音（软让位），`ignore` 后回升，`wait` 由保持超时回升，见[播放器让位](player-controls.md#让位软让位与硬让位)。
+- `decision.answerPending:true`：问题已被接受，允许 Live 接话，完整答案仍在准备。后续 `answer` 事件携带同一 `decisionId`，只补充仍有效的这一轮；完整答案不会占用下一轮意图判断的槽位。
 - `heartbeat`：15 秒一次。
 - `error`、`closed`：明确终止通道，前端关闭语音并提示重新连接，保留播放器可用。判断调用失败时，原因只写入服务端日志（`wrangler tail` 中的 `Aside voice intent classification failed`，含 reason、是否超时、第几次判断），前端只区分三种安全文案：试用会话已结束（120 秒上限或 AI 关闭）、判断超时（15 秒）、其它失败。
 
@@ -55,6 +56,14 @@ sequenceDiagram
 Cloudflare 通过已认证身份选择对应的 LiveSupervisor，再核对节目和会话 ID；会话 ID 本身不能授权另一个用户订阅或修改。每个 Live 会话只接受一个控制流。Fastify 本地开发模式保持原有单用户边界，复用同一判断与推送实现。
 
 ## 调度和生命周期
+
+### 连接时预热判断上下文
+
+带 `earlyResponse:true` 的会话在创建 Live 音频连接的同时，为判断模型建立独立 Responses WebSocket，并发送 `response.create` / `generate:false`。规则、工具定义、当前已听内容及已有对话先成为服务端基线；预热不生成回答，不调用播放器工具，也不阻塞麦克风连接。参见 [OpenAI WebSocket 预热协议](https://developers.openai.com/api/docs/guides/websocket-mode#connect-and-create-responses)。
+
+预热完成后，判断通过 `previous_response_id` 引用基线，只追加发生变化的上下文字段及新增历史。若原历史已被截断或修改，则发送替换历史；最新播放位置、当前片段、实际输出和用户话语始终覆盖旧状态。规则和工具仍按 API 要求随请求声明。每次判断从同一基线分支，作废的判断不会混入用户实际对话。基线占一个固定 lane；最多三个判断 lane 供已取消请求排空和后续请求使用，不无限创建 lane。事实回答沿已接受的 response ID 在独立 HTTP 路径继续，保持与意图判断并行。
+
+预热未完成、握手失败、缓存失效或连接中断时，当前请求回退为携带完整最新上下文的原 HTTP 调用。所有状态按语音会话隔离，断麦、创建失败、sideband 或 NDJSON 关闭都会释放预热连接。生产日志 `Aside voice model preload` 的 `ready`（含准备耗时）、`used`、`fallback` 和 `unavailable`（仅原因分类及错误码） 可与 `Aside voice decision.modelMs` 对照；这些时间不等于设备真正开始出声的时间。
 
 首个含文字或数字的片段启动 160ms 合并窗口，不等 VAD speech-end，也不等待 delegation。每个会话最多一个模型判断在途；途中更新的文本在后续判断中合并。文本发生变化或手动操作使结果过期时丢弃旧决定。`ignore` 和 `wait` 都允许后来追加的内容再次判断；不能因为先听到旁人聊天就丢弃随后的控制语句。
 
@@ -85,6 +94,7 @@ speaking/finished 从队列后的实际 PCM 计算。字幕前缀同样保留，
 ```sh
 npm test
 npm run test:voice-control-coverage
+npm run test:preload-coverage
 npm run test:cloudflare
 npm run build
 npx playwright test tests/browser/voice-remote.spec.ts tests/browser/voice-output.spec.ts

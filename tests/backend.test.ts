@@ -11,6 +11,99 @@ import { createApp } from "../backend/src/app.js";
 const unused = async (): Promise<never> => {
   throw Error("Unexpected provider call in test");
 };
+test("local voice preload begins before Live creation and closes on disconnect or setup failure", async () => {
+  const { createPlayerConfig } = await import("@aside/engine/player");
+  for (const failure of [undefined, "create", "attach"]) {
+    const root = await mkdtemp(join(tmpdir(), "aside-preload-"));
+    const store = new Store(root);
+    store.put({
+      id: "warm",
+      title: "test",
+      createdAt: "now",
+      durationMs: 10000,
+      status: "ready",
+      stage: "ready",
+      progress: 1,
+      analysis: {
+        version: "1",
+        source: "demo",
+        summary: "",
+        hostStyle: "",
+        passages: [],
+        anchors: [],
+        speakers: [],
+        voice: "masculine",
+        voiceReason: "test",
+      },
+    });
+    let prepared = false,
+      closed = false;
+    const app = createApp(
+      store,
+      fakeServices({
+        questions: {
+          answer: unused,
+          prepareLive: () => {
+            prepared = true;
+            return {
+              questions: { answer: unused },
+              close: () => {
+                closed = true;
+              },
+            };
+          },
+        },
+        voice: {
+          transcribeQuestion: unused,
+          createLive: async () => {
+            assert.equal(
+              prepared,
+              true,
+              "preload overlaps audio session setup",
+            );
+            if (failure === "create") throw Error("creation failed");
+            return {
+              session: { id: "warm-session" },
+              transport: { sdp: "answer" },
+            };
+          },
+          attachLive: async () => {
+            if (failure === "attach") throw Error("attach failed");
+            return { send() {}, close() {} };
+          },
+        },
+      }),
+    );
+    try {
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/episodes/warm/live",
+        payload: {
+          sdp: "offer",
+          atMs: 1000,
+          control: {
+            earlyResponse: true,
+            player: {
+              version: 0,
+              sequence: 0,
+              revision: 0,
+              positionMs: 1000,
+              wasPlaying: true,
+              audibleSource: "podcast",
+              config: createPlayerConfig(),
+            },
+          },
+        },
+      });
+      assert.equal(created.statusCode, failure ? 400 : 200);
+      assert.equal(closed, !!failure);
+    } finally {
+      await app.close();
+      assert.equal(closed, true);
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+});
 test("local server attaches sideband before returning Live and streams server decisions", async () => {
   const root = await mkdtemp(join(tmpdir(), "aside-live-control-"));
   const store = new Store(root);

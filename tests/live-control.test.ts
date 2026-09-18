@@ -35,6 +35,7 @@ const flush = async () => {
 test("early-response clients receive admission then completion on NDJSON; old clients retain the single-result contract", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
   for (const earlyResponse of [true, false]) {
+    let disposed = 0;
     let finish!: () => void;
     const events: LiveControlEvent[] = [];
     const c = new LiveControl(
@@ -67,6 +68,11 @@ test("early-response clients receive admission then completion on NDJSON; old cl
         },
       },
       () => {},
+      undefined,
+      30,
+      () => {
+        disposed++;
+      },
     );
     const reading = readLiveControl(c.subscribe(), (e) => events.push(e));
     c.receive({
@@ -89,6 +95,8 @@ test("early-response clients receive admission then completion on NDJSON; old cl
     await flush();
     assert.equal(events.at(-1)?.type, earlyResponse ? "answer" : "decision");
     c.close();
+    c.close();
+    assert.equal(disposed, 1);
     await reading;
   }
 });
