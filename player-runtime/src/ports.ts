@@ -11,6 +11,7 @@ import type {
   QuestionPhase,
   LiveControlEvent,
   LiveControlUpdate,
+  TranscriptTiming,
 } from "@aside/engine/contracts";
 import type { PlayerConfig } from "@aside/engine/player";
 export interface PodcastAudio {
@@ -70,7 +71,11 @@ export interface VoiceCallbacks {
   onDiagnostic?(message: string): void;
   onReady(): void;
   onOutput(active: boolean): void;
-  onTranscript(role: Turn["role"], text: string): void;
+  onTranscript(
+    role: Turn["role"],
+    text: string,
+    timing?: TranscriptTiming,
+  ): void;
   onDelegation(id: string): void;
   onError(message: string): void;
   onSpeech(active: boolean): void;

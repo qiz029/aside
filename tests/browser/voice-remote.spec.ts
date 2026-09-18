@@ -13,7 +13,7 @@ test.use({ locale: "en-US", launchOptions: { args: ["--mute-audio"] } });
 async function setupRemote(
   page: Page,
   debug = false,
-  respond?: (q: QuestionRequest) => QuestionResult,
+  respond?: (q: QuestionRequest) => QuestionResult | Promise<QuestionResult>,
   acknowledgeClose = true,
   origin = "",
 ) {
@@ -335,6 +335,89 @@ async function setupRemote(
     questionRequests: () => questionRequests,
   };
 }
+
+test("an interrupted reply and early progress stay on opposite sides of the new question", async ({
+  page,
+}) => {
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const s = await setupRemote(page, true, async (q) => {
+    if (q.history.at(-1)!.text.includes("为什么")) await pending;
+    return {
+      action: "answer",
+      revision: q.revision,
+      answer: "Explanation",
+      sources: [],
+      tools: [],
+    };
+  });
+  await page.locator(".debug-toggle").click();
+  await s.speak(["讲讲阿Q正传"]);
+  await expect.poll(() => s.acknowledgements.length).toBe(1);
+  await page.evaluate(() => {
+    const { ctx, gain } = (window as any).remoteOutput;
+    gain.gain.setValueAtTime(0.08, ctx.currentTime);
+  });
+  const diagnostics = async () =>
+    JSON.parse(
+      (await page
+        .getByRole("region", { name: "Voice diagnostics" })
+        .locator("pre")
+        .textContent())!,
+    );
+  await expect
+    .poll(async () => (await diagnostics()).session?.spokenReply?.state)
+    .toBe("speaking");
+  const caption = (delta: string, start_ms: number) =>
+    page.evaluate(
+      (event) => (window as any).remoteChannel.send(JSON.stringify(event)),
+      {
+        type: "session.output_transcript.delta",
+        delta,
+        start_ms,
+        end_ms: start_ms + 400,
+      },
+    );
+  await caption("上一条回答", 3500);
+  await expect(
+    page.locator(".message.assistant .message-content p"),
+  ).toHaveText("上一条回答");
+  await s.speak(["阿Q为什么叫阿Q？"]);
+  await expect.poll(() => s.inputs.length).toBe(2);
+  await caption("我来查一下。", 6000);
+  // Let the caption reach the UI while the backend is deliberately held.
+  await page.waitForTimeout(200);
+  await expect(page.locator(".message .message-content p")).toHaveText([
+    "讲讲阿Q正传",
+    "上一条回答",
+  ]);
+  release();
+  await expect.poll(() => s.acknowledgements.length).toBe(2);
+  await expect(page.locator(".message .message-content p")).toHaveText([
+    "讲讲阿Q正传",
+    "上一条回答",
+    "阿Q为什么叫阿Q？",
+    "我来查一下。",
+  ]);
+  await caption("这个名字……", 7000);
+  await caption("的结尾。", 4200);
+  await expect(page.locator(".message .message-content p")).toHaveText([
+    "讲讲阿Q正传",
+    "上一条回答的结尾。",
+    "阿Q为什么叫阿Q？",
+    "我来查一下。这个名字……",
+  ]);
+  expect(s.questionRequests()).toBe(0);
+  expect(s.transcriptions()).toBe(0);
+  expect(s.errors).toEqual([]);
+  expect(await s.audio.evaluate((a: HTMLAudioElement) => a.paused)).toBe(true);
+  await page.evaluate(() => {
+    const { ctx, gain } = (window as any).remoteOutput;
+    gain.gain.setValueAtTime(0, ctx.currentTime);
+  });
+});
 
 test("a progress sentence, thinking pause and ignored bystander speech keep the podcast paused until requested", async ({
   page,

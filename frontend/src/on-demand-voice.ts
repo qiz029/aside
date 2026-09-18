@@ -237,11 +237,11 @@ export class OnDemandVoice {
           this.activity();
           this.cb.onOutput(active);
         },
-        onTranscript: (role, text) => {
+        onTranscript: (role, text, timing) => {
           if (this.cloud !== cloud || version !== this.version || this.cold)
             return;
           this.activity();
-          this.cb.onTranscript(role, text);
+          this.cb.onTranscript(role, text, timing);
         },
         onDelegation: (id) => {
           if (this.cloud !== cloud || version !== this.version || this.cold)

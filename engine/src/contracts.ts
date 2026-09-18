@@ -161,17 +161,29 @@ export const liveControlUpdateSchema = z.object({
     .optional(),
 });
 export type LiveControlUpdate = z.infer<typeof liveControlUpdateSchema>;
+/** Supplier session time, independent of the podcast playhead or packet arrival. */
+export interface TranscriptTiming {
+  startMs: number;
+  endMs: number;
+}
+const liveInputMarkerSchema = z.object({
+  turnId: z.string().min(1).max(100),
+  startMs: positionSchema.optional(),
+});
+export type LiveInputMarker = z.infer<typeof liveInputMarkerSchema>;
 export const liveControlEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ready"), sessionId: z.string() }),
   z.object({ type: z.literal("heartbeat") }),
   z.object({
     type: z.literal("observing"),
     version: revisionSchema,
+    input: liveInputMarkerSchema.optional(),
     text: z.string().optional(),
   }),
   z.object({
     type: z.literal("classifying"),
     version: revisionSchema,
+    input: liveInputMarkerSchema.optional(),
     text: z.string().optional(),
     conversation: conversationContextSchema
       .extend({ history: historySchema })
@@ -180,6 +192,7 @@ export const liveControlEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("decision"),
     version: revisionSchema,
+    input: liveInputMarkerSchema.optional(),
     decisionId: z.string(),
     player: playerInputSchema,
     text: z.string(),

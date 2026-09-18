@@ -1765,6 +1765,156 @@ test("under server voice control only a backend answer is heard or recorded", as
   s.session.dispose();
 });
 
+test("interrupting a speaking answer puts early progress after its own question and preserves the heard prefix", async (t) => {
+  const s = setup("auto", undefined, undefined, false, true);
+  t.after(() => s.session.dispose());
+  s.session.start();
+  await flush();
+  const first = {
+    ...s.decision("answer"),
+    text: "讲讲阿Q正传",
+    input: { turnId: "first", startMs: 1000 },
+  };
+  s.push(first);
+  await flush();
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", "上一条回答", {
+    startMs: 2000,
+    endMs: 2500,
+  });
+  // The model's progress can beat the sideband observation, let alone its decision.
+  s.callbacks.onTranscript("assistant", "我来查一下。", {
+    startMs: 5000,
+    endMs: 5500,
+  });
+  s.push({
+    type: "observing",
+    version: s.serverState.version,
+    input: { turnId: "second", startMs: 4000 },
+  });
+  assert.deepEqual(
+    s.session.getSnapshot().history.map((t) => t.text),
+    ["讲讲阿Q正传", "上一条回答"],
+  );
+  s.clock.advance(250);
+  await flush();
+  assert.equal(s.serverState.assistant?.text, "上一条回答");
+  const second = {
+    ...s.decision("answer"),
+    text: "阿Q为什么叫阿Q？",
+    input: { turnId: "second", startMs: 4000 },
+  };
+  s.push(second);
+  await flush();
+  s.callbacks.onTranscript("assistant", "这个名字……", {
+    startMs: 6000,
+    endMs: 6500,
+  });
+  // A delayed caption from the interrupted answer still belongs to its old bubble.
+  s.callbacks.onTranscript("assistant", "的结尾。", {
+    startMs: 3000,
+    endMs: 3500,
+  });
+  const expected = [
+    "讲讲阿Q正传",
+    "上一条回答的结尾。",
+    "阿Q为什么叫阿Q？",
+    "我来查一下。这个名字……",
+  ];
+  assert.deepEqual(
+    s.session.getSnapshot().history.map((t) => t.text),
+    expected,
+  );
+  assert.deepEqual(
+    s.session.checkpoint().history.map((t) => t.text),
+    expected,
+  );
+  s.clock.advance(250);
+  await flush();
+  assert.equal(s.serverState.assistant?.text, "我来查一下。这个名字……");
+  assert.equal(s.requests.length, 0);
+  assert.equal(s.audio.playing, false);
+});
+
+test("bystander captions return to the accepted reply without creating a question bubble", async (t) => {
+  const s = setup("auto", undefined, undefined, false, true);
+  t.after(() => s.session.dispose());
+  s.session.start();
+  await flush();
+  s.push({ ...s.decision("answer"), input: { turnId: "a", startMs: 1000 } });
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", "A reply", {
+    startMs: 2000,
+    endMs: 2500,
+  });
+  await flush();
+  s.push({
+    type: "observing",
+    version: s.serverState.version,
+    input: { turnId: "b", startMs: 3000 },
+  });
+  s.callbacks.onTranscript("assistant", " continues", {
+    startMs: 4000,
+    endMs: 4500,
+  });
+  assert.equal(s.session.getSnapshot().history.at(-1)?.text, "A reply");
+  s.push({ ...s.decision("wait"), input: { turnId: "b", startMs: 3000 } });
+  assert.equal(s.session.getSnapshot().history.at(-1)?.text, "A reply");
+  s.push({ ...s.decision("ignore"), input: { turnId: "b", startMs: 3000 } });
+  assert.deepEqual(
+    s.session.checkpoint().history.map((t) => t.text),
+    ["A spoken request", "A reply continues"],
+  );
+  assert.equal(s.session.getSnapshot().state.assistantSpeaking, true);
+});
+
+test("late old captions do not commit a queued new reply before it plays", async (t) => {
+  const s = setup("auto", undefined, undefined, false, true);
+  t.after(() => s.session.dispose());
+  s.session.start();
+  await flush();
+  s.push({ ...s.decision("answer"), input: { turnId: "a", startMs: 1000 } });
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", "Heard", {
+    startMs: 2000,
+    endMs: 2500,
+  });
+  s.callbacks.onOutput(false);
+  await flush();
+  s.push({
+    ...s.decision("answer"),
+    text: "New question",
+    input: { turnId: "b", startMs: 4000 },
+  });
+  await flush();
+  s.callbacks.onTranscript("assistant", "Not yet heard", {
+    startMs: 5000,
+    endMs: 5500,
+  });
+  s.callbacks.onTranscript("assistant", " old tail", {
+    startMs: 3000,
+    endMs: 3500,
+  });
+  assert.deepEqual(
+    s.session.checkpoint().history.map((t) => t.text),
+    ["A spoken request", "Heard old tail", "New question"],
+  );
+  await flush();
+  s.push({
+    ...s.decision("answer"),
+    text: "Another question",
+    input: { turnId: "c", startMs: 6000 },
+  });
+  assert.equal(
+    s.session.getSnapshot().history.some((t) => t.text === "Not yet heard"),
+    false,
+  );
+  assert.equal(
+    s.session.checkpoint().history.some((t) => t.text === "Not yet heard"),
+    false,
+  );
+});
+
 test("one voice conversation reports delivered replies and playback state without asking a frontend classifier", async () => {
   const s = setup("auto", undefined, undefined, false, true);
   s.session.start();

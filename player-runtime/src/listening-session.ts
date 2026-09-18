@@ -27,6 +27,7 @@ import {
   type PlayerCommand,
 } from "@aside/engine/player";
 import { Conversation } from "./conversation";
+import { LiveTranscript } from "./live-transcript";
 import type {
   PlayerBackend,
   PlayerHealth,
@@ -115,6 +116,8 @@ export class ListeningSession {
   /** Server voice control: the voice may only be heard while it delivers a backend answer. */
   private answerWindow = false;
   private spokenReply?: SpokenReply;
+  private liveTranscript = new LiveTranscript();
+  private heardLiveReplies = new Set<string>();
   private spokenSync?: () => void;
   private heartbeat?: () => void;
   private connectionKind: "cold" | "warm" = "cold";
@@ -318,6 +321,8 @@ export class ListeningSession {
     };
   }
   private resetRecognitionDiagnostics() {
+    this.liveTranscript.clear();
+    this.heardLiveReplies.clear();
     this.serverInput = this.serverClassifying = "";
     this.serverConversation = undefined;
     this.liveInputText = "";
@@ -618,6 +623,13 @@ export class ListeningSession {
   }
   private reportSpoken(state: SpokenReply["state"]) {
     if (!this.spokenReply) return;
+    if (state === "speaking" || state === "quiet") {
+      this.heardLiveReplies.add(this.spokenReply.decisionId);
+      if (this.heardLiveReplies.size > 100)
+        this.heardLiveReplies.delete(
+          this.heardLiveReplies.values().next().value!,
+        );
+    }
     this.spokenReply = {
       ...this.spokenReply,
       // Text can precede the audio-start callback. A cancelled queued reply
@@ -631,12 +643,28 @@ export class ListeningSession {
     this.spokenSync = undefined;
     this.syncControl();
   }
-  private appendSpoken(text: string) {
-    if (!this.spokenReply) return;
-    this.spokenReply = {
-      ...this.spokenReply,
-      text: (this.spokenReply.text + text).slice(-12000),
-    };
+  private reconcileLiveTranscript() {
+    for (const reply of this.liveTranscript.replies()) {
+      const current = this.spokenReply?.decisionId === reply.id;
+      const heard =
+        this.heardLiveReplies.has(reply.id) ||
+        (current && this.playback.assistantSpeaking);
+      if (!current && !heard) continue;
+      this.conversation.liveReply(reply.id, reply.text, heard);
+      if (
+        !current ||
+        this.spokenReply!.state === "interrupted" ||
+        this.spokenReply!.text === reply.text
+      )
+        continue;
+      this.spokenReply = {
+        ...this.spokenReply!,
+        text: reply.text.slice(-12000),
+      };
+      this.scheduleSpokenSync();
+    }
+  }
+  private scheduleSpokenSync() {
     // Coalesce output fragments, while output end/interruption flushes immediately.
     if (!this.spokenSync)
       this.spokenSync = this.clock.after(250, () => {
@@ -1095,6 +1123,10 @@ export class ListeningSession {
   private receiveControl(event: LiveControlEvent) {
     if (event.type === "observing" || event.type === "classifying") {
       if (event.version !== this.controlVersion) return;
+      if (event.input) {
+        this.liveTranscript.observe(event.input);
+        this.reconcileLiveTranscript();
+      }
       // A queued answer may deliver text before audio starts. Recognition alone
       // cannot revoke it; only a new accepted decision can replace that answer.
       this.prepareLiveOutput();
@@ -1130,6 +1162,12 @@ export class ListeningSession {
       return;
     }
     this.conversation.liveInputPending(event.result.action === "wait");
+    this.liveTranscript.resolve(
+      event.input ?? { turnId: event.decisionId },
+      event.result.action,
+      event.decisionId,
+    );
+    this.reconcileLiveTranscript();
     if (event.result.action === "ignore") {
       this.voice?.discardPendingOutput?.();
       this.release();
@@ -1151,7 +1189,16 @@ export class ListeningSession {
           state: "queued",
         };
       }
-      this.conversation.receiveLive(event.result, event.text);
+      this.conversation.receiveLive(event.result, event.text, event.decisionId);
+      this.reconcileLiveTranscript();
+      if (event.result.action === "answer" && this.spokenReply?.text) {
+        // These captions already passed the audio gate while classification
+        // was pending; attach the progress to its now-confirmed question.
+        this.reportSpoken(
+          this.playback.assistantSpeaking ? "speaking" : "quiet",
+        );
+        this.reconcileLiveTranscript();
+      }
       this.syncControl({ decisionId: event.decisionId, applied: true });
       this.log(`Backend decision applied: ${event.result.action}`);
     } catch (error) {
@@ -1308,6 +1355,7 @@ export class ListeningSession {
               type: "assistant_start",
               revision: this.playback.revision,
             });
+            this.reconcileLiveTranscript();
           } else {
             this.dispatch({
               type: "assistant_end",
@@ -1318,7 +1366,7 @@ export class ListeningSession {
           // Playback silence can be a thinking gap, never a Live turn boundary.
           this.reportSpoken(active ? "speaking" : "quiet");
         },
-        onTranscript: (role, text) => {
+        onTranscript: (role, text, timing) => {
           if (this.serverVoice && role === "user") {
             if (valid() && this.debugRecognition)
               this.lastInputDisposition =
@@ -1346,9 +1394,10 @@ export class ListeningSession {
                 ? "Skipped while playback resumes"
                 : "Skipped: no active input";
           if (accepted) {
-            this.conversation.transcript(role, text);
-            if (this.serverVoice && role === "assistant")
-              this.appendSpoken(text);
+            if (this.serverVoice && role === "assistant") {
+              this.liveTranscript.append(text, timing);
+              this.reconcileLiveTranscript();
+            } else this.conversation.transcript(role, text);
           }
         },
         onDelegation: (id) => {

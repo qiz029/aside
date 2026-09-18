@@ -28,6 +28,7 @@ export class LiveIntent {
   private refreshed = "";
   private handled = "";
   private input?: PlayerInput;
+  private inputStartMs?: number;
   private conversation: LiveConversation;
   private endMs = -1;
   private lastInputAt = -1;
@@ -60,8 +61,17 @@ export class LiveIntent {
     const { delta } = event;
     if (!delta) return;
     const start =
-      typeof event.start_ms === "number" ? event.start_ms : undefined;
-    const end = typeof event.end_ms === "number" ? event.end_ms : undefined;
+      typeof event.start_ms === "number" &&
+      Number.isFinite(event.start_ms) &&
+      event.start_ms >= 0
+        ? event.start_ms
+        : undefined;
+    const end =
+      typeof event.end_ms === "number" &&
+      Number.isFinite(event.end_ms) &&
+      event.end_ms >= (start ?? 0)
+        ? event.end_ms
+        : undefined;
     // Timestamped Live frames can be repeated on a transport; text alone is not
     // an identity ("wait wait" contains two legitimate identical fragments).
     if (start !== undefined && end !== undefined) {
@@ -99,6 +109,7 @@ export class LiveIntent {
         gapMs: Math.round(gap),
         wasPlaying: this.player.wasPlaying,
       });
+    if (!this.input) this.inputStartMs = start;
     if (!this.input)
       this.input = {
         turnId: crypto.randomUUID(),
@@ -113,6 +124,7 @@ export class LiveIntent {
     this.ports.emit({
       type: "observing",
       version: this.player.version,
+      input: { turnId: this.input.turnId, startMs: this.inputStartMs },
       ...(this.debug ? { text: this.text } : {}),
     });
     this.schedule();
@@ -205,6 +217,7 @@ export class LiveIntent {
     this.text = this.evaluated = this.handled = this.refreshed = "";
     this.separators = "";
     this.input = undefined;
+    this.inputStartMs = undefined;
   }
   private schedule() {
     if (
@@ -271,6 +284,7 @@ export class LiveIntent {
     this.ports.emit({
       type: "classifying",
       version,
+      input: { turnId: player.turnId, startMs: this.inputStartMs },
       ...(this.debug
         ? {
             text,
@@ -294,6 +308,7 @@ export class LiveIntent {
       const decision: Extract<LiveControlEvent, { type: "decision" }> = {
         type: "decision",
         version,
+        input: { turnId: player.turnId, startMs: this.inputStartMs },
         decisionId: crypto.randomUUID(),
         player,
         text,

@@ -1,4 +1,5 @@
 import type { Turn } from "@aside/engine/core";
+import type { TranscriptTiming } from "@aside/engine/contracts";
 import { readSpeechLevels } from "./audio-levels";
 import type {
   OutputBufferState,
@@ -7,7 +8,11 @@ import type {
 export interface LiveCallbacks {
   onReady(): void;
   onOutput(active: boolean): void;
-  onTranscript(role: Turn["role"], text: string): void;
+  onTranscript(
+    role: Turn["role"],
+    text: string,
+    timing?: TranscriptTiming,
+  ): void;
   onDelegation(id: string): void;
   onError(message: string): void;
   onClose(finalized: boolean, seconds: number): void;
@@ -29,7 +34,11 @@ export class LiveConnection {
   private outputMode: "hold" | "play" | "discard" | "overflow" = "discard";
   private outputEpoch = 0;
   private outputBuffer?: OutputBufferState;
-  private pendingTranscript: { text: string; frame: number }[] = [];
+  private pendingTranscript: {
+    text: string;
+    frame: number;
+    timing?: TranscriptTiming;
+  }[] = [];
   private pendingTranscriptChars = 0;
   private transcriptOpen = false;
   private closeTimer?: number;
@@ -149,7 +158,15 @@ export class LiveConnection {
             m.type === "session.output_transcript.delta" &&
             typeof m.delta === "string"
           )
-            this.outputTranscript(m.delta);
+            this.outputTranscript(
+              m.delta,
+              Number.isFinite(m.start_ms) &&
+                Number.isFinite(m.end_ms) &&
+                m.start_ms >= 0 &&
+                m.end_ms >= m.start_ms
+                ? { startMs: m.start_ms, endMs: m.end_ms }
+                : undefined,
+            );
           if (
             m.type === "session.delegation.created" &&
             m.delegation?.target === "client"
@@ -244,7 +261,7 @@ export class LiveConnection {
     this.outputQueue?.port.postMessage({ command, epoch: ++this.outputEpoch });
     this.callbacks.onDiagnostic?.(`Live output buffer: ${this.outputMode}`);
   }
-  private outputTranscript(text: string) {
+  private outputTranscript(text: string, timing?: TranscriptTiming) {
     if (this.outputMode === "discard" || this.outputMode === "overflow") return;
     // Captions and WebRTC packets have no shared word/packet IDs. Pace delayed
     // captions against received/played PCM, rather than releasing the entire
@@ -259,6 +276,7 @@ export class LiveConnection {
     this.pendingTranscript.push({
       text,
       frame: this.outputBuffer?.receivedFrames ?? 0,
+      timing,
     });
     this.pendingTranscriptChars += text.length;
     this.flushOutputTranscript();
@@ -272,7 +290,7 @@ export class LiveConnection {
     ) {
       const part = this.pendingTranscript.shift()!;
       this.pendingTranscriptChars -= part.text.length;
-      this.callbacks.onTranscript("assistant", part.text);
+      this.callbacks.onTranscript("assistant", part.text, part.timing);
     }
   }
   interrupt() {

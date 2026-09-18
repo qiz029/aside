@@ -350,13 +350,48 @@ export class Conversation {
     else this.scheduleFollowup();
   }
   /** A server decision arrives on the session stream; this never submits a question. */
-  receiveLive(result: QuestionResult, text: string) {
+  receiveLive(result: QuestionResult, text: string, decisionId?: string) {
     if (result.action === "ignore" || result.action === "wait") return;
     this.beginTurn(!this.host.playback().interruption);
+    if (decisionId)
+      this.streamIds = {
+        user: `user:${decisionId}`,
+        assistant: `assistant:${decisionId}`,
+      };
     this.recognizeQuestion(text);
     this.submittedText = text;
     this.consumeResult(result, text, undefined, true, true);
     this.host.changed();
+  }
+  /** Heard Live captions belong immediately after the question that owns them. */
+  liveReply(decisionId: string, text: string, heard = true) {
+    const userId = `user:${decisionId}`,
+      id = `assistant:${decisionId}`;
+    if (!this.turns.some((turn) => turn.id === userId)) return;
+    const unchanged =
+      (this.turns.find((turn) => turn.id === id)?.text ?? "") === text;
+    if (
+      unchanged &&
+      (!heard ||
+        (this.committed.find((turn) => turn.id === id)?.text ?? "") === text)
+    )
+      return;
+    const turns = this.turns.filter((turn) => turn.id !== id);
+    if (text)
+      turns.splice(turns.findIndex((turn) => turn.id === userId) + 1, 0, {
+        id,
+        role: "assistant",
+        text,
+      });
+    if (heard) {
+      // Updating a late old caption must not commit a different, queued reply.
+      this.committed = this.committed.filter((turn) => turn.id !== id);
+      const user = this.committed.findIndex((turn) => turn.id === userId);
+      if (text && user >= 0)
+        this.committed.splice(user + 1, 0, { id, role: "assistant", text });
+    }
+    this.history(turns);
+    if (id === this.streamIds.assistant) this.noteAnswer(text);
   }
   private consumeResult(
     result: QuestionResult,

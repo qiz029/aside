@@ -237,7 +237,18 @@ export class NativeVoice implements VoicePort {
           m.type === "session.output_transcript.delta" &&
           typeof m.delta === "string"
         )
-          this.cb.onTranscript("assistant", m.delta);
+          this.cb.onTranscript(
+            "assistant",
+            m.delta,
+            typeof m.start_ms === "number" &&
+              Number.isFinite(m.start_ms) &&
+              m.start_ms >= 0 &&
+              typeof m.end_ms === "number" &&
+              Number.isFinite(m.end_ms) &&
+              m.end_ms >= m.start_ms
+              ? { startMs: m.start_ms, endMs: m.end_ms }
+              : undefined,
+          );
         if (
           m.type === "session.delegation.created" &&
           m.delegation?.target === "client"

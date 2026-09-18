@@ -8,6 +8,7 @@ import type {
   QuestionRequest,
   QuestionResult,
 } from "@aside/engine/contracts";
+import { liveControlEventSchema } from "@aside/engine/contracts";
 
 const flush = async () => {
   for (let i = 0; i < 12; i++) await Promise.resolve();
@@ -110,6 +111,57 @@ test("server classifies any transcript fragment without delegation, keywords or 
     false,
   );
   s.intent.close();
+});
+
+test("input markers survive observation, classification and decision without debug text, and advance for the next utterance", async () => {
+  const s = setup();
+  s.speak("Why", 1000, 1100);
+  s.speak(" Ah Q?", 1100, 1500);
+  await s.advance();
+  await s.finish("answer");
+  const decision = s.events.find((e) => e.type === "decision")!;
+  assert.equal(decision.type, "decision");
+  const marker = { turnId: decision.player.turnId, startMs: 1000 };
+  for (const event of s.events) {
+    assert.ok(liveControlEventSchema.safeParse(event).success);
+    if (
+      event.type === "observing" ||
+      event.type === "classifying" ||
+      event.type === "decision"
+    )
+      assert.deepEqual(event.input, marker);
+  }
+  s.intent.update(
+    state({
+      sequence: 1,
+      assistant: {
+        decisionId: decision.decisionId,
+        state: "speaking",
+        text: "The explanation",
+      },
+    }),
+    { decisionId: decision.decisionId, applied: true },
+  );
+  s.speak("Why that name?", 4000, 4500);
+  const next = s.events.at(-1)!;
+  assert.equal(next.type, "observing");
+  assert.notEqual(next.input?.turnId, marker.turnId);
+  assert.equal(next.input?.startMs, 4000);
+  s.intent.close();
+});
+
+test("invalid supplier timestamps do not break the NDJSON contract", async () => {
+  for (const time of [NaN, Infinity, -1]) {
+    const s = setup();
+    s.speak("Explain", time, time);
+    await s.advance();
+    await s.finish("answer");
+    for (const event of s.events)
+      assert.ok(liveControlEventSchema.safeParse(event).success);
+    const observed = s.events.find((e) => e.type === "observing")!;
+    assert.equal(observed.input?.startMs, undefined);
+    s.intent.close();
+  }
 });
 
 test("bystander ignore is silent and does not discard a later addressed clause", async () => {
