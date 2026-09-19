@@ -98,6 +98,13 @@
       [device.delegate dispatchAsync:^{
         [device.delegate notifyAudioInputInterrupted];
         [device.delegate notifyAudioOutputInterrupted];
+        // A tap keeps the format it was installed with; a new route can change it.
+        if (device.inputEnabled && ![device configureInput:YES error:nil]) {
+          dispatch_async(dispatch_get_main_queue(), ^{
+            [[NSNotificationCenter defaultCenter] postNotificationName:@"AsideAnswerInterrupted" object:nil];
+          });
+          return;
+        }
         if (device.allowed && (device.playing || device.recording))
           [device.engine startAndReturnError:nil];
       }];

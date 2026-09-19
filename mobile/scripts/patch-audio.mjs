@@ -26,13 +26,30 @@ else if (!source.includes(after))
 // SDK 54 resets the mode only when category options are empty. Recording uses
 // Bluetooth options, so a previous WebRTC .voiceChat mode otherwise survives.
 const modulePath = join(dirname(path), "AudioModule.swift");
-const moduleSource = await readFile(modulePath, "utf8");
+let moduleSource = await readFile(modulePath, "utf8");
 const modeBefore = "try session.setCategory(category, options: sessionOptions)";
 const modeAfter =
   "try session.setCategory(category, mode: .default, options: sessionOptions)";
 if (moduleSource.includes(modeBefore))
-  await writeFile(modulePath, moduleSource.replace(modeBefore, modeAfter));
+  moduleSource = moduleSource.replace(modeBefore, modeAfter);
 else if (!moduleSource.includes(modeAfter))
   throw Error(
     "Review the expo-audio recording mode reset after upgrading the SDK.",
   );
+
+// HFP moves the podcast and the answer onto the call-quality link for the whole
+// listening lease, and cars present it as a phone call. A2DP alone keeps the
+// output route and leaves the built-in microphone as the only Bluetooth-era input.
+const routeBefore = `#if compiler(>=6.2) // Xcode 26
+        categoryOptions.insert(.allowBluetoothHFP)
+#else
+        categoryOptions.insert(.allowBluetooth)
+#endif`;
+const routeAfter = "        categoryOptions.insert(.allowBluetoothA2DP)";
+if (moduleSource.includes(routeBefore))
+  moduleSource = moduleSource.replace(routeBefore, routeAfter);
+else if (!moduleSource.includes(routeAfter))
+  throw Error(
+    "Review the expo-audio Bluetooth route options after upgrading the SDK.",
+  );
+await writeFile(modulePath, moduleSource);
