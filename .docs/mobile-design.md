@@ -97,3 +97,41 @@ unique typed submission, real manual capture, ten-second hold and explicit resum
 also pass. Package delivery and remaining verification are tracked in the delivery
 record; these local fixtures are not distributed production builds. The review's
 remaining live-audio boundary and physical-device gates remain open.
+
+## Web-aligned visual pass and gestures — 2026-09-18
+
+The mobile palette had drifted from the website: a cool grey-green ground, no
+amber, system type throughout. The app now takes its semantic colors from
+`frontend/src/style.css` (cream `#f6f1e8`, panel `#fffbf4`, ink `#2b2520`,
+forest `#334d3d`; dark `#1a1816` / `#8fb8a2`). Amber (`#d49a76`) is reserved for
+live voice: the microphone hearing speech, a streaming answer, the resume
+countdown. Titles, episode names and Aside's answers use a serif face (Georgia,
+Songti SC for Chinese, the platform serif on Android); controls and the
+transcript keep system text. The design source is the
+[Aside iOS App Design canvas](https://claude.ai/artifact/AAzZRQNcQoYyccNgQc2PGV).
+
+Layout changes keep every `testID` and the English strings the Maestro flows
+assert. The player header holds the collapse control, the Transcript/Conversation
+segmented control and options; the episode title sits below it. The current
+passage is a raised card and the rest of the transcript recedes. Hands-free
+listening is one status pill. The resume countdown is an amber banner with Wait
+and Continue. The library uses raised cards and a mini player that reports
+listening state. Sign-in follows the website dialog's badge, headline and copy.
+
+Gestures use `react-native-gesture-handler` and `react-native-reanimated`:
+
+- Pull the player header down, or swipe from the left edge, to return to the
+  library. Playback continues and the mini player reopens it. A third of the
+  screen or a fast flick commits; otherwise the player springs back.
+- Swipe the reading area sideways to switch Transcript and Conversation.
+- Long-press a passage for Ask about this passage (opens the composer with the
+  quoted opening), Play from here, and Copy or share.
+- The scrubber replaces the native slider. Lifting the finger above the track
+  scrubs at half, then quarter speed, with an enlarged time readout. It stays an
+  accessible adjustable control.
+
+Not implemented, because the backend has no support yet: library swipe actions
+(delete, mark finished), Google and Apple sign-in on mobile, driving mode, a
+microphone-source setting, and a full-screen "listening to you" state, which
+needs the live user transcript exposed by the listening session. Physical-device
+visual acceptance of this pass is still open.

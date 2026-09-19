@@ -16,6 +16,8 @@ type Colors = {
   onAccent: string;
   surface: string;
   line: string;
+  amberInk: string;
+  amberSurface: string;
 };
 export function LoginForm({
   locale,
@@ -129,7 +131,7 @@ export function LoginForm({
     borderWidth: 1,
     backgroundColor: colors.surface,
     borderRadius: 14,
-    minHeight: 56,
+    minHeight: 52,
     paddingHorizontal: 16,
     paddingVertical: 14,
     fontSize: 17,
@@ -181,28 +183,62 @@ export function LoginForm({
   }
   return (
     <View style={{ gap: 20, paddingTop: 8 }}>
-      <View style={{ gap: 10 }}>
-        {sentEmail ? (
-          <Text style={{ color: colors.text, fontSize: 23, fontWeight: "600" }}>
-            {tr("查看你的邮箱", "Check your inbox")}
-          </Text>
-        ) : null}
-        <Text style={{ color: colors.muted, fontSize: 15, lineHeight: 23 }}>
+      {/* The website's sign-in dialog: badge, headline, one sentence. */}
+      <View
+        accessible={false}
+        style={{
+          width: 48,
+          height: 48,
+          borderRadius: 14,
+          backgroundColor: colors.accent,
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 4,
+        }}
+      >
+        {[10, 22, 15, 6].map((height, i) => (
+          <View
+            key={i}
+            style={{
+              width: 3,
+              height,
+              borderRadius: 2,
+              backgroundColor: colors.onAccent,
+            }}
+          />
+        ))}
+      </View>
+      <View style={{ gap: 8 }}>
+        <Text
+          maxFontSizeMultiplier={1.4}
+          style={{
+            color: colors.text,
+            fontSize: 26,
+            lineHeight: 34,
+            fontWeight: "600",
+          }}
+        >
+          {sentEmail
+            ? tr("查看你的邮箱", "Check your inbox")
+            : tr("从这里继续听", "Pick up where you left off")}
+        </Text>
+        <Text style={{ color: colors.muted, fontSize: 16, lineHeight: 25 }}>
           {sentEmail
             ? tr(
                 `验证码已发送至 ${sentEmail}，10 分钟内有效。`,
                 `We sent a code to ${sentEmail}. It’s valid for 10 minutes.`,
               )
             : tr(
-                "使用与网站相同的邮箱，继续收听、上传和提问。",
-                "Use your website email to access your audio, progress and conversations.",
+                "登录后保存你的音频和收听进度。",
+                "Sign in to keep your audio and your place.",
               )}
         </Text>
       </View>
       {!sentEmail ? (
         <View style={{ gap: 8 }}>
-          <Text style={{ color: colors.muted, fontSize: 13 }}>
-            {tr("邮箱地址", "Email address")}
+          <Text style={{ color: colors.text, fontSize: 14, fontWeight: "600" }}>
+            {tr("邮箱", "Email")}
           </Text>
           <TextInput
             testID="email"
@@ -258,7 +294,16 @@ export function LoginForm({
         <Text
           testID="login-error"
           accessibilityRole="alert"
-          style={{ color: colors.text, lineHeight: 22 }}
+          style={{
+            color: colors.amberInk,
+            backgroundColor: colors.amberSurface,
+            borderRadius: 14,
+            overflow: "hidden",
+            paddingHorizontal: 16,
+            paddingVertical: 12,
+            fontSize: 14,
+            lineHeight: 22,
+          }}
         >
           {error}
         </Text>
@@ -266,7 +311,7 @@ export function LoginForm({
       <View style={{ gap: 4 }}>
         {sentEmail
           ? action(
-              tr("登录", "Sign in"),
+              tr("验证并登录", "Verify and sign in"),
               "sign-in",
               () => {
                 void perform("verify");
@@ -311,8 +356,8 @@ export function LoginForm({
               "No email? Check your spam folder, or resend the code shortly.",
             )
           : tr(
-              "无需设置密码。首次登录会自动创建账号。",
-              "No password needed. Your first sign-in creates an account.",
+              "和 asidefm.com 是同一个账号，无需设置密码。",
+              "The same account as asidefm.com. No password needed.",
             )}
       </Text>
     </View>

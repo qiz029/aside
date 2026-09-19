@@ -5,6 +5,7 @@ import React, {
   useSyncExternalStore,
 } from "react";
 import {
+  ActionSheetIOS,
   ActivityIndicator,
   Alert,
   AppState,
@@ -19,19 +20,36 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   StatusBar,
   Text,
   TextInput,
   useColorScheme,
+  useWindowDimensions,
   View,
 } from "react-native";
-import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
+import {
+  SafeAreaProvider,
+  SafeAreaView,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
 import * as DocumentPicker from "expo-document-picker";
 import Constants from "expo-constants";
 import { File } from "expo-file-system";
-import { Ionicons } from "@expo/vector-icons";
-import Slider from "@react-native-community/slider";
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import {
+  Gesture,
+  GestureDetector,
+  GestureHandlerRootView,
+} from "react-native-gesture-handler";
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withTiming,
+} from "react-native-reanimated";
+import { Scrubber } from "./Scrubber";
 import { getLocales } from "expo-localization";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { Episode } from "@aside/engine/core";
@@ -54,21 +72,46 @@ const formatTime = (ms: number) => {
 };
 function Main() {
   const dark = useColorScheme() === "dark";
+  const insets = useSafeAreaInsets();
+  const screen = useWindowDimensions();
+  const pullX = useSharedValue(0);
+  const pullY = useSharedValue(0);
+  const playerMotion = useAnimatedStyle(() => ({
+    transform: [{ translateX: pullX.value }, { translateY: pullY.value }],
+    borderTopLeftRadius: Math.min(36, pullY.value / 3),
+    borderTopRightRadius: Math.min(36, pullY.value / 3),
+  }));
+  // The website's palette (frontend/src/style.css). Amber marks live voice only.
   const colors = {
-    background: dark ? "#111612" : "#f0f1ed",
-    surface: dark ? "#202721" : "#fffefa",
-    navigation: dark ? "#19201b" : "#fffefa",
-    text: dark ? "#f0f2eb" : "#202a23",
-    muted: dark ? "#adb8ad" : "#68746b",
-    accent: dark ? "#a7cbb3" : "#315b43",
-    onAccent: dark ? "#1a281e" : "#ffffff",
-    highlight: dark ? "#2a3b30" : "#e1eadf",
-    line: dark ? "#344037" : "#d9dfd7",
+    background: dark ? "#1a1816" : "#f6f1e8",
+    surface: dark ? "#24211e" : "#fffbf4",
+    navigation: dark ? "#24211e" : "#fffbf4",
+    text: dark ? "#ece5d8" : "#2b2520",
+    muted: dark ? "#a89f92" : "#6b6157",
+    accent: dark ? "#8fb8a2" : "#334d3d",
+    onAccent: dark ? "#1a281e" : "#fffbf4",
+    highlight: dark ? "#2a3b30" : "#e3e9df",
+    line: dark ? "#38332d" : "#e6ddcf",
+    fill: dark ? "#2e2a26" : "#efe9df",
+    timestamp: dark ? "#8fb8a2" : "#4f7260",
+    amber: "#d49a76",
+    amberInk: dark ? "#efbf9b" : "#875944",
+    amberSurface: dark ? "#3a2c22" : "#f4e8de",
   };
   const [locale, setLocale] = useState(
     getLocales()[0]?.languageCode === "zh" ? "zh" : "en",
   );
   const tr = (zh: string, en: string) => (locale === "zh" ? zh : en);
+  // React Native has no font stacks; Georgia carries no Chinese glyphs.
+  const serif = {
+    fontFamily:
+      Platform.OS === "ios"
+        ? locale === "zh"
+          ? "Songti SC"
+          : "Georgia"
+        : "serif",
+    fontWeight: "400" as const,
+  };
   const [tab, setTab] = useState<"library" | "upload" | "account">("library");
   const [pane, setPane] = useState<"transcript" | "conversation">("transcript");
   const [collection, setCollection] = useState<"public" | "private">("public");
@@ -555,15 +598,16 @@ function Main() {
       unavailable ||
       (testID === "send-question" &&
         (!snapshot.question.trim() || snapshot.busy));
-    const segmented = [
-      "show-transcript",
-      "show-conversation",
-      "private-library",
-      "public-library",
-    ].includes(testID ?? "");
+    const paneTab = ["show-transcript", "show-conversation"].includes(
+      testID ?? "",
+    );
+    const chip =
+      ["private-library", "public-library"].includes(testID ?? "") ||
+      !!testID?.startsWith("followup-");
+    const segmented = paneTab || chip;
     const icon = (
       {
-        "back-library": "chevron-back",
+        "back-library": "chevron-down",
         "player-options": "ellipsis-horizontal",
         "send-question": "arrow-up",
         question: "create-outline",
@@ -582,8 +626,23 @@ function Main() {
       "question",
       "close-question",
     ].includes(testID ?? "");
-    const foreground =
-      secondary || segmented || transport ? colors.text : colors.onAccent;
+    const selectedChip = chip && !secondary;
+    const pill = ["toggle-conversation", "resume", "hold"].includes(
+      testID ?? "",
+    );
+    const foreground = selectedChip
+      ? colors.onAccent
+      : paneTab && secondary
+        ? colors.muted
+        : secondary || segmented || transport
+          ? colors.text
+          : colors.onAccent;
+    const seekIcon =
+      testID === "seek-back"
+        ? "rewind-15"
+        : testID === "seek-forward"
+          ? "fast-forward-15"
+          : null;
     return (
       <Pressable
         testID={testID}
@@ -600,38 +659,49 @@ function Main() {
         onPress={action}
         style={({ pressed }) => [
           styles.button,
-          segmented && styles.segment,
-          testID === "continue-last" && { marginHorizontal: 24, marginTop: 12 },
+          paneTab && styles.segment,
+          chip && styles.chip,
+          pill && styles.pill,
+          testID === "continue-last" && { marginHorizontal: 20, marginTop: 12 },
           transport && styles.transport,
           testID === "play-toggle" && styles.playButton,
           testID === "send-question" && styles.sendButton,
           {
-            backgroundColor: segmented
+            backgroundColor: paneTab
               ? !secondary
-                ? colors.highlight
+                ? colors.surface
                 : "transparent"
-              : transport
-                ? "transparent"
-                : secondary
-                  ? colors.surface
-                  : colors.accent,
-            borderColor:
-              secondary && !segmented && !transport
-                ? colors.line
-                : "transparent",
+              : chip
+                ? selectedChip
+                  ? colors.accent
+                  : colors.fill
+                : transport
+                  ? "transparent"
+                  : secondary
+                    ? pill
+                      ? colors.surface
+                      : colors.fill
+                    : colors.accent,
             opacity: disabled ? 0.35 : pressed ? 0.65 : 1,
             transform: [{ scale: pressed ? 0.97 : 1 }],
           },
+          paneTab && !secondary && styles.raised,
         ]}
       >
-        {icon ? (
+        {seekIcon ? (
+          <MaterialCommunityIcons
+            name={seekIcon}
+            size={32}
+            color={foreground}
+          />
+        ) : icon ? (
           <Ionicons
             name={icon}
-            size={testID === "play-toggle" ? 27 : 21}
+            size={testID === "play-toggle" ? 30 : 23}
             color={foreground}
           />
         ) : null}
-        {!icon || testID === "seek-back" || testID === "seek-forward" ? (
+        {!icon ? (
           <Text
             maxFontSizeMultiplier={1.5}
             style={{
@@ -653,31 +723,109 @@ function Main() {
     );
   const visibleError = errorMessage(rawError, locale);
   const textStyle = { color: colors.text };
+  // Playback continues behind the library; the mini player brings it back.
+  const closePlayer = (axis: "x" | "y") => {
+    (axis === "y" ? pullY : pullX).value = withTiming(
+      axis === "y" ? screen.height : screen.width,
+      { duration: 220 },
+    );
+    setTimeout(() => {
+      setEpisode(null);
+      pullX.value = 0;
+      pullY.value = 0;
+    }, 230);
+  };
+  const settle = { damping: 22, stiffness: 240 };
+  const pullDown = Gesture.Pan()
+    .runOnJS(true)
+    .activeOffsetY(12)
+    .failOffsetX([-24, 24])
+    .onUpdate((event) => {
+      pullY.value = Math.max(0, event.translationY);
+    })
+    .onEnd((event) => {
+      if (event.translationY > screen.height / 3 || event.velocityY > 900)
+        closePlayer("y");
+      else pullY.value = withSpring(0, settle);
+    });
+  const edgeBack = Gesture.Pan()
+    .runOnJS(true)
+    .activeOffsetX(16)
+    .failOffsetY([-20, 20])
+    .onUpdate((event) => {
+      pullX.value = Math.max(0, event.translationX);
+    })
+    .onEnd((event) => {
+      if (event.translationX > screen.width / 3 || event.velocityX > 900)
+        closePlayer("x");
+      else pullX.value = withSpring(0, settle);
+    });
+  const paneSwipe = Gesture.Pan()
+    .runOnJS(true)
+    .activeOffsetX([-28, 28])
+    .failOffsetY([-14, 14])
+    .onEnd((event) => {
+      if (event.translationX < -60) setPane("conversation");
+      else if (event.translationX > 60) setPane("transcript");
+    });
+  const passageMenu = (passage: { startMs: number; text: string }) => {
+    const quote =
+      passage.text.length > 24 ? `${passage.text.slice(0, 24)}…` : passage.text;
+    const actions = [
+      {
+        label: tr("就这一段提问", "Ask about this passage"),
+        run: () => {
+          session.setQuestion(
+            tr(`关于「${quote}」这一段：`, `About “${quote}”: `),
+          );
+          setComposerOpen(true);
+        },
+      },
+      {
+        label: tr("从这里播放", "Play from here"),
+        run: () => {
+          session.seek(passage.startMs);
+          session.start();
+        },
+      },
+      {
+        label: tr("拷贝或分享文字", "Copy or share text"),
+        run: () => void Share.share({ message: passage.text }).catch(failure),
+      },
+    ];
+    if (Platform.OS === "ios")
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options: [...actions.map((a) => a.label), tr("取消", "Cancel")],
+          cancelButtonIndex: actions.length,
+        },
+        (index) => actions[index]?.run(),
+      );
+    else
+      Alert.alert(quote, undefined, [
+        ...actions.map((a) => ({ text: a.label, onPress: a.run })),
+        { text: tr("取消", "Cancel"), style: "cancel" as const },
+      ]);
+  };
   const list = collection === "private" ? privateEpisodes : episodes;
   return (
-    <SafeAreaView style={[styles.root, { backgroundColor: colors.navigation }]}>
+    <SafeAreaView
+      edges={["top", "left", "right"]}
+      style={[styles.root, { backgroundColor: colors.background }]}
+    >
       <StatusBar barStyle={dark ? "light-content" : "dark-content"} />
       <KeyboardAvoidingView
         style={[styles.root, { backgroundColor: colors.background }]}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
       >
         {!keyboardVisible && !(episode && tab === "library") ? (
-          <View
-            style={[
-              styles.header,
-              {
-                backgroundColor: colors.navigation,
-                borderBottomColor: colors.line,
-              },
-            ]}
-          >
+          <View style={[styles.header, { backgroundColor: colors.background }]}>
             <Text
               maxFontSizeMultiplier={1}
               style={[styles.brand, { color: colors.accent }]}
             >
-              Aside.
+              Aside
             </Text>
-            <Ionicons name="headset-outline" size={22} color={colors.accent} />
           </View>
         ) : null}
         {error || snapshot.error ? (
@@ -770,7 +918,7 @@ function Main() {
           >
             <Text
               maxFontSizeMultiplier={1.35}
-              style={[styles.title, textStyle]}
+              style={[styles.title, serif, textStyle]}
             >
               {tr("我的", "Account")}
             </Text>
@@ -920,7 +1068,7 @@ function Main() {
             </View>
             <Text
               maxFontSizeMultiplier={1.35}
-              style={[styles.title, textStyle]}
+              style={[styles.title, serif, textStyle]}
             >
               {tr("上传音频", "Upload audio")}
             </Text>
@@ -986,79 +1134,71 @@ function Main() {
               : null}
           </ScrollView>
         ) : episode ? (
-          <>
-            <View
-              style={[
-                styles.playerHeader,
-                {
-                  backgroundColor: colors.navigation,
-                  borderBottomColor: colors.line,
-                },
-              ]}
-            >
-              {button(
-                tr("返回音频库", "Library"),
-                () => {
-                  setEpisode(null);
-                },
-                "back-library",
-                true,
-              )}
-              {episode.cover ? (
-                <Image
-                  accessibilityLabel="Episode artwork"
-                  source={{
-                    uri: api.base + `/api/episodes/${episode.id}/cover`,
-                    headers: api.headers(),
-                  }}
-                  style={{ width: 48, height: 48, borderRadius: 8 }}
-                />
-              ) : (
+          <Animated.View
+            style={[
+              { flex: 1, overflow: "hidden" },
+              { backgroundColor: colors.background },
+              playerMotion,
+            ]}
+          >
+            <GestureDetector gesture={pullDown}>
+              <View>
                 <View
-                  style={{
-                    width: 48,
-                    height: 48,
-                    borderRadius: 8,
-                    backgroundColor: colors.highlight,
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  <Ionicons
-                    name="musical-notes-outline"
-                    size={22}
-                    color={colors.accent}
-                  />
+                  style={[
+                    styles.grabber,
+                    { backgroundColor: dark ? "#5a5249" : "#c9bca9" },
+                  ]}
+                />
+                <View style={styles.playerHeader}>
+                  {button(
+                    tr("返回音频库", "Library"),
+                    () => {
+                      setEpisode(null);
+                    },
+                    "back-library",
+                    true,
+                  )}
+                  {episode.status === "ready" ? (
+                    <View
+                      style={[
+                        styles.paneTabs,
+                        { backgroundColor: colors.fill },
+                      ]}
+                    >
+                      {button(
+                        tr("逐字稿", "Transcript"),
+                        () => setPane("transcript"),
+                        "show-transcript",
+                        pane !== "transcript",
+                      )}
+                      {button(
+                        tr("对话", "Conversation"),
+                        () => setPane("conversation"),
+                        "show-conversation",
+                        pane !== "conversation",
+                      )}
+                    </View>
+                  ) : (
+                    <View style={{ flex: 1 }} />
+                  )}
+                  {button(
+                    tr("播放与对话选项", "Playback and conversation options"),
+                    () => setPlayerOptions(true),
+                    "player-options",
+                    true,
+                  )}
                 </View>
-              )}
-              <View style={{ flex: 1, gap: 3 }}>
-                <Text
-                  numberOfLines={1}
-                  maxFontSizeMultiplier={1.35}
-                  style={{
-                    color: colors.muted,
-                    fontSize: 10,
-                    fontWeight: "700",
-                    letterSpacing: 1.2,
-                  }}
-                >
-                  {tr("正在收听", "NOW LISTENING")}
-                </Text>
-                <Text
-                  numberOfLines={2}
-                  maxFontSizeMultiplier={1.6}
-                  style={[styles.subtitle, textStyle]}
-                >
-                  {episode.title}
-                </Text>
+                {!keyboardVisible ? (
+                  <Text
+                    numberOfLines={2}
+                    maxFontSizeMultiplier={1.4}
+                    style={[styles.episodeTitle, serif, textStyle]}
+                  >
+                    {episode.title}
+                  </Text>
+                ) : null}
               </View>
-              {button(
-                tr("播放与对话选项", "Playback and conversation options"),
-                () => setPlayerOptions(true),
-                "player-options",
-                true,
-              )}
-            </View>
+            </GestureDetector>
             {episode.status !== "ready" ? (
               <View style={styles.content}>
                 <Text style={textStyle}>
@@ -1079,230 +1219,273 @@ function Main() {
               </View>
             ) : (
               <>
-                <View
-                  style={[
-                    styles.row,
-                    styles.paneTabs,
-                    {
-                      backgroundColor: colors.navigation,
-                      borderBottomColor: colors.line,
-                    },
-                  ]}
-                >
-                  {button(
-                    tr("逐字稿", "Transcript"),
-                    () => setPane("transcript"),
-                    "show-transcript",
-                    pane !== "transcript",
-                  )}
-                  {button(
-                    tr("对话", "Conversation"),
-                    () => setPane("conversation"),
-                    "show-conversation",
-                    pane !== "conversation",
-                  )}
-                </View>
-                {pane === "transcript" && !followTranscript
-                  ? button(
-                      tr("回到正在播放的段落", "Back to current passage"),
-                      () => setFollowTranscript(true),
-                      "follow-transcript",
-                      true,
-                    )
-                  : null}
-                {pane === "transcript" ? (
-                  <FlatList
-                    ref={transcriptRef}
-                    onLayout={scrollToCurrentPassage}
-                    onContentSizeChange={scrollToCurrentPassage}
-                    onScrollToIndexFailed={({ averageItemLength, index }) =>
-                      transcriptRef.current?.scrollToOffset({
-                        offset: averageItemLength * index,
-                        animated: true,
-                      })
-                    }
-                    testID="transcript"
-                    onScrollBeginDrag={() => setFollowTranscript(false)}
-                    data={episode.analysis?.passages ?? []}
-                    keyExtractor={(p) => p.id}
-                    contentContainerStyle={styles.content}
-                    renderItem={({ item }) => (
-                      <Pressable
-                        onPress={() => {
-                          session.seek(item.startMs);
-                          session.start();
-                        }}
-                        style={[
-                          styles.passage,
-                          {
-                            backgroundColor:
-                              snapshot.state.positionMs >= item.startMs &&
-                              snapshot.state.positionMs < item.endMs
-                                ? colors.surface
-                                : "transparent",
-                          },
-                        ]}
-                      >
-                        <Text style={{ color: colors.accent, fontSize: 12 }}>
-                          {formatTime(item.startMs)}
-                        </Text>
-                        <Text style={[textStyle, styles.transcript]}>
-                          {item.text}
-                        </Text>
-                      </Pressable>
-                    )}
-                  />
-                ) : (
-                  <FlatList
-                    ref={chatRef}
-                    inverted
-                    onContentSizeChange={() =>
-                      followConversation.current &&
-                      chatRef.current?.scrollToOffset({
-                        offset: 0,
-                        animated: false,
-                      })
-                    }
-                    onLayout={() => {
-                      if (followConversation.current)
-                        chatRef.current?.scrollToOffset({
-                          offset: 0,
-                          animated: false,
-                        });
-                    }}
-                    onScrollBeginDrag={() => {
-                      followConversation.current = false;
-                    }}
-                    onScrollEndDrag={({ nativeEvent }) => {
-                      followConversation.current =
-                        nativeEvent.contentOffset.y < 80;
-                    }}
-                    onMomentumScrollEnd={({ nativeEvent }) => {
-                      // iOS also emits this after a nonanimated scrollToOffset.
-                      // Only a user drag may turn following off. Momentum may
-                      // restore following after the user reaches the bottom.
-                      if (followConversation.current) return;
-                      followConversation.current =
-                        nativeEvent.contentOffset.y < 80;
-                    }}
-                    scrollEventThrottle={100}
-                    testID="conversation"
-                    // The newest variable-height item is always at offset 0;
-                    // scrolling to an estimated unmeasured end can hide replies.
-                    data={[...snapshot.history].reverse()}
-                    keyExtractor={(turn, i) =>
-                      turn.id ?? String(snapshot.history.length - i - 1)
-                    }
-                    contentContainerStyle={styles.content}
-                    ListEmptyComponent={
-                      <View style={styles.emptyConversation}>
-                        <Ionicons
-                          name="chatbubbles-outline"
-                          size={30}
-                          color={colors.accent}
-                        />
-                        <Text style={[styles.subtitle, textStyle]}>
-                          {tr("聊聊刚才听到的", "A little room to talk")}
-                        </Text>
-                        <Text
-                          style={{
-                            color: colors.muted,
-                            textAlign: "center",
-                            lineHeight: 23,
-                          }}
-                        >
-                          {tr(
-                            "对刚才听到的内容，有什么好奇？",
-                            "What caught your curiosity?",
-                          )}
-                        </Text>
-                      </View>
-                    }
-                    ListHeaderComponent={
-                      snapshot.busy ? (
-                        <View
-                          testID="answer-stream"
-                          style={[
-                            styles.bubble,
-                            {
-                              backgroundColor: colors.surface,
-                              borderColor: colors.line,
-                              borderWidth: StyleSheet.hairlineWidth,
-                            },
-                          ]}
-                        >
-                          <View
-                            style={{
-                              flexDirection: "row",
-                              alignItems: "center",
-                              gap: 8,
-                            }}
-                          >
-                            <Text
-                              style={{
-                                color: colors.accent,
-                                fontSize: 12,
-                                fontWeight: "700",
+                <GestureDetector gesture={paneSwipe}>
+                  <View style={{ flex: 1 }}>
+                    {pane === "transcript" && !followTranscript
+                      ? button(
+                          tr("回到正在播放的段落", "Back to current passage"),
+                          () => setFollowTranscript(true),
+                          "follow-transcript",
+                          true,
+                        )
+                      : null}
+                    {pane === "transcript" ? (
+                      <FlatList
+                        ref={transcriptRef}
+                        onLayout={scrollToCurrentPassage}
+                        onContentSizeChange={scrollToCurrentPassage}
+                        onScrollToIndexFailed={({ averageItemLength, index }) =>
+                          transcriptRef.current?.scrollToOffset({
+                            offset: averageItemLength * index,
+                            animated: true,
+                          })
+                        }
+                        testID="transcript"
+                        onScrollBeginDrag={() => setFollowTranscript(false)}
+                        data={episode.analysis?.passages ?? []}
+                        keyExtractor={(p) => p.id}
+                        contentContainerStyle={styles.reading}
+                        renderItem={({ item }) => {
+                          const current =
+                            snapshot.state.positionMs >= item.startMs &&
+                            snapshot.state.positionMs < item.endMs;
+                          return (
+                            <Pressable
+                              onPress={() => {
+                                session.seek(item.startMs);
+                                session.start();
                               }}
+                              onLongPress={() => passageMenu(item)}
+                              delayLongPress={350}
+                              style={[
+                                styles.passage,
+                                current && styles.raised,
+                                {
+                                  backgroundColor: current
+                                    ? colors.surface
+                                    : "transparent",
+                                },
+                              ]}
                             >
-                              Aside
-                            </Text>
-                            <ActivityIndicator
-                              size="small"
+                              <Text
+                                style={{
+                                  color: colors.timestamp,
+                                  fontSize: 12,
+                                  fontVariant: ["tabular-nums"],
+                                }}
+                              >
+                                {formatTime(item.startMs)}
+                              </Text>
+                              <Text
+                                style={
+                                  current
+                                    ? [textStyle, styles.currentTranscript]
+                                    : [
+                                        styles.transcript,
+                                        { color: colors.muted },
+                                      ]
+                                }
+                              >
+                                {item.text}
+                              </Text>
+                            </Pressable>
+                          );
+                        }}
+                      />
+                    ) : (
+                      <FlatList
+                        ref={chatRef}
+                        inverted
+                        onContentSizeChange={() =>
+                          followConversation.current &&
+                          chatRef.current?.scrollToOffset({
+                            offset: 0,
+                            animated: false,
+                          })
+                        }
+                        onLayout={() => {
+                          if (followConversation.current)
+                            chatRef.current?.scrollToOffset({
+                              offset: 0,
+                              animated: false,
+                            });
+                        }}
+                        onScrollBeginDrag={() => {
+                          followConversation.current = false;
+                        }}
+                        onScrollEndDrag={({ nativeEvent }) => {
+                          followConversation.current =
+                            nativeEvent.contentOffset.y < 80;
+                        }}
+                        onMomentumScrollEnd={({ nativeEvent }) => {
+                          // iOS also emits this after a nonanimated scrollToOffset.
+                          // Only a user drag may turn following off. Momentum may
+                          // restore following after the user reaches the bottom.
+                          if (followConversation.current) return;
+                          followConversation.current =
+                            nativeEvent.contentOffset.y < 80;
+                        }}
+                        scrollEventThrottle={100}
+                        testID="conversation"
+                        // The newest variable-height item is always at offset 0;
+                        // scrolling to an estimated unmeasured end can hide replies.
+                        data={[...snapshot.history].reverse()}
+                        keyExtractor={(turn, i) =>
+                          turn.id ?? String(snapshot.history.length - i - 1)
+                        }
+                        contentContainerStyle={styles.content}
+                        ListEmptyComponent={
+                          <View style={styles.emptyConversation}>
+                            <Ionicons
+                              name="chatbubbles-outline"
+                              size={30}
                               color={colors.accent}
                             />
+                            <Text style={[styles.subtitle, textStyle]}>
+                              {tr("聊聊刚才听到的", "A little room to talk")}
+                            </Text>
+                            <Text
+                              style={{
+                                color: colors.muted,
+                                textAlign: "center",
+                                lineHeight: 23,
+                              }}
+                            >
+                              {tr(
+                                "对刚才听到的内容，有什么好奇？",
+                                "What caught your curiosity?",
+                              )}
+                            </Text>
                           </View>
-                          <Text style={[textStyle, styles.transcript]}>
-                            {snapshot.answerPreview ||
-                              tr("正在想一想…", "Thinking it through…")}
-                          </Text>
-                        </View>
-                      ) : null
-                    }
-                    renderItem={({ item }) => (
-                      <View
-                        style={[
-                          styles.bubble,
-                          {
-                            backgroundColor:
-                              item.role === "user"
-                                ? colors.highlight
-                                : colors.surface,
-                            marginLeft: item.role === "user" ? 36 : 0,
-                            marginRight: item.role === "user" ? 0 : 12,
-                          },
-                        ]}
-                      >
-                        <Text style={{ color: colors.accent, fontSize: 12 }}>
-                          {item.role === "user" ? tr("你", "You") : "Aside"}
-                        </Text>
-                        <Text style={[textStyle, styles.transcript]}>
-                          {item.text}
-                        </Text>
-                      </View>
+                        }
+                        ListHeaderComponent={
+                          snapshot.busy ? (
+                            <View testID="answer-stream" style={styles.answer}>
+                              <View
+                                style={{
+                                  flexDirection: "row",
+                                  alignItems: "center",
+                                  gap: 8,
+                                }}
+                              >
+                                <View style={styles.voiceMark}>
+                                  {[6, 12, 8].map((height, i) => (
+                                    <View
+                                      key={i}
+                                      style={{
+                                        width: 3,
+                                        height,
+                                        borderRadius: 2,
+                                        backgroundColor: colors.amber,
+                                      }}
+                                    />
+                                  ))}
+                                </View>
+                                <Text
+                                  style={[
+                                    styles.eyebrow,
+                                    { color: colors.amberInk },
+                                  ]}
+                                >
+                                  Aside
+                                </Text>
+                                {!snapshot.answerPreview ? (
+                                  <ActivityIndicator
+                                    size="small"
+                                    color={colors.amber}
+                                  />
+                                ) : null}
+                              </View>
+                              <Text
+                                style={[
+                                  styles.answerText,
+                                  serif,
+                                  {
+                                    color: snapshot.answerPreview
+                                      ? colors.text
+                                      : colors.muted,
+                                  },
+                                ]}
+                              >
+                                {snapshot.answerPreview ||
+                                  tr("正在想一想…", "Thinking it through…")}
+                              </Text>
+                            </View>
+                          ) : null
+                        }
+                        renderItem={({ item }) =>
+                          item.role === "user" ? (
+                            <View
+                              style={[
+                                styles.bubble,
+                                { backgroundColor: colors.highlight },
+                              ]}
+                            >
+                              <Text
+                                style={[
+                                  styles.eyebrow,
+                                  { color: colors.timestamp },
+                                ]}
+                              >
+                                {tr("你", "You")}
+                              </Text>
+                              <Text style={[textStyle, styles.transcript]}>
+                                {item.text}
+                              </Text>
+                            </View>
+                          ) : (
+                            <View style={styles.answer}>
+                              <Text
+                                style={[
+                                  styles.eyebrow,
+                                  { color: colors.muted },
+                                ]}
+                              >
+                                Aside
+                              </Text>
+                              <Text
+                                style={[styles.answerText, serif, textStyle]}
+                              >
+                                {item.text}
+                              </Text>
+                            </View>
+                          )
+                        }
+                      />
                     )}
-                  />
-                )}
+                  </View>
+                </GestureDetector>
                 <View
                   style={[
                     styles.controls,
                     {
                       borderColor: colors.line,
                       backgroundColor: colors.surface,
+                      paddingBottom: keyboardVisible
+                        ? 12
+                        : Math.max(insets.bottom, 12),
                     },
                   ]}
                 >
                   <View style={{ display: keyboardVisible ? "none" : "flex" }}>
-                    <Slider
-                      testID="progress"
-                      accessibilityLabel={tr("播放进度", "Playback position")}
-                      minimumValue={0}
-                      maximumValue={episode.durationMs}
-                      value={snapshot.state.positionMs}
-                      minimumTrackTintColor={colors.accent}
-                      maximumTrackTintColor={colors.line}
-                      thumbTintColor={colors.accent}
-                      onSlidingComplete={(value) => {
+                    <Scrubber
+                      positionMs={snapshot.state.positionMs}
+                      durationMs={episode.durationMs}
+                      colors={colors}
+                      label={tr("播放进度", "Playback position")}
+                      fineLabel={(speed) =>
+                        speed === 1
+                          ? tr(
+                              "手指上移，拖得更精细",
+                              "Slide up for finer scrubbing",
+                            )
+                          : tr(
+                              `${speed === 0.5 ? "半速" : "四分之一速"}精细拖动`,
+                              `${speed === 0.5 ? "Half" : "Quarter"}-speed scrubbing`,
+                            )
+                      }
+                      formatTime={formatTime}
+                      onSeek={(value) => {
                         session.seek(value);
                         session.start();
                       }}
@@ -1336,7 +1519,17 @@ function Main() {
                         )}
                       </Text>
                     </View>
-                    <View style={[styles.row, { paddingHorizontal: 48 }]}>
+                    <View style={styles.transportRow}>
+                      {button(
+                        `${rate}×`,
+                        () => {
+                          const next = rate >= 2 ? 0.75 : rate + 0.25;
+                          setRate(next);
+                          session.setPlaybackRate(next);
+                        },
+                        "speed",
+                        true,
+                      )}
                       {button(
                         "−15",
                         () => {
@@ -1370,21 +1563,35 @@ function Main() {
                         "seek-forward",
                         true,
                       )}
-                      <View style={{ position: "absolute", right: 0 }}>
-                        {button(
-                          `${rate}×`,
-                          () => {
-                            const next = rate >= 2 ? 0.75 : rate + 0.25;
-                            setRate(next);
-                            session.setPlaybackRate(next);
-                          },
-                          "speed",
-                          true,
-                        )}
-                      </View>
+                      <View style={{ width: 48 }} />
                     </View>
                     {snapshot.state.interruption && (
-                      <View style={styles.resumeBar}>
+                      <View
+                        style={[
+                          styles.resumeBar,
+                          { backgroundColor: colors.amberSurface },
+                        ]}
+                      >
+                        {snapshot.resumeSeconds !== null ? (
+                          <View
+                            style={[
+                              styles.countdown,
+                              { borderColor: colors.amber },
+                            ]}
+                          >
+                            <Text
+                              maxFontSizeMultiplier={1.2}
+                              style={{
+                                color: colors.amberInk,
+                                fontSize: 13,
+                                fontWeight: "700",
+                                fontVariant: ["tabular-nums"],
+                              }}
+                            >
+                              {snapshot.resumeSeconds}
+                            </Text>
+                          </View>
+                        ) : null}
                         <Text
                           testID={
                             snapshot.resumeSeconds === null &&
@@ -1393,10 +1600,13 @@ function Main() {
                               ? "manual-resume-hint"
                               : undefined
                           }
+                          maxFontSizeMultiplier={1.5}
                           style={{
-                            color: colors.muted,
-                            fontSize: 12,
+                            color: colors.text,
+                            fontSize: 14,
+                            fontWeight: "600",
                             flexGrow: 1,
+                            flexShrink: 1,
                             flexBasis: 95,
                           }}
                         >
@@ -1413,12 +1623,6 @@ function Main() {
                                 )
                               : tr("节目已暂停", "Podcast paused")}
                         </Text>
-                        {button(
-                          tr("继续听", "Continue"),
-                          () => session.start(),
-                          "resume",
-                          true,
-                        )}
                         {!snapshot.resumeHeld &&
                           button(
                             tr("先别继续", "Wait"),
@@ -1426,6 +1630,11 @@ function Main() {
                             "hold",
                             true,
                           )}
+                        {button(
+                          tr("继续听", "Continue"),
+                          () => session.start(),
+                          "resume",
+                        )}
                       </View>
                     )}
                   </View>
@@ -1465,73 +1674,83 @@ function Main() {
                   {(!composerOpen || snapshot.listeningMode === "auto") && (
                     <View testID="question-toolbar" style={styles.voiceBar}>
                       {snapshot.listeningMode === "auto" ? (
-                        <>
+                        <View
+                          style={[
+                            styles.listeningPill,
+                            {
+                              backgroundColor:
+                                snapshot.liveStatus === "on"
+                                  ? colors.highlight
+                                  : colors.fill,
+                            },
+                          ]}
+                        >
                           <View
+                            style={[
+                              styles.listeningDot,
+                              {
+                                // Amber while the microphone hears a voice.
+                                backgroundColor:
+                                  snapshot.liveStatus !== "on"
+                                    ? colors.muted
+                                    : inputLevel > 0.04
+                                      ? colors.amber
+                                      : colors.timestamp,
+                              },
+                            ]}
+                          />
+                          <Text
+                            testID="voice-connection-status"
+                            maxFontSizeMultiplier={1.6}
                             style={{
                               flex: 1,
-                              flexDirection: "row",
-                              alignItems: "center",
-                              gap: 8,
+                              color: colors.text,
+                              fontSize: 14,
+                              fontWeight: "600",
                             }}
                           >
-                            <Ionicons
-                              name={
-                                snapshot.liveStatus === "on"
-                                  ? "mic"
-                                  : "mic-off-outline"
-                              }
-                              size={18}
-                              color={colors.accent}
-                            />
-                            <Text
-                              testID="voice-connection-status"
-                              maxFontSizeMultiplier={1.6}
+                            {snapshot.liveStatus === "on"
+                              ? tr(
+                                  "正在聆听 · 直接开口就好",
+                                  "Listening · just speak",
+                                )
+                              : snapshot.liveStatus === "connecting"
+                                ? tr("正在连接…", "Connecting…")
+                                : tr("麦克风已关闭", "Microphone is off")}
+                          </Text>
+                          {snapshot.liveStatus === "on" && (
+                            <View
+                              testID="microphone-level"
+                              accessibilityLabel={tr(
+                                "麦克风音量",
+                                "Microphone activity",
+                              )}
                               style={{
-                                flex: 1,
-                                color: colors.text,
-                                fontSize: 13,
+                                flexDirection: "row",
+                                height: 22,
+                                alignItems: "center",
+                                gap: 3,
                               }}
                             >
-                              {snapshot.liveStatus === "on"
-                                ? tr(
-                                    "正在聆听 · 直接开口就好",
-                                    "Listening · just speak",
-                                  )
-                                : snapshot.liveStatus === "connecting"
-                                  ? tr("正在连接…", "Connecting…")
-                                  : tr("麦克风已关闭", "Microphone is off")}
-                            </Text>
-                            {snapshot.liveStatus === "on" && (
-                              <View
-                                testID="microphone-level"
-                                accessibilityLabel={tr(
-                                  "麦克风音量",
-                                  "Microphone activity",
-                                )}
-                                style={{
-                                  flexDirection: "row",
-                                  height: 22,
-                                  alignItems: "center",
-                                  gap: 3,
-                                }}
-                              >
-                                {[0.65, 1, 0.8, 0.5].map((scale, i) => (
-                                  <View
-                                    key={i}
-                                    style={{
-                                      width: 3,
-                                      borderRadius: 2,
-                                      height: Math.max(
-                                        4,
-                                        Math.min(22, inputLevel * 160 * scale),
-                                      ),
-                                      backgroundColor: colors.accent,
-                                    }}
-                                  />
-                                ))}
-                              </View>
-                            )}
-                          </View>
+                              {[0.65, 1, 0.8, 0.5].map((scale, i) => (
+                                <View
+                                  key={i}
+                                  style={{
+                                    width: 3,
+                                    borderRadius: 2,
+                                    height: Math.max(
+                                      4,
+                                      Math.min(22, inputLevel * 160 * scale),
+                                    ),
+                                    backgroundColor:
+                                      inputLevel > 0.04
+                                        ? colors.amber
+                                        : colors.timestamp,
+                                  }}
+                                />
+                              ))}
+                            </View>
+                          )}
                           {button(
                             snapshot.liveStatus !== "off"
                               ? tr("关闭", "Stop")
@@ -1540,7 +1759,7 @@ function Main() {
                             "toggle-conversation",
                             true,
                           )}
-                        </>
+                        </View>
                       ) : !composerOpen ? (
                         <View style={{ flex: 1 }}>
                           {button(
@@ -1629,7 +1848,7 @@ function Main() {
                                 styles.holdControl,
                                 {
                                   backgroundColor: snapshot.manualHeld
-                                    ? "#943e3d"
+                                    ? "#a53831"
                                     : colors.highlight,
                                 },
                               ]}
@@ -1729,7 +1948,10 @@ function Main() {
                 </View>
               </>
             )}
-          </>
+            <GestureDetector gesture={edgeBack}>
+              <View style={styles.backEdge} />
+            </GestureDetector>
+          </Animated.View>
         ) : (
           <>
             <FlatList
@@ -1740,15 +1962,10 @@ function Main() {
               contentContainerStyle={{ paddingBottom: 20 }}
               ListHeaderComponent={
                 <>
-                  <View
-                    style={[
-                      styles.libraryHeading,
-                      { backgroundColor: colors.navigation },
-                    ]}
-                  >
+                  <View style={styles.libraryHeading}>
                     <Text
                       maxFontSizeMultiplier={1.35}
-                      style={[styles.title, textStyle]}
+                      style={[styles.title, serif, textStyle]}
                     >
                       {tr("音频库", "Library")}
                     </Text>
@@ -1770,11 +1987,10 @@ function Main() {
                       styles.row,
                       {
                         justifyContent: "flex-start",
-                        paddingHorizontal: 24,
-                        paddingBottom: 16,
-                        backgroundColor: colors.navigation,
-                        borderBottomColor: colors.line,
-                        borderBottomWidth: StyleSheet.hairlineWidth,
+                        paddingHorizontal: 20,
+                        paddingTop: 0,
+                        paddingBottom: 8,
+                        gap: 8,
                       },
                     ]}
                   >
@@ -1810,7 +2026,7 @@ function Main() {
                   <View style={{ height: 20 }} />
                 </>
               }
-              ItemSeparatorComponent={() => <View style={{ height: 16 }} />}
+              ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
               ListEmptyComponent={
                 !loading ? (
                   <View
@@ -1869,18 +2085,15 @@ function Main() {
                   onPress={() => run(() => load(item.id))}
                   style={[
                     styles.card,
-                    {
-                      backgroundColor: colors.surface,
-                      borderColor: colors.line,
-                      marginHorizontal: 20,
-                    },
+                    styles.raised,
+                    { backgroundColor: colors.surface, marginHorizontal: 20 },
                   ]}
                 >
                   <View
                     style={{
                       flexDirection: "row",
                       alignItems: "center",
-                      gap: 16,
+                      gap: 14,
                     }}
                   >
                     {item.cover ? (
@@ -1904,30 +2117,25 @@ function Main() {
                       >
                         <Ionicons
                           name="musical-notes-outline"
-                          size={28}
+                          size={24}
                           color={colors.accent}
                         />
                       </View>
                     )}
-                    <View style={{ flex: 1, gap: 8 }}>
+                    <View style={{ flex: 1, gap: 4 }}>
                       <Text
                         numberOfLines={2}
                         maxFontSizeMultiplier={1.6}
-                        style={[styles.subtitle, textStyle]}
+                        style={[styles.cardTitle, serif, textStyle]}
                       >
                         {item.title}
                       </Text>
-                      <Text style={{ color: colors.muted, fontSize: 12 }}>
+                      <Text style={{ color: colors.muted, fontSize: 13 }}>
                         {item.status === "ready"
                           ? `${formatTime(item.durationMs)} · ${tr("音频", "Audio")}`
                           : item.stage}
                       </Text>
                     </View>
-                    <Ionicons
-                      name="arrow-forward"
-                      size={19}
-                      color={colors.accent}
-                    />
                   </View>
                 </Pressable>
               )}
@@ -1937,20 +2145,64 @@ function Main() {
         {!keyboardVisible &&
         (!episode || tab !== "library") &&
         current.current ? (
-          <View style={[styles.row, { backgroundColor: colors.surface }]}>
-            <Text numberOfLines={1} style={[textStyle, { flex: 1 }]}>
-              {current.current.title}
-            </Text>
-            {button(
-              tr("打开播放器", "Open player"),
-              () => {
-                setEpisode(current.current);
-                setTab("library");
+          <Pressable
+            testID="mini-player"
+            accessibilityRole="button"
+            accessibilityLabel={tr("打开播放器", "Open player")}
+            onPress={() => {
+              setEpisode(current.current);
+              setTab("library");
+            }}
+            style={({ pressed }) => [
+              styles.miniPlayer,
+              {
+                backgroundColor: dark ? colors.highlight : colors.accent,
+                opacity: pressed ? 0.85 : 1,
               },
-              "mini-player",
-              true,
-            )}
-          </View>
+            ]}
+          >
+            <View style={[styles.voiceMark, { height: 18 }]}>
+              {[8, 18, 12].map((height, i) => (
+                <View
+                  key={i}
+                  style={{
+                    width: 3,
+                    height: snapshot.state.mode === "playing" ? height : 5,
+                    borderRadius: 2,
+                    backgroundColor: "#efbf9b",
+                  }}
+                />
+              ))}
+            </View>
+            <View style={{ flex: 1, gap: 1 }}>
+              <Text
+                numberOfLines={1}
+                maxFontSizeMultiplier={1.4}
+                style={{
+                  color: dark ? colors.text : colors.onAccent,
+                  fontSize: 15,
+                }}
+              >
+                {current.current.title}
+              </Text>
+              <Text
+                numberOfLines={1}
+                maxFontSizeMultiplier={1.4}
+                style={{ color: "#b9d3bf", fontSize: 12 }}
+              >
+                {snapshot.liveStatus === "on"
+                  ? tr("聆听中 · 直接开口提问", "Listening · just speak")
+                  : snapshot.state.mode === "playing"
+                    ? tr("正在播放", "Playing")
+                    : tr("已暂停", "Paused")}
+              </Text>
+            </View>
+            <Ionicons
+              name="chevron-up"
+              size={20}
+              color={dark ? colors.text : colors.onAccent}
+            />
+          </Pressable>
         ) : null}
         <View
           style={[
@@ -1961,7 +2213,11 @@ function Main() {
                   ? "none"
                   : "flex",
             },
-            { borderColor: colors.line, backgroundColor: colors.navigation },
+            {
+              borderColor: colors.line,
+              backgroundColor: colors.navigation,
+              paddingBottom: insets.bottom,
+            },
           ]}
         >
           {(["library", "upload", "account"] as const).map((key, i) => (
@@ -2029,7 +2285,7 @@ function Main() {
           style={{
             flex: 1,
             justifyContent: "flex-end",
-            backgroundColor: "#00000055",
+            backgroundColor: "#2b252080",
           }}
         >
           <Pressable
@@ -2041,14 +2297,24 @@ function Main() {
             accessibilityViewIsModal
             style={{
               maxHeight: "90%",
-              backgroundColor: colors.surface,
-              borderTopLeftRadius: 24,
-              borderTopRightRadius: 24,
-              padding: 24,
-              paddingBottom: 40,
+              backgroundColor: colors.background,
+              borderTopLeftRadius: 28,
+              borderTopRightRadius: 28,
+              paddingHorizontal: 20,
+              paddingTop: 10,
+              paddingBottom: Math.max(insets.bottom, 16) + 16,
               gap: 16,
             }}
           >
+            <View
+              style={{
+                alignSelf: "center",
+                width: 36,
+                height: 5,
+                borderRadius: 3,
+                backgroundColor: dark ? "#5a5249" : "#c9bca9",
+              }}
+            />
             <View
               style={[
                 styles.row,
@@ -2057,7 +2323,7 @@ function Main() {
             >
               <Text
                 maxFontSizeMultiplier={1.5}
-                style={[styles.subtitle, textStyle, { flex: 1 }]}
+                style={[styles.sheetTitle, serif, textStyle, { flex: 1 }]}
               >
                 {tr("播放与对话", "Playback & conversation")}
               </Text>
@@ -2073,8 +2339,10 @@ function Main() {
               style={{ flexShrink: 1 }}
               contentContainerStyle={{ gap: 16 }}
             >
-              <View style={{ gap: 8 }}>
-                <Text style={[textStyle, { fontWeight: "600" }]}>
+              <View
+                style={[styles.sheetGroup, { backgroundColor: colors.surface }]}
+              >
+                <Text style={[textStyle, { fontSize: 16, fontWeight: "600" }]}>
                   {tr("回答后继续听", "Resume after answers")}
                 </Text>
                 <Text
@@ -2188,21 +2456,22 @@ function Main() {
 }
 export default function App() {
   return (
-    <SafeAreaProvider>
-      <Main />
-    </SafeAreaProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <Main />
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
 const styles = StyleSheet.create({
   root: { flex: 1 },
   header: {
-    paddingHorizontal: 24,
-    paddingTop: 10,
-    paddingBottom: 14,
+    paddingHorizontal: 20,
+    paddingTop: 6,
+    paddingBottom: 6,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    borderBottomWidth: StyleSheet.hairlineWidth,
   },
   compactHeader: {
     paddingBottom: 8,
@@ -2213,22 +2482,17 @@ const styles = StyleSheet.create({
   },
   brand: {
     fontFamily: Platform.OS === "ios" ? "Georgia" : "serif",
-    fontSize: 28,
-    letterSpacing: -1,
+    fontStyle: "italic",
+    fontSize: 21,
   },
   content: { padding: 20, gap: 16 },
-  title: {
-    fontSize: 34,
-    fontWeight: "700",
-    lineHeight: 39,
-    letterSpacing: -0.6,
-  },
+  title: { fontSize: 34, lineHeight: 42, letterSpacing: 0.5 },
   subtitle: { fontSize: 16, lineHeight: 23, fontWeight: "600" },
   libraryHeading: {
-    paddingHorizontal: 24,
-    paddingTop: 24,
-    paddingBottom: 18,
-    gap: 8,
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    paddingBottom: 16,
+    gap: 6,
   },
   row: {
     flexDirection: "row",
@@ -2244,30 +2508,47 @@ const styles = StyleSheet.create({
     minHeight: 44,
     paddingHorizontal: 18,
     paddingVertical: 11,
-    borderRadius: 12,
+    borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "transparent",
   },
   segment: {
-    borderRadius: 8,
-    paddingHorizontal: 17,
-    minHeight: 44,
-    paddingVertical: 9,
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    minHeight: 34,
+    paddingVertical: 6,
+  },
+  chip: {
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    minHeight: 36,
+    paddingVertical: 7,
+  },
+  pill: { borderRadius: 22, paddingHorizontal: 16 },
+  raised: {
+    shadowColor: "#2b2520",
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
   },
   transport: {
     minWidth: 48,
-    paddingHorizontal: 10,
+    paddingHorizontal: 8,
     paddingVertical: 4,
-    gap: 2,
+  },
+  transportRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingTop: 6,
+    paddingBottom: 4,
   },
   playButton: {
-    width: 58,
-    height: 58,
-    borderRadius: 29,
+    width: 72,
+    height: 72,
+    borderRadius: 36,
     paddingHorizontal: 0,
-    marginHorizontal: 12,
   },
   sendButton: { width: 44, height: 44, paddingHorizontal: 0, borderRadius: 22 },
   input: {
@@ -2303,15 +2584,18 @@ const styles = StyleSheet.create({
   },
   playerHeader: {
     flexDirection: "row",
-    gap: 12,
     alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    justifyContent: "space-between",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
   },
-  paneTabs: {
-    paddingVertical: 6,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+  paneTabs: { flexDirection: "row", borderRadius: 19, padding: 3, gap: 2 },
+  episodeTitle: {
+    fontSize: 23,
+    lineHeight: 31,
+    paddingHorizontal: 24,
+    paddingTop: 8,
+    paddingBottom: 12,
   },
   emptyConversation: {
     alignItems: "center",
@@ -2319,7 +2603,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     gap: 12,
   },
-  artwork: { width: 64, height: 72, borderRadius: 10 },
+  artwork: { width: 56, height: 56, borderRadius: 14 },
   uploadArt: {
     width: 96,
     height: 96,
@@ -2328,15 +2612,34 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginBottom: 12,
   },
-  card: {
-    borderRadius: 18,
-    padding: 18,
-    marginBottom: 4,
-    borderWidth: StyleSheet.hairlineWidth,
+  card: { borderRadius: 20, padding: 14 },
+  passage: {
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    gap: 4,
   },
-  passage: { borderRadius: 10, padding: 14, gap: 8 },
+  reading: { paddingHorizontal: 12, paddingVertical: 8, gap: 4 },
+  currentTranscript: { fontSize: 19, lineHeight: 31 },
   transcript: { fontSize: 17, lineHeight: 28 },
-  bubble: { borderRadius: 16, padding: 14, gap: 6, marginBottom: 4 },
+  bubble: {
+    alignSelf: "flex-end",
+    maxWidth: "86%",
+    borderRadius: 20,
+    borderBottomRightRadius: 6,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    gap: 4,
+  },
+  answer: { gap: 8, paddingRight: 12, paddingVertical: 4 },
+  answerText: { fontSize: 19, lineHeight: 32 },
+  eyebrow: { fontSize: 11, fontWeight: "700", letterSpacing: 1.2 },
+  voiceMark: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 2,
+    height: 12,
+  },
   voiceBar: {
     flexDirection: "row",
     alignItems: "center",
@@ -2350,39 +2653,93 @@ const styles = StyleSheet.create({
     paddingTop: 8,
   },
   holdControl: {
-    width: 56,
-    minHeight: 52,
-    borderRadius: 12,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     alignItems: "center",
     justifyContent: "center",
-    gap: 2,
+    gap: 1,
   },
+  listeningPill: {
+    flex: 1,
+    minHeight: 52,
+    borderRadius: 26,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingLeft: 18,
+    paddingRight: 4,
+    paddingVertical: 4,
+  },
+  listeningDot: { width: 10, height: 10, borderRadius: 5 },
   resumeBar: {
     flexDirection: "row",
     flexWrap: "wrap",
     alignItems: "center",
     gap: 8,
-    paddingTop: 4,
+    marginTop: 6,
+    borderRadius: 18,
+    paddingLeft: 14,
+    paddingRight: 8,
+    paddingVertical: 8,
+  },
+  countdown: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    borderWidth: 3,
+    alignItems: "center",
+    justifyContent: "center",
   },
   controls: {
     paddingHorizontal: 20,
-    paddingTop: 10,
-    paddingBottom: 12,
+    paddingTop: 12,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
     borderTopWidth: StyleSheet.hairlineWidth,
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderRightWidth: StyleSheet.hairlineWidth,
     gap: 4,
-    shadowColor: "#102418",
-    shadowOffset: { width: 0, height: -3 },
-    shadowOpacity: 0.05,
-    shadowRadius: 12,
+    shadowColor: "#2b2520",
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 14,
     elevation: 6,
   },
   timeRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    paddingHorizontal: 8,
-    marginTop: -5,
+    marginTop: -6,
   },
   tabs: { flexDirection: "row", borderTopWidth: StyleSheet.hairlineWidth },
+  cardTitle: { fontSize: 17, lineHeight: 24 },
+  grabber: {
+    alignSelf: "center",
+    width: 36,
+    height: 5,
+    borderRadius: 3,
+    marginTop: 4,
+  },
+  backEdge: { position: "absolute", left: 0, top: 110, bottom: 280, width: 22 },
+  sheetTitle: { fontSize: 25, lineHeight: 32 },
+  sheetGroup: { borderRadius: 18, padding: 16, gap: 8 },
+  miniPlayer: {
+    marginHorizontal: 12,
+    marginBottom: 8,
+    borderRadius: 18,
+    minHeight: 56,
+    paddingLeft: 16,
+    paddingRight: 14,
+    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    shadowColor: "#2b2520",
+    shadowOpacity: 0.3,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 8,
+  },
   tab: {
     flex: 1,
     paddingTop: 12,
