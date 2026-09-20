@@ -330,7 +330,6 @@ node scripts/admin-usage.mjs --days 30 --json
 
 一个 SQLite 细节：`INSERT … SELECT` 后面跟 `ON CONFLICT` 时，如果 SELECT 是 `UNION ALL` 复合查询且末支没有 `WHERE`，解析器无法区分 `ON CONFLICT` 和 join 的 `ON`，会报 `near "DO": syntax error`。`stats.ts` 里那句 `WHERE true` 是必需的，不是冗余。
 
-
 ## 全站 AI 停摆：语音熔断不会过期（2026-09-16）
 
 2026-09-16 约 01:27Z 起，正式域名所有访客都无法提问或开语音，页面提示「AI trials are temporarily paused. You can keep listening.」，播放不受影响。持续时间约 5.5 小时，直到下面两个修复发布。
@@ -352,7 +351,6 @@ node scripts/admin-usage.mjs --days 30 --json
 
 未验证：没有用真实麦克风走完一次语音会话（需要 Turnstile 与真机），因此「修复后访客能正常开语音」只由 `enabled:true` 与租约/熔断清零推断。
 
-
 ## SEO 第二轮与语音熔断的第三次修复：发布与线上验收（2026-09-16）
 
 发布内容：`0a32719`（SEO 第二轮 + 文案重复修复）与 `488b6c8`（「创建结果不明」的全局熔断同样有界）。Worker `9d32021f-ef3a-4034-9bc5-008a83ff9a8d`（随后 `722394b` 只把释放日志里的租约 token 换成 owner，发布为 `45684f2d-4d18-487f-b3a5-a71ac750e2c8`），`wrangler deploy --config wrangler.production.jsonc --containers-rollout=none`（保留现有 Container），上传 6 个新文件（含新的前端 bundle 与四个静态 SEO 文件）。`main` 已同步 origin。
@@ -369,7 +367,6 @@ node scripts/admin-usage.mjs --days 30 --json
 
 至此 `trial_breakers` 的三条写入路径都有界：供应商 404（`74e9045`）、attach 无法确认（`dd2ce2c`，deadline 后 15 分钟）、创建结果不明（`488b6c8`，同样 15 分钟且保留租约作为痕迹）。三条都会 `console.error` 记录原因。
 
-
 ## 播客让位（软让位与淡出暂停）：发布与线上验收（2026-09-16）
 
 发布内容：`60ea278`，基于合并后的 `0e51046`（含移动端共用运行时与服务端语音控制）。后端开始判断一段话（服务端控制流 `classifying`，旧路径为 Live 委派）时播客在 150ms 内降到用户音量的 60%，`ignore`、只改配置的指令、手动操作或 2.5 秒无新决定后 300ms 回升；确认为提问、文字提问、按住说话和语音 `pause` 指令改为 250ms 淡出再暂停，打断位置仍取开口时刻。浏览器端让位倍率走 MediaElementSource 与分析器之间的 GainNode，波形随之缩小；移动端 `NativePodcastAudio` 分步调音量，只做了类型检查。细节见 [player-controls.md](player-controls.md#让位软让位与硬让位)。
@@ -381,7 +378,6 @@ node scripts/admin-usage.mjs --days 30 --json
 线上验收（curl 与无头 Chrome，正式域名）：`/` 引用 `index-DHwuzSb6.js`、`index-MG_NYjXQ.css`，JS 为 200 且 `text/javascript`，bundle 含让位日志字符串；`/api/health` 200、`liveConfigured=true`；`/api/trial`、`/robots.txt` 200。访客只听模式打开 `chronoscope-byrd` 并播放：音频经 GainNode 链路正常出声、进度前进、波形逐帧变化、暂停后停止，控制台无错误。
 
 未验证：没有在生产用真实麦克风走一次语音打断（需要 Turnstile 与真机），软让位的降音深度和淡出听感需戴耳机实听；移动端适配器没有运行验证。倍速调整会取消续播倒计时的问题（见 IMPLEMENTATION.md 2026-09-16）本次未修。
-
 
 ## 长节目提问与语音判断全部失败：排查与修复（2026-09-17）
 
@@ -398,7 +394,6 @@ node scripts/admin-usage.mjs --days 30 --json
 
 补记：`17685380` 上线两分钟后（04:02:21Z），协作者从未含 `d63d03c` 的旧 main 部署了 `de481958-7677-4895-8430-6af0323fa05b`，线上回退到修复之前；04:05Z 用户再次开麦，服务端日志记录 `Trial context too large`（call 1），证实根因判断，也证实回退。04:06:59Z 从当前 main（`2be8361`）重新部署为 `8caf78c0-92a6-44c1-97cd-327bb012e388`，`--containers-rollout=none`，`/api/health` 200。多人部署同一 Worker 没有互斥，发布前应先 `git pull` 并确认 `wrangler deployments list` 的最新版本。
 
-
 ## 移动端音频交接与流式回答：发布（2026-09-17）
 
 发布内容：PR #12（`3c946ce`，含 `87c0e12`、`17f207a`、`1d5ae25`）。服务端只有一处行为变化：`/question` 的请求带 `X-Aside-Answer-Stream: 1` 时，NDJSON 流在 `progress` 与 `result` 之间增加 `answer` 事件，逐段推送回答文本（`engine/src/contracts.ts` 新增该事件类型，`QuestionModel` 增加可选 `onText`）；不带该请求头的客户端收到的事件序列不变。其余改动在 `mobile/`（原生音频会话交接、错误文案、流式显示），不随 Worker 发布。无数据库迁移，Container 代码未改。
@@ -408,7 +403,6 @@ node scripts/admin-usage.mjs --days 30 --json
 生产 Worker `00afc10c-9416-472a-ab53-1d79573babe6`，`wrangler deploy --config wrangler.production.jsonc --containers-rollout=none`（保留现有 Container）；`npm run test:mobile-service` 4 项通过。正式域名 `/` 引用 `index-CXzFoCX2.js`、`index-MG_NYjXQ.css`；发布后第一次请求新 JS 返回 404，数秒后稳定为 200、`text/javascript`、476,657 字节，与本地构建一致（与此前记录的静态资源短暂滞后同类）。`/api/health` 200、`liveConfigured=true`、`uploadsEnabled=true`；`/api/trial` 返回 `enabled:true`；`/zh` 200，`/no-such-page` 404。
 
 未验证：没有在生产发起带 `X-Aside-Answer-Stream` 的真实提问（会产生付费调用），`answer` 事件的线上表现只由单元与 Miniflare 集成测试覆盖；移动端改动未在真机上运行验证；未在浏览器里打开线上播放器核对。
-
 
 ## 暂时取消每日试用额度（2026-09-17）
 
@@ -423,7 +417,6 @@ node scripts/admin-usage.mjs --days 30 --json
 费用提示：现在匿名访客的模型花费只受每分钟速率限制与并发位约束，没有每日上限。建议在 OpenAI 后台设月度花费上限兜底，并用 `node scripts/admin-usage.mjs` 留意匿名流量。
 
 未验证：没有在生产用已耗尽额度的身份重新提问或开语音实测（会产生付费调用），放行由集成测试与绑定值推断。
-
 
 ## 服务端语音控制首次真机使用：四个问题的排查与修复（2026-09-17）
 
@@ -501,7 +494,6 @@ node scripts/admin-usage.mjs --days 30 --json
 
 发布记录与一次部署冲突：上述 2 秒调整快进到 main（`169893b`），生产 Worker `6c57ab56-114b-4bb8-9b19-ba30b1ae7755`（`--containers-rollout=none`），首页引用 `index-ByL8DSq6.js`，`/api/health` 200，`npm run test:mobile-service` 4 项通过。部署时间线（UTC）：07:34:05 本机部署 `b123b79e`；07:34:50 另一位队友从草稿 PR #29（`codex/continuous-mobile-voice`，基于 `4d8003f`，不含"等待判断过期"修复）部署了 `11ef1749`，覆盖了前者；07:37:53 本次部署又覆盖了它。发布前只核对了 origin/main 无新提交和线上版本号，没有核对该版本的作者，因此没有发现线上已是队友的分支构建。结果：PR #29 中未合并的后端改动（`backend/src/live-delegation.ts`、`live-control.ts`、`cloudflare/src/live-supervisor.ts` 等）目前不在线上，他的移动端联调会受影响；需要他变基到 main 后重新部署，或先合并。以后发布前必须同时核对最新部署的作者与版本。
 
-
 ## Jev 影子评测上线（2026-09-18）
 
 背景：每句听到的话由后端模型判断"忽略 / 等待 / 暂停 / 继续 / 调整播放 / 提问"，真实会话里第一个判断要 0.94 到 1.54 秒；人声立即暂停之后，这段时间就是旁人说话造成的空白。Jev（TypeSafe 的结构化决策模型，2026-09-17 发布）不生成文字，只在给定选项中选择并给出校准置信度。它通过 OpenRouter 可用：`POST https://openrouter.ai/api/alpha/decisions`，模型 `typesafe/jev-1.13`，输入 $0.042/百万 token，输出免费。
@@ -575,3 +567,13 @@ npx wrangler d1 execute asidefm --remote --config wrangler.production.jsonc --co
 发布与核对：`npm run check`、Cloudflare 集成 51 项通过；单元测试 439 项中 434 项通过，失败的 5 项全在 `tests/native-pcm.test.ts`，原因是本机没有 Java（`javac` 不可用），在未改动的 main 上同样失败。发布前线上是本人 09-18 16:05Z 的 `6d2870f2`，origin/main 无他人新提交。从 main（`a3b7a3d`）部署生产 Worker `559af9ff-ff69-42c8-9319-df4ca64c8d42`（`--containers-rollout=none`），首页引用 `index-ZN2nAaq_.js`。这是 PR #29 合并进 main 之后第一次从 main 部署，移动端后端改动随之上线，无新增迁移。`/`、`/space`、`/api/health` 均 200，`npm run test:mobile-service` 4 项通过；再次渲染线上页面，两个节目页的 title、`lang`、canonical 均为自己的。
 
 未验证：Google 重新抓取后报告是否消失，需在 GSC 对节目页"请求编入索引"并"验证修复"，通常要几天到两三周。未处理：`/index.html` 返回 200（canonical 指向 `/`）；`/zh/` 返回 404 而 `/episodes/<id>/` 返回 200。
+
+## 公共音频库按 collection 组织（2026-09-20）
+
+改动（`cc20e26`）：每条公开示例在 `content/public-samples.json` 里指定一个 `collection`，标题（中英）放在 `content/collections.json`，准备脚本把 `{ id, title }` 写进节目的 `attribution.collection`。`engine/src/library.ts` 的 `groupByCollection` 供所有列表共用：首页每个 collection 一条带标题的横向列表（放得下时隐藏箭头），播放器侧栏/抽屉与移动端音频库在每组第一条上方显示可折叠的标题（Web 的折叠状态存在 localStorage），Worker 给爬虫的首页列表同样分组。没有 collection 的音频保持原顺序；只有与带标题的 collection 同时出现时才归到"其他"。详见 [公共示例](public-samples.md#collections)。
+
+发布与核对：`npm run check`、Cloudflare 集成 51 项通过；单元测试 447 项中 442 项通过，失败的 5 项仍全在 `tests/native-pcm.test.ts`（本机没有 Java）；浏览器测试 `landing.spec.ts` 与 `space.spec.ts` 共 12 项通过，其中 2 项为本次新增。发布前线上是本人当天 18:48Z 的 `559af9ff`，origin/main 无他人新提交。从 main（`cc20e26`）部署生产 Worker `b3f5f8d7-0c4e-4af1-bde7-0ed4dbb64bae`（`--containers-rollout=none`），首页引用 `index-BXX_6raP.js`，其中包含折叠状态的存储键。`/`、`/zh`、`/space`、`/api/health`、`/episodes/jfk-rice-moon` 均 200，`npm run test:mobile-service` 4 项通过。无新增迁移。
+
+未完成：线上 8 条示例的 metadata 还没有 `collection` 字段，`content/collect-public-samples.sql` **尚未在生产 D1 执行**。执行前线上与发布前显示一致——`/zh` 的 HTML 里仍是一个 `sample-list`、没有 collection 标题，已核对。执行后应核对 `GET /api/episodes` 的 8 条都带 `attribution.collection`，`/zh` 出现三个标题、`/` 出现两个。
+
+未验证：移动端的分组与折叠只通过了类型检查，未在真机或模拟器上看过；`tests/browser/public-samples.spec.ts` 的新断言需要提供这 8 条示例的环境，本地未跑。
