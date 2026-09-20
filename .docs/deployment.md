@@ -574,6 +574,6 @@ npx wrangler d1 execute asidefm --remote --config wrangler.production.jsonc --co
 
 发布与核对：`npm run check`、Cloudflare 集成 51 项通过；单元测试 447 项中 442 项通过，失败的 5 项仍全在 `tests/native-pcm.test.ts`（本机没有 Java）；浏览器测试 `landing.spec.ts` 与 `space.spec.ts` 共 12 项通过，其中 2 项为本次新增。发布前线上是本人当天 18:48Z 的 `559af9ff`，origin/main 无他人新提交。从 main（`cc20e26`）部署生产 Worker `b3f5f8d7-0c4e-4af1-bde7-0ed4dbb64bae`（`--containers-rollout=none`），首页引用 `index-BXX_6raP.js`，其中包含折叠状态的存储键。`/`、`/zh`、`/space`、`/api/health`、`/episodes/jfk-rice-moon` 均 200，`npm run test:mobile-service` 4 项通过。无新增迁移。
 
-未完成：线上 8 条示例的 metadata 还没有 `collection` 字段，`content/collect-public-samples.sql` **尚未在生产 D1 执行**。执行前线上与发布前显示一致——`/zh` 的 HTML 里仍是一个 `sample-list`、没有 collection 标题，已核对。执行后应核对 `GET /api/episodes` 的 8 条都带 `attribution.collection`，`/zh` 出现三个标题、`/` 出现两个。
+数据回填：Worker 上线时线上 8 条示例还没有 `collection` 字段，页面与发布前一致（`/zh` 的 HTML 里只有一个 `sample-list`，已核对）。随后由本人在生产 D1 执行 `content/collect-public-samples.sql`（3 条语句，写入 8 行；Claude 的会话无权写生产库）。执行后核对：`GET /api/episodes` 的 8 条都带 `attribution.collection`；Worker 输出的 `/zh` 有三个 collection 标题、`/` 有两个；用无头 Chrome 渲染线上页面，`/zh` 依次为鲁迅《呐喊》(2)、Longines Chronoscope 访谈 (4)、总统演讲 (2)，`/` 为后两者，只有 4 条的那一行显示箭头，播放器侧栏出现同样三个可折叠标题，无页面错误。collection 的先后取决于接口返回顺序（按入库时间），所以 Chronoscope 排在总统演讲之前。
 
 未验证：移动端的分组与折叠只通过了类型检查，未在真机或模拟器上看过；`tests/browser/public-samples.spec.ts` 的新断言需要提供这 8 条示例的环境，本地未跑。
