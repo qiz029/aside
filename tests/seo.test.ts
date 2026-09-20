@@ -20,6 +20,7 @@ import {
 import {
   descriptions as uiDescriptions,
   english,
+  ownsDocumentHead,
   titles as uiTitles,
 } from "../frontend/src/i18n";
 
@@ -43,6 +44,15 @@ test("worker SEO copy stays in step with the interface copy", () => {
   assert.equal(descriptions.en, uiDescriptions.en);
   assert.equal(descriptions.zh, uiDescriptions.zh);
   assert.deepEqual([...heroHeadings.en], [english["对话发生过，"], english["你依然可以加入。"]]);
+});
+
+test("the client leaves an episode page's server-rendered head alone", () => {
+  // Rewriting it with the landing title made Google fold episodes into "/".
+  assert.equal(ownsDocumentHead("/episodes/luxun-ah-q"), true);
+  assert.equal(ownsDocumentHead("/episodes/luxun-ah-q/"), true);
+  assert.equal(ownsDocumentHead("/"), false);
+  assert.equal(ownsDocumentHead("/zh"), false);
+  assert.equal(ownsDocumentHead("/space"), false);
 });
 
 test("seoHead emits one canonical, language alternates and escaped text", () => {

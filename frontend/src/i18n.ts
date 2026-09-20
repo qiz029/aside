@@ -90,25 +90,35 @@ export function canonicalFor(pathname: string): string | undefined {
   if (pathname === "/zh" || pathname.startsWith("/zh/")) return `${site}/zh`;
   return `${site}/`;
 }
+/** Episode pages arrive with a server-rendered head that the client keeps. */
+export function ownsDocumentHead(pathname: string): boolean {
+  return /^\/episodes\/[a-zA-Z0-9-]+\/?$/.test(pathname);
+}
 function updateDocument() {
   if (typeof document === "undefined") return;
   const zh = locale === "zh";
   // The signed-in space is private: keep it out of the index and drop the
   // landing canonical so the two pages never claim the same URL.
   const privatePage = location.pathname === "/space";
-  document.documentElement.lang = zh ? "zh-CN" : "en";
-  document.title = privatePage ? spaceTitles[locale] : titles[locale];
-  setMeta('meta[name="description"]', descriptions[locale]);
-  setMeta('meta[property="og:title"]', titles[locale]);
-  setMeta('meta[property="og:description"]', descriptions[locale]);
-  setMeta('meta[property="og:locale"]', zh ? "zh_CN" : "en_US");
-  setMeta('meta[property="og:locale:alternate"]', zh ? "en_US" : "zh_CN");
-  setMeta('meta[name="twitter:title"]', titles[locale]);
-  setMeta('meta[name="twitter:description"]', descriptions[locale]);
-  setMeta('meta[property="og:image"]', cardImages[locale].url);
-  setMeta('meta[property="og:image:alt"]', cardImages[locale].alt);
-  setMeta('meta[name="twitter:image"]', cardImages[locale].url);
-  setMeta('meta[name="twitter:image:alt"]', cardImages[locale].alt);
+  // The Worker renders an episode page's title, description, language and card
+  // from the recording. Overwriting them with the landing copy makes every
+  // rendered episode look like a duplicate of the home page to a crawler.
+  const episodePage = ownsDocumentHead(location.pathname);
+  if (!episodePage) {
+    document.documentElement.lang = zh ? "zh-CN" : "en";
+    document.title = privatePage ? spaceTitles[locale] : titles[locale];
+    setMeta('meta[name="description"]', descriptions[locale]);
+    setMeta('meta[property="og:title"]', titles[locale]);
+    setMeta('meta[property="og:description"]', descriptions[locale]);
+    setMeta('meta[property="og:locale"]', zh ? "zh_CN" : "en_US");
+    setMeta('meta[property="og:locale:alternate"]', zh ? "en_US" : "zh_CN");
+    setMeta('meta[name="twitter:title"]', titles[locale]);
+    setMeta('meta[name="twitter:description"]', descriptions[locale]);
+    setMeta('meta[property="og:image"]', cardImages[locale].url);
+    setMeta('meta[property="og:image:alt"]', cardImages[locale].alt);
+    setMeta('meta[name="twitter:image"]', cardImages[locale].url);
+    setMeta('meta[name="twitter:image:alt"]', cardImages[locale].alt);
+  }
   setMeta(
     'meta[name="robots"]',
     privatePage ? "noindex, nofollow" : indexRobots,
