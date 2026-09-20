@@ -25,12 +25,15 @@ test("English samples show attribution, timed transcripts, and playable audio", 
   // declares languageVisibility ["zh-cn"] and is filtered out. A broken filter
   // shows seven, and a retired entry reappearing also fails here.
   await expect(page.locator(".sample-collection .sample-panel")).toHaveCount(6);
-  await expect(page.locator(".sample-collection")).toContainText(
-    "We Choose to Go to the Moon",
-  );
-  await expect(page.locator(".sample-collection")).toContainText(
-    "Tear Down This Wall",
-  );
+  // One rail per collection, each under its own heading.
+  const speeches = page.getByRole("group", { name: "Presidential Addresses" });
+  await expect(speeches).toContainText("We Choose to Go to the Moon");
+  await expect(speeches).toContainText("Tear Down This Wall");
+  await expect(
+    page
+      .getByRole("group", { name: "Longines Chronoscope Interviews" })
+      .locator(".sample-panel"),
+  ).toHaveCount(4);
   await page.getByRole("button", { name: "Try a sample", exact: true }).click();
   await expect(page.locator(".source-credit")).toContainText(
     "John F. Kennedy Presidential Library and Museum",

@@ -66,6 +66,61 @@
   border-bottom: 1px solid var(--line);
   padding: 8px 0;
 }
+.audio-library-heading {
+  padding: 16px 0 4px;
+}
+.audio-library-heading:first-child {
+  padding-top: 4px;
+}
+.audio-library-heading h3 {
+  margin: 0;
+}
+.audio-library-heading button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-align: left;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.audio-library-heading button:hover {
+  color: var(--ink);
+}
+.audio-library-heading svg {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  transition: transform 160ms ease;
+}
+.audio-library-heading button[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+.audio-library-heading small {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+}
+.audio-library-item[hidden] {
+  display: none;
+}
+.persistent-library .audio-library-heading {
+  padding-inline: 10px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .audio-library-heading svg {
+    transition: none;
+  }
+}
 .audio-library-select {
   display: flex;
   align-items: flex-start;

@@ -12,6 +12,8 @@ export interface SampleSpec {
   sourceSha256: string;
   language?: string;
   languageVisibility?: string[];
+  /** Key in `content/collections.json`; the shelf this sample is listed under. */
+  collection: string;
   transcriptionStartMs?: number;
   transcriptionEndMs?: number;
   /** Steering text for the transcriber, e.g. to keep CJK sentence punctuation. */
@@ -32,6 +34,8 @@ export interface TtsSampleSpec {
   hostStyle: string;
   language?: string;
   languageVisibility?: string[];
+  /** Key in `content/collections.json`; the shelf this sample is listed under. */
+  collection: string;
   /** Provider voice and its presentation, used for the analysis voice fields. */
   model: string;
   voice: string;
@@ -79,6 +83,28 @@ function requireVisibility(id: string, visibility?: string[]) {
     throw Error(
       `${id}: languageVisibility is empty; omit it to publish on the recording's own language page`,
     );
+}
+
+/** Collection titles by primary language subtag, as `content/collections.json` holds them. */
+export type CollectionTitles = Record<string, Record<string, string>>;
+
+/**
+ * Every sample names its shelf, and the shelf must be titled in both interface
+ * languages: the title is copied into the published episode, so a missing one
+ * would surface as a bare id in whichever client asks for that language.
+ */
+export function collectionFor(
+  spec: { id: string; collection?: string },
+  collections: CollectionTitles,
+) {
+  const id = spec.collection?.trim();
+  if (!id) throw Error(`${spec.id}: collection is required`);
+  const title = collections[id];
+  if (!title) throw Error(`${spec.id}: unknown collection: ${id}`);
+  for (const language of ["zh", "en"])
+    if (!title[language]?.trim())
+      throw Error(`${spec.id}: collection ${id} has no ${language} title`);
+  return { id, title };
 }
 
 export function validateSpec(spec: SampleSpec): void {

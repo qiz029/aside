@@ -4,7 +4,12 @@ import { promisify } from "node:util";
 import { createHash } from "node:crypto";
 import { AudioProvider } from "../backend/src/audio-provider.js";
 import { makeAnalysis } from "@aside/engine/server";
-import { validateSpec, type SampleSpec } from "./sample-spec.js";
+import {
+  collectionFor,
+  validateSpec,
+  type CollectionTitles,
+  type SampleSpec,
+} from "./sample-spec.js";
 import { writeSeedSql } from "./seed-sql.js";
 import { sentenceGroups } from "./sentence-groups.js";
 import type { Episode, Passage } from "@aside/engine/core";
@@ -12,6 +17,9 @@ const exec = promisify(execFile);
 const dir = ".wrangler/public-samples";
 const specs: SampleSpec[] = JSON.parse(
   await readFile("content/public-samples.json", "utf8"),
+);
+const collections: CollectionTitles = JSON.parse(
+  await readFile("content/collections.json", "utf8"),
 );
 const provider = new AudioProvider(process.env.OPENAI_API_KEY!);
 const quote = (s: string) => "'" + s.replace(/'/g, "''") + "'";
@@ -26,6 +34,7 @@ for (const spec of specs) {
   )
     continue;
   validateSpec(spec);
+  const collection = collectionFor(spec, collections);
   // Everything language-specific follows the spec, so a non-English entry
   // does not inherit English attribution, prompting or sentence splitting.
   const language: string = spec.language ?? "en";
@@ -186,6 +195,7 @@ for (const spec of specs) {
       language,
       // Absent means the recording is published on its own language page only.
       languageVisibility: spec.languageVisibility ?? [language],
+      collection,
       excerptStartMs: start,
       excerptEndMs: end,
     },

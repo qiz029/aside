@@ -1,4 +1,5 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
+import type { Episode } from "@aside/engine/core";
 
 test("public landing explains the interaction and opens the sample without upload prompts", async ({
   page,
@@ -93,9 +94,83 @@ test("sign-in stays visible when the session service fails", async ({
   );
 });
 
+// Local libraries differ in how their recordings are filed, so each test
+// decides the collections it needs instead of inheriting the machine's.
+async function fileEpisodes(
+  page: Page,
+  collectionOf: (index: number) => string | undefined,
+) {
+  await page.route("**/api/episodes", async (route) => {
+    const episodes: Episode[] = await (await route.fetch()).json();
+    await route.fulfill({
+      json: episodes.map((episode, index) => {
+        const id = collectionOf(index);
+        const { collection: _, ...attribution } = episode.attribution ?? {
+          publisher: "p",
+          author: "a",
+          sourceUrl: "https://example.test",
+          licenseUrl: "https://example.test",
+          license: "l",
+          language: "zh",
+          excerptStartMs: 0,
+          excerptEndMs: 1,
+        };
+        return {
+          ...episode,
+          attribution: id
+            ? {
+                ...attribution,
+                collection: { id, title: { zh: `合集 ${id}`, en: id } },
+              }
+            : attribution,
+        };
+      }),
+    });
+  });
+}
+
+test("collections each get a headed rail, and a short one hides its arrows", async ({
+  page,
+}) => {
+  await fileEpisodes(page, (index) => (index < 2 ? "short" : "long"));
+  await page.goto("/");
+  const short = page.getByRole("group", { name: "合集 short" });
+  await expect(short.getByRole("heading", { level: 3 })).toContainText(
+    "合集 short",
+  );
+  await expect(short.locator(".sample-panel")).toHaveCount(2);
+  await expect(short.getByRole("button", { name: "下一组音频" })).toBeHidden();
+  const long = page.getByRole("group", { name: "合集 long" });
+  await expect(long.getByRole("button", { name: "下一组音频" })).toBeVisible();
+});
+
+test("a collection folds in the library sidebar and stays folded after a reload", async ({
+  page,
+}) => {
+  await fileEpisodes(page, (index) => (index < 2 ? "short" : "long"));
+  await page.goto("/");
+  await page
+    .getByRole("group", { name: "合集 short" })
+    .locator(".sample-panel")
+    .first()
+    .click();
+  const sidebar = page.locator(".persistent-library");
+  const heading = sidebar.getByRole("button", { name: /合集 short/ });
+  await expect(heading).toHaveAttribute("aria-expanded", "true");
+  const rows = sidebar.locator(".audio-library-item:visible");
+  const before = await rows.count();
+  await heading.click();
+  await expect(heading).toHaveAttribute("aria-expanded", "false");
+  await expect(rows).toHaveCount(before - 2);
+  await page.reload();
+  await expect(heading).toHaveAttribute("aria-expanded", "false");
+  await expect(rows).toHaveCount(before - 2);
+});
+
 test("audio panels open directly and can be browsed on desktop and mobile", async ({
   page,
 }) => {
+  await fileEpisodes(page, () => undefined);
   await page.goto("/");
   const library = page.getByRole("group", { name: "公共音频库" });
   const panels = library.locator(".sample-panel");

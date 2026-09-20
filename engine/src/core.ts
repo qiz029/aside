@@ -1,4 +1,5 @@
 export { normalizeSpokenText, matchesSpokenText } from "./spoken-text.js";
+export { groupByCollection, type EpisodeGroup } from "./library.js";
 export type Voice = "masculine" | "feminine" | "unknown";
 export const MAX_AUDIO_DURATION_MS = 5 * 60 * 60 * 1000;
 export const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
@@ -44,6 +45,12 @@ export interface Episode {
     language: string;
     /** Interface languages this recording is published on; absent means all. */
     languageVisibility?: string[];
+    /**
+     * The shelf a public recording is listed under. Titles are keyed by
+     * primary language subtag and travel with the data, so an installed app
+     * can show a collection it was not built with.
+     */
+    collection?: { id: string; title: Record<string, string> };
     excerptStartMs: number;
     excerptEndMs: number;
   };

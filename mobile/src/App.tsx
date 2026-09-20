@@ -1,5 +1,6 @@
 import React, {
   useEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -52,7 +53,7 @@ import Animated, {
 import { Scrubber } from "./Scrubber";
 import { getLocales } from "expo-localization";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import type { Episode } from "@aside/engine/core";
+import { groupByCollection, type Episode } from "@aside/engine/core";
 import { ListeningSession } from "@aside/player-runtime/listening-session";
 import { CheckpointSync } from "@aside/player-runtime/checkpoint-sync";
 import { MobileApi, type User, type AudioFile } from "./api";
@@ -807,7 +808,46 @@ function Main() {
         { text: tr("取消", "Cancel"), style: "cancel" as const },
       ]);
   };
-  const list = collection === "private" ? privateEpisodes : episodes;
+  // Public samples are listed collection by collection, with a heading above
+  // the first recording of each. A listener's own audio stays one flat list.
+  const shelves = useMemo(() => {
+    const groups = groupByCollection(episodes, locale);
+    const titled = groups.some((group) => group.id);
+    return {
+      episodes: groups.flatMap((group) => group.episodes),
+      // Keyed by episode: which shelf it is on, and the heading its first
+      // recording carries. Loose recordings beside titled shelves get a
+      // heading too, or they would read as part of the shelf above them.
+      rows: new Map(
+        groups.flatMap((group) =>
+          group.episodes.map(
+            (episode, index) =>
+              [
+                episode.id,
+                {
+                  shelf: group.id ?? "",
+                  heading:
+                    index === 0 && titled
+                      ? (group.title ?? (locale === "zh" ? "其他" : "Other"))
+                      : undefined,
+                  count: group.episodes.length,
+                },
+              ] as const,
+          ),
+        ),
+      ),
+    };
+  }, [episodes, locale]);
+  const [foldedShelves, setFoldedShelves] = useState<Set<string>>(new Set());
+  // A folded shelf keeps its first recording in the list, because that row
+  // is what carries the heading; the row then draws the heading alone.
+  const list =
+    collection === "private"
+      ? privateEpisodes
+      : shelves.episodes.filter((item) => {
+          const row = shelves.rows.get(item.id)!;
+          return row.heading || !foldedShelves.has(row.shelf);
+        });
   return (
     <SafeAreaView
       edges={["top", "left", "right"]}
@@ -2078,67 +2118,112 @@ function Main() {
                     )
                   : null
               }
-              renderItem={({ item }) => (
-                <Pressable
-                  testID={`episode-${item.id}`}
-                  accessibilityRole="button"
-                  onPress={() => run(() => load(item.id))}
-                  style={[
-                    styles.card,
-                    styles.raised,
-                    { backgroundColor: colors.surface, marginHorizontal: 20 },
-                  ]}
-                >
-                  <View
-                    style={{
-                      flexDirection: "row",
-                      alignItems: "center",
-                      gap: 14,
-                    }}
-                  >
-                    {item.cover ? (
-                      <Image
-                        source={{
-                          uri: api.base + `/api/episodes/${item.id}/cover`,
-                          headers: api.headers(),
-                        }}
-                        style={styles.artwork}
-                      />
-                    ) : (
-                      <View
+              renderItem={({ item }) => {
+                const row =
+                  collection === "public"
+                    ? shelves.rows.get(item.id)
+                    : undefined;
+                const folded = !!row && foldedShelves.has(row.shelf);
+                return (
+                  <>
+                    {row?.heading ? (
+                      <Pressable
+                        testID={`shelf-${row.shelf}`}
+                        accessibilityRole="button"
+                        accessibilityState={{ expanded: !folded }}
+                        onPress={() =>
+                          setFoldedShelves((old) => {
+                            const next = new Set(old);
+                            if (!next.delete(row.shelf)) next.add(row.shelf);
+                            return next;
+                          })
+                        }
+                        style={styles.shelfHeading}
+                      >
+                        <Ionicons
+                          name={folded ? "chevron-forward" : "chevron-down"}
+                          size={14}
+                          color={colors.muted}
+                        />
+                        <Text
+                          maxFontSizeMultiplier={1.6}
+                          style={[styles.shelfTitle, { color: colors.muted }]}
+                        >
+                          {row.heading}
+                        </Text>
+                        <Text style={{ color: colors.muted, fontSize: 12 }}>
+                          {row.count}
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                    {folded ? null : (
+                      <Pressable
+                        testID={`episode-${item.id}`}
+                        accessibilityRole="button"
+                        onPress={() => run(() => load(item.id))}
                         style={[
-                          styles.artwork,
+                          styles.card,
+                          styles.raised,
                           {
-                            backgroundColor: colors.highlight,
-                            justifyContent: "center",
-                            alignItems: "center",
+                            backgroundColor: colors.surface,
+                            marginHorizontal: 20,
                           },
                         ]}
                       >
-                        <Ionicons
-                          name="musical-notes-outline"
-                          size={24}
-                          color={colors.accent}
-                        />
-                      </View>
+                        <View
+                          style={{
+                            flexDirection: "row",
+                            alignItems: "center",
+                            gap: 14,
+                          }}
+                        >
+                          {item.cover ? (
+                            <Image
+                              source={{
+                                uri:
+                                  api.base + `/api/episodes/${item.id}/cover`,
+                                headers: api.headers(),
+                              }}
+                              style={styles.artwork}
+                            />
+                          ) : (
+                            <View
+                              style={[
+                                styles.artwork,
+                                {
+                                  backgroundColor: colors.highlight,
+                                  justifyContent: "center",
+                                  alignItems: "center",
+                                },
+                              ]}
+                            >
+                              <Ionicons
+                                name="musical-notes-outline"
+                                size={24}
+                                color={colors.accent}
+                              />
+                            </View>
+                          )}
+                          <View style={{ flex: 1, gap: 4 }}>
+                            <Text
+                              numberOfLines={2}
+                              maxFontSizeMultiplier={1.6}
+                              style={[styles.cardTitle, serif, textStyle]}
+                            >
+                              {item.title}
+                            </Text>
+                            <Text style={{ color: colors.muted, fontSize: 13 }}>
+                              {item.status === "ready"
+                                ? `${formatTime(item.durationMs)} · ${tr("音频", "Audio")}`
+                                : item.stage}
+                            </Text>
+                          </View>
+                        </View>
+                      </Pressable>
                     )}
-                    <View style={{ flex: 1, gap: 4 }}>
-                      <Text
-                        numberOfLines={2}
-                        maxFontSizeMultiplier={1.6}
-                        style={[styles.cardTitle, serif, textStyle]}
-                      >
-                        {item.title}
-                      </Text>
-                      <Text style={{ color: colors.muted, fontSize: 13 }}>
-                        {item.status === "ready"
-                          ? `${formatTime(item.durationMs)} · ${tr("音频", "Audio")}`
-                          : item.stage}
-                      </Text>
-                    </View>
-                  </View>
-                </Pressable>
-              )}
+                  </>
+                );
+              }}
             />
           </>
         )}
@@ -2713,6 +2798,15 @@ const styles = StyleSheet.create({
   },
   tabs: { flexDirection: "row", borderTopWidth: StyleSheet.hairlineWidth },
   cardTitle: { fontSize: 17, lineHeight: 24 },
+  shelfHeading: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    minHeight: 44,
+    marginHorizontal: 24,
+    marginTop: 6,
+  },
+  shelfTitle: { flex: 1, fontSize: 13, fontWeight: "600", letterSpacing: 0.3 },
   grabber: {
     alignSelf: "center",
     width: 36,

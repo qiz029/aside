@@ -5,7 +5,12 @@ import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { AudioProvider } from "../backend/src/audio-provider.js";
 import { makeAnalysis } from "@aside/engine/server";
-import { validateTtsSpec, type TtsSampleSpec } from "./sample-spec.js";
+import {
+  collectionFor,
+  validateTtsSpec,
+  type CollectionTitles,
+  type TtsSampleSpec,
+} from "./sample-spec.js";
 import { writeSeedSql } from "./seed-sql.js";
 import type { Episode, Passage, Speaker } from "@aside/engine/core";
 
@@ -14,6 +19,9 @@ const dir = ".wrangler/public-samples";
 const cache = ".wrangler/tts-cache";
 const specs: TtsSampleSpec[] = JSON.parse(
   await readFile("content/tts-samples.json", "utf8"),
+);
+const collections: CollectionTitles = JSON.parse(
+  await readFile("content/collections.json", "utf8"),
 );
 const provider = new AudioProvider(process.env.OPENAI_API_KEY!);
 const duration = async (file: string) =>
@@ -42,6 +50,7 @@ for (const spec of specs) {
   )
     continue;
   validateTtsSpec(spec);
+  const collection = collectionFor(spec, collections);
   const language = spec.language ?? "zh";
   const sentences = (await readFile(spec.textFile, "utf8"))
     .split("\n")
@@ -170,6 +179,7 @@ for (const spec of specs) {
       license: spec.license,
       language,
       languageVisibility: spec.languageVisibility ?? [language],
+      collection,
       excerptStartMs: 0,
       excerptEndMs: offset,
     },

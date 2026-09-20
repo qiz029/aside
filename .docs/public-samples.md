@@ -105,6 +105,20 @@ These are 1940s–1980s transfers and the transcripts are noticeably rougher tha
 
 Transcripts are generated from the audio and are not hand-corrected, so a re-run reproduces the same errors. Correcting them would need a deliberate correction step in the pipeline rather than an edit to a cached file.
 
+## Collections
+
+Every sample names a `collection`, a key in `content/collections.json`, which holds the collection's title in both interface languages. The preparation scripts copy `{ id, title }` into the episode's `attribution.collection`, so the title travels with the data and an installed mobile app can list a collection it was not built with. `collectionFor` in `scripts/sample-spec.ts` rejects a sample with no collection, an unknown one, or one missing a `zh` or `en` title, before anything is downloaded.
+
+There is no collection table, endpoint or page. `groupByCollection` in `engine/src/library.ts` splits a list into its collections, and every client that lists the library calls it: the landing page draws one rail per collection, the player's library list and the mobile library print a heading above the first recording of each, and the Worker's crawler-visible home list does the same. Grouping runs after the language ordering, so a collection sits where its first recording was and the reader's own language still leads. Recordings with no collection — a listener's uploads, older local data — stay in one untitled group in their original order.
+
+| Collection               | zh                        | en                              | Samples                                                                              |
+| ------------------------ | ------------------------- | ------------------------------- | ------------------------------------------------------------------------------------ |
+| `presidential-addresses` | 总统演讲                  | Presidential Addresses          | `jfk-rice-moon`, `reagan-brandenburg-gate`                                           |
+| `longines-chronoscope`   | Longines Chronoscope 访谈 | Longines Chronoscope Interviews | `chronoscope-kennedy`, `chronoscope-warren`, `chronoscope-moses`, `chronoscope-byrd` |
+| `luxun-nahan`            | 鲁迅《呐喊》              | Lu Xun: Call to Arms            | `luxun-madmans-diary`, `luxun-ah-q`                                                  |
+
+The samples published before collections existed are filed with `content/collect-public-samples.sql`, which sets the one attribution field in place instead of re-running the paid preparation. It has not been applied to production yet; until it is, the deployed clients show the library as one ungrouped list, exactly as before.
+
 ## Source and excerpt hashes
 
 Source audio SHA-256 (the exact bytes reviewed):

@@ -1,4 +1,4 @@
-import type { Episode } from "@aside/engine/core";
+import { groupByCollection, type Episode } from "@aside/engine/core";
 
 /**
  * Builders for the search-engine surface: head blocks, JSON-LD, crawler-visible
@@ -179,7 +179,7 @@ export function episodesFor(episodes: Episode[], locale: SeoLocale) {
     if (!Array.isArray(visibility) || !visibility.length) return true;
     return visibility.some((entry) => code(String(entry)) === locale);
   });
-  return visible
+  const ordered = visible
     .map((episode, index) => ({ episode, index }))
     .sort(
       (a, b) =>
@@ -188,6 +188,9 @@ export function episodesFor(episodes: Episode[], locale: SeoLocale) {
         a.index - b.index,
     )
     .map((entry) => entry.episode);
+  // Collection by collection, as the page lists them, so the JSON-LD item
+  // positions match what a reader sees.
+  return groupByCollection(ordered, locale).flatMap((group) => group.episodes);
 }
 
 function duration(episode: Episode) {
@@ -290,23 +293,29 @@ export function episodeJsonLd(episode: Episode, summary: string) {
 
 export function homeBody(locale: SeoLocale, episodes: Episode[]): string {
   const [first, second] = heroHeadings[locale];
-  const items = episodes
-    .map((episode) => {
-      const meta = [
-        episode.attribution?.publisher,
-        episode.attribution?.author,
-        duration(episode),
-      ]
-        .filter(Boolean)
-        .join(" · ");
-      return `<li><a href="${episodePath(episode.id)}"><span class="sample-icon" aria-hidden="true">▶</span><span><strong>${escapeHtml(episode.title)}</strong><small>${escapeHtml(meta)}</small></span></a></li>`;
-    })
-    .join("\n            ");
-  const library = episodes.length
-    ? `<ul class="sample-list">
+  const library = groupByCollection(episodes, locale)
+    .map((group) => {
+      const items = group.episodes
+        .map((episode) => {
+          const meta = [
+            episode.attribution?.publisher,
+            episode.attribution?.author,
+            duration(episode),
+          ]
+            .filter(Boolean)
+            .join(" · ");
+          return `<li><a href="${episodePath(episode.id)}"><span class="sample-icon" aria-hidden="true">▶</span><span><strong>${escapeHtml(episode.title)}</strong><small>${escapeHtml(meta)}</small></span></a></li>`;
+        })
+        .join("\n            ");
+      const heading = group.title
+        ? `<h3 class="sample-collection-title">${escapeHtml(group.title)}</h3>
+          `
+        : "";
+      return `${heading}<ul class="sample-list">
             ${items}
-          </ul>`
-    : "";
+          </ul>`;
+    })
+    .join("\n          ");
   return `<div class="landing"><main class="landing-main">
         <section class="hero" aria-labelledby="hero-title">
           <div class="hero-copy">

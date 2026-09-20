@@ -418,6 +418,9 @@
   display: grid;
   gap: 10px;
 }
+.sample-list + .sample-collection-title {
+  margin-top: 32px;
+}
 .sample-skeleton {
   height: 86px;
   border: 1px solid var(--line);

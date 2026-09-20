@@ -103,6 +103,37 @@ test("home body links each public recording at its own URL", () => {
   assert.match(body, /<h1 id="hero-title">/);
 });
 
+test("home body lists recordings under their collection heading", () => {
+  const shelf = (id: string, zh: string) => ({
+    publisher: "p",
+    author: "a",
+    sourceUrl: "s",
+    licenseUrl: "l",
+    license: "x",
+    language: "zh",
+    collection: { id, title: { zh, en: id } },
+    excerptStartMs: 0,
+    excerptEndMs: 1,
+  });
+  const body = homeBody("zh", [
+    episode({ id: "one", attribution: shelf("nahan", "鲁迅《呐喊》") }),
+    episode({ id: "two", attribution: shelf("speeches", "<演讲>") }),
+    episode({ id: "three", attribution: shelf("nahan", "鲁迅《呐喊》") }),
+  ]);
+  assert.equal(body.match(/<h3 class="sample-collection-title">/g)?.length, 2);
+  assert.ok(body.includes("&lt;演讲&gt;"), "collection title must be escaped");
+  const order = [
+    "鲁迅《呐喊》",
+    "/episodes/one",
+    "/episodes/three",
+    "/episodes/two",
+  ];
+  assert.deepEqual(
+    [...order].sort((a, b) => body.indexOf(a) - body.indexOf(b)),
+    order,
+  );
+});
+
 test("recording titles cannot break out of the injected markup", () => {
   const body = homeBody("en", [
     episode({ id: "x", title: '</a><img src=x onerror="alert(1)">' }),

@@ -1,6 +1,7 @@
 [
   {
     "id": "jfk-rice-moon",
+    "collection": "presidential-addresses",
     "sourceId": "jfks19620912",
     "title": "We Choose to Go to the Moon",
     "publisher": "John F. Kennedy Presidential Library and Museum",
@@ -20,6 +21,7 @@
   },
   {
     "id": "reagan-brandenburg-gate",
+    "collection": "presidential-addresses",
     "sourceId": "reagan-pp7163c",
     "title": "Tear Down This Wall",
     "publisher": "Ronald Reagan Presidential Library and Museum",
@@ -39,6 +41,7 @@
   },
   {
     "id": "chronoscope-kennedy",
+    "collection": "longines-chronoscope",
     "sourceId": "chronoscope-95777",
     "title": "John F. Kennedy on the 1952 Senate Race",
     "publisher": "National Archives and Records Administration · Longines Chronoscope",
@@ -58,6 +61,7 @@
   },
   {
     "id": "chronoscope-warren",
+    "collection": "longines-chronoscope",
     "sourceId": "chronoscope-95746",
     "title": "Earl Warren Runs for President",
     "publisher": "National Archives and Records Administration · Longines Chronoscope",
@@ -77,6 +81,7 @@
   },
   {
     "id": "chronoscope-moses",
+    "collection": "longines-chronoscope",
     "sourceId": "chronoscope-95822",
     "title": "Robert Moses on Urban Renewal",
     "publisher": "National Archives and Records Administration · Longines Chronoscope",
@@ -96,6 +101,7 @@
   },
   {
     "id": "chronoscope-byrd",
+    "collection": "longines-chronoscope",
     "sourceId": "chronoscope-95934",
     "title": "Richard E. Byrd, Explorer",
     "publisher": "National Archives and Records Administration · Longines Chronoscope",
@@ -124,6 +130,7 @@
     "excerptStartMs": 75000,
     "excerptEndMs": 300040,
     "id": "luxun-madmans-diary",
+    "collection": "luxun-nahan",
     "sourceId": "calltoarms02",
     "title": "狂人日记",
     "sourceUrl": "https://archive.org/details/call_to_arms_jl_librivox",
@@ -144,6 +151,7 @@
     "excerptStartMs": 29320,
     "excerptEndMs": 279540,
     "id": "luxun-ah-q",
+    "collection": "luxun-nahan",
     "sourceId": "trueq01",
     "title": "阿Q正传",
     "sourceUrl": "https://archive.org/details/truestoryahq_1612_librivox",

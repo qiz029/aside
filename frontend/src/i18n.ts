@@ -279,6 +279,7 @@ export const english: Record<string, string> = {
     "Upload interrupted. Cancel and choose the file again.",
   正在检查音频: "Checking audio",
   可对话: "Ready to talk",
+  其他: "Other",
   重试分析: "Retry analysis",
   删除: "Delete",
   取消: "Cancel",

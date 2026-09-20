@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   AUDIO_HOSTS,
+  collectionFor,
   validateSpec,
   validateTtsSpec,
   type SampleSpec,
@@ -20,6 +21,7 @@ function spec(overrides: Partial<SampleSpec> = {}): SampleSpec {
     license: "Public domain",
     licenseUrl: "https://example.test/license",
     summary: "Summary",
+    collection: "shelf",
     sourceSha256: "0".repeat(64),
     excerptStartMs: 0,
     excerptEndMs: 1000,
@@ -37,6 +39,7 @@ function ttsSpec(overrides: Partial<TtsSampleSpec> = {}): TtsSampleSpec {
     license: "Public domain text",
     licenseUrl: "https://example.test/license",
     summary: "Summary",
+    collection: "shelf",
     hostStyle: "Steady narration.",
     model: "tts-1",
     voice: "nova",
@@ -164,5 +167,28 @@ test("ids and source ids that cannot be published are rejected", () => {
   assert.throws(
     () => validateSpec(spec({ sourceId: "has.dots" })),
     /invalid sourceId/,
+  );
+});
+
+test("a sample must name a collection titled in both interface languages", () => {
+  const collections = {
+    shelf: { zh: "书架", en: "Shelf" },
+    half: { zh: "半个" },
+  };
+  assert.deepEqual(collectionFor(spec(), collections), {
+    id: "shelf",
+    title: { zh: "书架", en: "Shelf" },
+  });
+  assert.throws(
+    () => collectionFor(spec({ collection: " " }), collections),
+    /collection is required/,
+  );
+  assert.throws(
+    () => collectionFor(spec({ collection: "missing" }), collections),
+    /unknown collection: missing/,
+  );
+  assert.throws(
+    () => collectionFor(spec({ collection: "half" }), collections),
+    /has no en title/,
   );
 });

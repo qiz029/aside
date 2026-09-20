@@ -1,5 +1,5 @@
 import { LibraryDrawer } from "./LibraryDrawer";
-import { audioCard, episodeHref, libraryFor } from "./library-item";
+import { episodeHref, libraryCards } from "./library-item";
 import { Landing } from "./Landing";
 import { AccountControl } from "./AccountControl";
 import { Space } from "./Space";
@@ -127,7 +127,7 @@ function App() {
             </a>
             <LibraryDrawer
               collection="public"
-              items={libraryFor(episodes, locale).map(audioCard)}
+              items={libraryCards(episodes, locale)}
               label={t("公共音频库")}
               onOpen={(id) => {
                 window.history.replaceState(null, "", debugHref(episodeHref(id)));

@@ -69,6 +69,18 @@ function LibraryTitle({ title, scroll }: { title: string; scroll: boolean }) {
   );
 }
 
+const COLLAPSED_KEY = "aside.library.collapsed";
+
+/** Folded collections are a reader's own tidying, so they outlive the page. */
+function savedCollapsed(): Set<string> {
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(COLLAPSED_KEY)!);
+    return new Set(Array.isArray(saved) ? saved.map(String) : []);
+  } catch {
+    return new Set();
+  }
+}
+
 export function LibraryDrawer({
   items,
   label,
@@ -126,6 +138,17 @@ export function LibraryDrawer({
   function close() {
     dialog.current?.close();
   }
+  const [collapsed, setCollapsed] = useState(savedCollapsed);
+  function toggleGroup(id: string) {
+    const next = new Set(collapsed);
+    if (!next.delete(id)) next.add(id);
+    setCollapsed(next);
+    try {
+      localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]));
+    } catch {
+      // Private windows may refuse storage; the fold still works for this visit.
+    }
+  }
   const content = (
     <>
       {collection && (
@@ -146,9 +169,43 @@ export function LibraryDrawer({
       )}
       {children}
       <ul className="audio-library-list">
-        {items.map((item) => (
+        {items.flatMap((item, index) => [
+          item.group && item.group.id !== items[index - 1]?.group?.id && (
+            <li
+              key={`group:${item.group.id}`}
+              className="audio-library-heading"
+            >
+              <h3>
+                <button
+                  aria-expanded={!collapsed.has(item.group.id)}
+                  onClick={() => toggleGroup(item.group!.id)}
+                >
+                  <svg
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="m6 4 4 4-4 4" />
+                  </svg>
+                  <span>{item.group.title}</span>
+                  <small>
+                    {
+                      items.filter(
+                        (other) => other.group?.id === item.group!.id,
+                      ).length
+                    }
+                  </small>
+                </button>
+              </h3>
+            </li>
+          ),
           <li
             key={item.id}
+            hidden={!!item.group && collapsed.has(item.group.id)}
             className={`audio-library-item${!item.canOpen ? " is-processing" : ""}`}
           >
             <button
@@ -206,8 +263,8 @@ export function LibraryDrawer({
                 <div className="audio-library-actions">{item.actions}</div>
               </details>
             )}
-          </li>
-        ))}
+          </li>,
+        ])}
       </ul>
       {footer}
     </>

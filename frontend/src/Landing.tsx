@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import type { Episode } from "@aside/engine/core";
+import { groupByCollection, type Episode } from "@aside/engine/core";
 import { homeHref, t, useLocale } from "./i18n";
 import { HeroSoundscape } from "./HeroSoundscape";
 import { ScrollStory } from "./ScrollStory";
@@ -152,11 +152,15 @@ export function Landing({
                 <div className="sample-skeleton" />
               </>
             ) : ready.length ? (
-              <SampleRail
-                episodes={ready}
-                onOpen={open}
-                label={t("公共音频库")}
-              />
+              groupByCollection(ready, locale).map((group) => (
+                <SampleRail
+                  key={group.id ?? ""}
+                  episodes={group.episodes}
+                  onOpen={open}
+                  label={group.title ?? t("公共音频库")}
+                  title={group.title}
+                />
+              ))
             ) : (
               <p className="sample-empty">{t("暂时没有可收听的示例。")}</p>
             )}

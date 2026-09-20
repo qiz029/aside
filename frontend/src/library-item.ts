@@ -1,11 +1,13 @@
 import type { ReactNode } from "react";
-import type { Episode } from "@aside/engine/core";
+import { groupByCollection, type Episode } from "@aside/engine/core";
 import { getLocale, message, t, translate, type Locale } from "./i18n";
 
 export interface AudioLibraryItem {
   id: string;
   title: string;
   meta: string;
+  /** Collection; the list prints its title once, above the first of its items. */
+  group?: { id: string; title: string };
   duration?: string;
   description?: string;
   canOpen?: boolean;
@@ -74,14 +76,44 @@ export function episodeHref(id: string) {
   return `/episodes/${encodeURIComponent(id)}`;
 }
 
-export function audioCard(episode: Episode): AudioLibraryItem {
+/**
+ * The public library as list rows, collection by collection. Grouping happens
+ * after `libraryFor`, so the reader's own language still leads.
+ */
+export function libraryCards(
+  episodes: Episode[],
+  locale: Locale,
+): AudioLibraryItem[] {
+  const groups = groupByCollection(libraryFor(episodes, locale), locale);
+  // Beside titled collections, loose recordings need a heading of their own:
+  // without one they read as part of whichever collection precedes them,
+  // above all when that collection is folded.
+  const other = groups.some((group) => group.id)
+    ? { id: "", title: translate("其他", locale) }
+    : undefined;
+  return groups.flatMap((group) =>
+    group.episodes.map((episode) =>
+      group.id
+        ? audioCard(episode, { id: group.id, title: group.title! })
+        : { ...audioCard(episode), group: other },
+    ),
+  );
+}
+
+export function audioCard(
+  episode: Episode,
+  group?: AudioLibraryItem["group"],
+): AudioLibraryItem {
   const seconds = Math.floor(episode.durationMs / 1000);
   return {
     id: episode.id,
     title: episode.title,
+    group,
     duration: `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`,
     meta: [
-      episode.attribution?.publisher,
+      // Under a collection heading the speaker tells items apart; the
+      // publisher would repeat on every row.
+      group ? episode.attribution?.author : episode.attribution?.publisher,
       languageBadge(episode, getLocale()),
       `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`,
       episode.status === "ready"

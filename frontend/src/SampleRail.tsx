@@ -8,10 +8,13 @@ export function SampleRail({
   episodes,
   onOpen,
   label,
+  title,
 }: {
   episodes: Episode[];
   onOpen: (id: string) => void;
   label: string;
+  /** Collection heading; an untitled rail keeps crediting the publisher. */
+  title?: string;
 }) {
   const locale = useLocale();
   const rail = useRef<HTMLUListElement>(null);
@@ -44,6 +47,12 @@ export function SampleRail({
   };
   return (
     <div className="sample-collection" role="group" aria-label={label}>
+      {title && (
+        <h3 className="sample-collection-title">
+          {title}
+          <span>{episodes.length}</span>
+        </h3>
+      )}
       <ul className="sample-rail" ref={rail}>
         {episodes.map((episode, index) => {
           const seconds = Math.floor(episode.durationMs / 1000);
@@ -70,7 +79,11 @@ export function SampleRail({
                 }}
               >
                 <span className="sample-panel-meta">
-                  <span>{episode.attribution?.publisher || "Aside"}</span>
+                  <span>
+                    {(title
+                      ? episode.attribution?.author
+                      : episode.attribution?.publisher) || "Aside"}
+                  </span>
                   <span>
                     {[languageBadge(episode, locale), duration]
                       .filter(Boolean)
@@ -102,7 +115,8 @@ export function SampleRail({
           );
         })}
       </ul>
-      <div className="sample-rail-controls">
+      {/* A short collection fits the row, and two dead arrows say nothing. */}
+      <div className="sample-rail-controls" hidden={edges.start && edges.end}>
         <button
           className="btn btn-neutral btn-icon btn-lg"
           disabled={edges.start}
