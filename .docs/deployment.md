@@ -563,3 +563,15 @@ npx wrangler d1 execute asidefm --remote --config wrangler.production.jsonc --co
 发布与核对：`npm run check`、355 项单元测试通过。发布前线上是本人 15:33Z 的 `40a69570`，origin/main 无他人新提交；由产品负责人本人执行推送与部署，生产 Worker `6d2870f2-fa97-4c5e-86c4-4b722e1ce9ab`（`--containers-rollout=none`），首页引用 `index-JfT-4BtI.js`。`/`、`/space`、`/api/health` 均 200，`npm run test:mobile-service` 4 项通过。PR #29 的未合并改动仍不在线上。
 
 未验证：修复未经真人线上会话证实。该集检查点里的中文助手回答仍会被带进新会话；只有历史时 2/2 为英文，若线上仍偶发中文，下一步是不再把旧的助手回答作为 Live 的启动历史。
+
+## 节目页渲染后不再套用首页标题（2026-09-20）
+
+现象：Search Console 报告"重复网页，Google 选择的规范网页与用户指定的不同"。
+
+原因：Worker 返回的 HTML 每个节目页都有自己的 title、description、canonical 和 `lang`，但 `frontend/src/i18n.ts` 的 `updateDocument()` 在所有页面加载时执行，把 title、description、og/twitter 标签和 `lang` 改写成首页文案。用无头 Chromium（en-US）渲染线上页面：`/episodes/luxun-ah-q` 与 `/episodes/jfk-rice-moon` 渲染后的 title 都是 "Aside · Interrupt a podcast, ask out loud, keep listening"，`lang` 为 `en`，只有 canonical 与 h1 是自己的。Google 按渲染后的 DOM 建索引，看到一批标题与描述相同的页面。GSC 报告里具体是哪些 URL 未核对，上述为最可能的原因。
+
+修复（`a3b7a3d`）：节目页保留 Worker 渲染的 head，客户端只继续维护 robots 与 canonical；`/`、`/zh`、`/space` 行为不变。`tests/seo.test.ts` 新增 1 项。
+
+发布与核对：`npm run check`、Cloudflare 集成 51 项通过；单元测试 439 项中 434 项通过，失败的 5 项全在 `tests/native-pcm.test.ts`，原因是本机没有 Java（`javac` 不可用），在未改动的 main 上同样失败。发布前线上是本人 09-18 16:05Z 的 `6d2870f2`，origin/main 无他人新提交。从 main（`a3b7a3d`）部署生产 Worker `559af9ff-ff69-42c8-9319-df4ca64c8d42`（`--containers-rollout=none`），首页引用 `index-ZN2nAaq_.js`。这是 PR #29 合并进 main 之后第一次从 main 部署，移动端后端改动随之上线，无新增迁移。`/`、`/space`、`/api/health` 均 200，`npm run test:mobile-service` 4 项通过；再次渲染线上页面，两个节目页的 title、`lang`、canonical 均为自己的。
+
+未验证：Google 重新抓取后报告是否消失，需在 GSC 对节目页"请求编入索引"并"验证修复"，通常要几天到两三周。未处理：`/index.html` 返回 200（canonical 指向 `/`）；`/zh/` 返回 404 而 `/episodes/<id>/` 返回 200。
