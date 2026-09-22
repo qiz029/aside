@@ -1,3 +1,4 @@
+import { cleanupAccount, requireMobileConsent } from "./account-data.js";
 import { getContainer } from "@cloudflare/containers";
 import {
   authorize,
@@ -139,6 +140,8 @@ async function route(
     if (!accountId) throw new HttpError(401, "请先登录再上传音频");
     if (request.method === "POST" && (!upload[1] || upload[2] === "complete"))
       await authorize(request, env, owner, accountId);
+    if (request.method !== "DELETE")
+      await requireMobileConsent(request, env, accountId);
     return uploadRoute(request, env, owner, store, upload[1], upload[2]);
   }
   const match = /^\/api\/episodes\/([a-zA-Z0-9-]+)(?:\/([a-z-]+))?$/.exec(path);
@@ -210,6 +213,7 @@ async function route(
   }
   if (action === "retry" && method === "POST") {
     if (!accountId) throw new HttpError(401, "请先登录");
+    await requireMobileConsent(request, env, accountId);
     await authorize(request, env, owner, accountId);
     if (row.owner_id !== owner) throw new HttpError(403, "只能重试自己的节目");
     if (!["failed", "queued", "analyzing"].includes(metadata.status))
@@ -291,6 +295,7 @@ async function route(
     throw new HttpError(404, "接口不存在");
   if (!env.OPENAI_API_KEY) throw new HttpError(503, "语音与问答服务尚未配置");
   await authorize(request, env, owner, accountId);
+  if (accountId) await requireMobileConsent(request, env, accountId);
   const provider = new InteractiveProvider(
     env.OPENAI_API_KEY,
     env.ASIDE_BACKEND_MODEL,
@@ -527,9 +532,8 @@ export default {
       const account = await accountFromRequest(request, env);
       if (bearer && !account)
         throw new HttpError(401, "登录已过期，请重新登录");
-      const mobileLogin = /^\/api\/auth\/mobile\/email\/(start|verify)$/.test(
-        path,
-      );
+      const mobileLogin =
+        /^\/api\/auth\/mobile\/(?:email|apple)\/(start|verify)$/.test(path);
       const googleCallback =
         path === "/api/auth/google/callback" && request.method === "GET";
       if (origin && origin !== env.APP_ORIGIN)
@@ -558,6 +562,12 @@ export default {
               account?.id ?? identity.id,
               account?.id ?? null,
             );
+      if (
+        path === "/api/auth/account" &&
+        request.method === "DELETE" &&
+        account
+      )
+        ctx.waitUntil(cleanupAccount(env, account.id).catch(() => {}));
       const response = new Response(result.body, result);
       response.headers.set("Cache-Control", "no-store");
       if (identity.cookie)
@@ -614,6 +624,14 @@ export default {
         "DELETE FROM budgets WHERE bucket LIKE 'upload-init:%' AND substr(bucket,13,10)<?",
       ).bind(cutoff),
     ]);
+    await env.DB.prepare("DELETE FROM apple_challenges WHERE expires<?")
+      .bind(Date.now())
+      .run();
+    const accounts = await env.DB.prepare(
+      "SELECT id FROM users WHERE deleted_at IS NOT NULL LIMIT 10",
+    ).all<{ id: string }>();
+    for (const account of accounts.results)
+      await cleanupAccount(env, account.id).catch(() => {});
     await cleanupStaleUploads(env);
     const deleted = await env.DB.prepare(
       "SELECT id FROM episodes WHERE deleted_at IS NOT NULL LIMIT 10",

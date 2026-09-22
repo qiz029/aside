@@ -55,15 +55,20 @@ export async function uploadRoute(
         size: z.number().int().min(44),
       })
       .parse(await readJson(request));
-    if (data.size > MAX_UPLOAD)
-      throw new HttpError(413, "文件不能超过 1 GiB");
+    if (data.size > MAX_UPLOAD) throw new HttpError(413, "文件不能超过 1 GiB");
     const createdAt = new Date().toISOString();
     const day = createdAt.slice(0, 10);
     const month = createdAt.slice(0, 7);
     const monthlyLimit = positiveLimit(env.MONTHLY_UPLOAD_LIMIT, 100);
     const globalLimit = positiveLimit(env.GLOBAL_DAILY_UPLOAD_LIMIT, 2000);
-    const accountStorageLimit = positiveLimit(env.ACCOUNT_STORAGE_LIMIT_BYTES, 20 * 1024 ** 3);
-    const globalStorageLimit = positiveLimit(env.GLOBAL_STORAGE_LIMIT_BYTES, 100 * 1024 ** 3);
+    const accountStorageLimit = positiveLimit(
+      env.ACCOUNT_STORAGE_LIMIT_BYTES,
+      20 * 1024 ** 3,
+    );
+    const globalStorageLimit = positiveLimit(
+      env.GLOBAL_STORAGE_LIMIT_BYTES,
+      100 * 1024 ** 3,
+    );
     // Rejected or cancelled files do not occupy the account's monthly library quota,
     // but still consume R2/Container work. Cap starts independently; the
     // site-wide allowance scales with the daily upload cap so it never binds first.
@@ -82,7 +87,8 @@ export async function uploadRoute(
       const inserted = await env.DB.prepare(
         `INSERT INTO uploads(id,owner_id,upload_id,object_key,title,size,created_at)
          SELECT ?,?,?,?,?,?,?
-         WHERE (SELECT COUNT(*) FROM uploads WHERE owner_id=? AND substr(created_at,1,7)=? AND state NOT IN ('aborted','rejected'))<?
+         WHERE EXISTS(SELECT 1 FROM users WHERE id=? AND deleted_at IS NULL)
+           AND (SELECT COUNT(*) FROM uploads WHERE owner_id=? AND substr(created_at,1,7)=? AND state NOT IN ('aborted','rejected'))<?
            AND (SELECT COUNT(*) FROM uploads WHERE substr(created_at,1,10)=? AND state NOT IN ('aborted','rejected'))<?
            AND COALESCE((SELECT SUM(size) FROM uploads WHERE owner_id=? AND state IN ('pending','complete')),0)+?<=?
            AND COALESCE((SELECT SUM(size) FROM uploads WHERE state IN ('pending','complete')),0)+?<=?
@@ -96,6 +102,7 @@ export async function uploadRoute(
           data.title,
           data.size,
           createdAt,
+          owner,
           owner,
           month,
           monthlyLimit,
@@ -111,7 +118,9 @@ export async function uploadRoute(
       if (!inserted) {
         const stored = await env.DB.prepare(
           "SELECT COALESCE(SUM(size),0) AS bytes FROM uploads WHERE owner_id=? AND state IN ('pending','complete')",
-        ).bind(owner).first<{ bytes: number }>();
+        )
+          .bind(owner)
+          .first<{ bytes: number }>();
         const own = await env.DB.prepare(
           "SELECT COUNT(*) AS count FROM uploads WHERE owner_id=? AND substr(created_at,1,7)=? AND state NOT IN ('aborted','rejected')",
         )
@@ -138,7 +147,10 @@ export async function uploadRoute(
     .bind(id, owner)
     .first<Upload>();
   if (!upload) throw new HttpError(404, "上传不存在");
-  if (request.method !== "DELETE" && Date.now() - Date.parse(upload.created_at) > 86400000)
+  if (
+    request.method !== "DELETE" &&
+    Date.now() - Date.parse(upload.created_at) > 86400000
+  )
     throw new HttpError(410, "上传已过期");
   const multipart = env.AUDIO.resumeMultipartUpload(
     upload.object_key,
@@ -199,18 +211,35 @@ export async function uploadRoute(
     };
     const claimed = await env.DB.prepare(
       "UPDATE uploads SET state='complete' WHERE id=? AND state='pending' RETURNING id",
-    ).bind(upload.id).first();
+    )
+      .bind(upload.id)
+      .first();
     if (!claimed) {
-      const latest = await env.DB.prepare("SELECT state FROM uploads WHERE id=?")
-        .bind(upload.id).first<{ state: string }>();
+      const latest = await env.DB.prepare(
+        "SELECT state FROM uploads WHERE id=?",
+      )
+        .bind(upload.id)
+        .first<{ state: string }>();
       if (latest?.state !== "complete") {
         await env.AUDIO.delete(upload.object_key).catch(() => {});
         throw new HttpError(409, "上传已取消");
       }
     }
     await env.DB.prepare(
-      "INSERT OR IGNORE INTO episodes(id,owner_id,metadata,created_at) VALUES(?,?,?,?)",
-    ).bind(upload.id, owner, JSON.stringify(episode), upload.created_at).run();
+      "INSERT OR IGNORE INTO episodes(id,owner_id,metadata,created_at) SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM users WHERE id=? AND deleted_at IS NULL)",
+    )
+      .bind(upload.id, owner, JSON.stringify(episode), upload.created_at, owner)
+      .run();
+    if (
+      !(await env.DB.prepare(
+        "SELECT id FROM users WHERE id=? AND deleted_at IS NULL",
+      )
+        .bind(owner)
+        .first())
+    ) {
+      await env.AUDIO.delete(upload.object_key);
+      throw new HttpError(401, "账号已删除");
+    }
     const row = await store.row(upload.id, owner);
     const saved = JSON.parse(row.metadata) as Episode;
     if (["queued", "analyzing"].includes(saved.status)) {
@@ -230,8 +259,11 @@ export async function uploadRoute(
   }
   if (!action && request.method === "DELETE") {
     if (upload.state !== "pending") throw new HttpError(409, "上传已结束");
-    const claimed = await env.DB.prepare("UPDATE uploads SET state='aborted' WHERE id=? AND state='pending' RETURNING id")
-      .bind(upload.id).first();
+    const claimed = await env.DB.prepare(
+      "UPDATE uploads SET state='aborted' WHERE id=? AND state='pending' RETURNING id",
+    )
+      .bind(upload.id)
+      .first();
     if (!claimed) throw new HttpError(409, "上传已结束");
     await multipart.abort().catch(() => {});
     return json({ ok: true });

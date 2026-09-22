@@ -22,6 +22,10 @@ export interface Env {
   AUTH_EMAIL_FROM?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
+  APPLE_CLIENT_IDS?: string;
+  APPLE_TEAM_ID?: string;
+  APPLE_KEY_ID?: string;
+  APPLE_PRIVATE_KEY?: string;
   OPENAI_API_KEY?: string;
   /** Enables the Jev shadow evaluation beside voice decisions; unset turns it off. */
   OPEN_ROUTER_API_KEY?: string;

@@ -1,0 +1,48 @@
+# Run after login.yaml against the local fixture. Uses a disposable EMAIL account.
+appId: com.asidefm.app.dev
+---
+- tapOn:
+    id: tab-account
+- scrollUntilVisible:
+    element:
+      id: privacy
+    direction: DOWN
+- tapOn:
+    id: privacy
+- assertVisible: Privacy and AI data processing
+- tapOn:
+    id: close-privacy
+- tapOn:
+    id: tab-upload
+- tapOn:
+    id: choose-audio
+- assertVisible:
+    id: accept-ai-consent
+- tapOn:
+    id: close-privacy
+- assertVisible:
+    id: choose-audio
+- tapOn:
+    id: tab-account
+- scrollUntilVisible:
+    element:
+      id: delete-account
+    direction: DOWN
+- tapOn:
+    id: delete-account
+- tapOn: Cancel
+- assertVisible:
+    id: delete-account
+- tapOn:
+    id: delete-account
+- tapOn: Delete permanently
+- extendedWaitUntil:
+    visible: Deletion requested
+    timeout: 15000
+- tapOn: OK
+- scrollUntilVisible:
+    element:
+      id: email
+    direction: DOWN
+- assertVisible:
+    id: email

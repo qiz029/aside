@@ -37,7 +37,9 @@ import {
 } from "react-native-safe-area-context";
 import * as DocumentPicker from "expo-document-picker";
 import Constants from "expo-constants";
-import { File } from "expo-file-system";
+import { File, Paths } from "expo-file-system";
+import { AppleSignIn } from "./AppleSignIn";
+import { PrivacyPanel, CONSENT_VERSION } from "./PrivacyPanel";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import {
   Gesture,
@@ -127,6 +129,20 @@ function Main() {
     "checking" | "ready" | "unavailable"
   >("checking");
   const [startupFailed, setStartupFailed] = useState(false);
+  const pendingAction = useRef<{
+    kind: "upload" | "text" | "handsfree" | "manual" | "library";
+    episodeId?: string;
+    question?: string;
+  } | null>(null);
+  const [privacyVisible, setPrivacyVisible] = useState(false);
+  const [consentBusy, setConsentBusy] = useState(false);
+  const consentRequest = useRef<((allowed: boolean) => void) | null>(null);
+  const consentApproved = useRef(false);
+  const [profileEditing, setProfileEditing] = useState(false);
+  const [profileAlias, setProfileAlias] = useState("");
+  const [profileDescription, setProfileDescription] = useState("");
+  const [accountBusy, setAccountBusy] = useState(false);
+
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [playerOptions, setPlayerOptions] = useState(false);
   const [composerOpen, setComposerOpen] = useState(false);
@@ -288,7 +304,13 @@ function Main() {
     }
   }
   async function clearAccount() {
+    consentApproved.current = false;
+    consentRequest.current?.(false);
+    consentRequest.current = null;
+    setPrivacyVisible(false);
+    pendingAction.current = null;
     uploadAbort.current?.abort();
+    await api.cancelUpload();
     clearUploadFile();
     generation.current++;
     session.stop();
@@ -296,6 +318,11 @@ function Main() {
     current.current = null;
     setEpisode(null);
     setUser(null);
+    setProfileEditing(false);
+    setProfileAlias("");
+    setProfileDescription("");
+    setLastId(null);
+    await AsyncStorage.removeItem("aside.lastEpisode");
     setPrivateEpisodes([]);
     sync.reset();
     setCollection("public");
@@ -327,6 +354,11 @@ function Main() {
         setCollection("private");
         try {
           await refreshPrivate();
+          const pending = await api.pendingUpload();
+          if (pending) {
+            lastUpload.current = pending.file;
+            void uploadFile(pending.file).catch(failure);
+          }
         } catch (cause) {
           failed = { status: "rejected", reason: cause };
         }
@@ -436,7 +468,7 @@ function Main() {
       const before = appState.current;
       appState.current = state;
       if (state !== "active") {
-        uploadAbort.current?.abort();
+        // iOS URLSession owns the transfer while JavaScript is suspended.
         session.background();
         void save().catch(failure);
       } else if (before !== "active") {
@@ -498,68 +530,187 @@ function Main() {
   useEffect(() => {
     scrollToCurrentPassage();
   }, [passageIndex, pane, followTranscript]);
-  async function login(email: string, code: string) {
-    setError("");
-    const next = await api.verify(email, code);
+  function needLogin(
+    kind: "upload" | "text" | "handsfree" | "manual" | "library",
+  ) {
+    pendingAction.current = {
+      kind,
+      episodeId: current.current?.id,
+      question: session.getSnapshot().question,
+    };
+    setTab("account");
+  }
+  async function ensureConsent() {
+    if (consentApproved.current) return true;
+    const token = api.token;
+    const status = await api.consent();
+    if (!token || token !== api.token) return false;
+    if (status.version !== CONSENT_VERSION)
+      throw Error(
+        tr(
+          "请更新 App 后继续使用 AI 功能",
+          "Update the app to review the latest AI notice",
+        ),
+      );
+    if (status.accepted) {
+      consentApproved.current = true;
+      return true;
+    }
+    if (consentRequest.current) return false;
+    setPrivacyVisible(true);
+    return new Promise<boolean>((resolve) => {
+      consentRequest.current = resolve;
+    });
+  }
+  function closePrivacy(allowed = false) {
+    setPrivacyVisible(false);
+    consentRequest.current?.(allowed);
+    consentRequest.current = null;
+  }
+  async function acceptPrivacy() {
+    setConsentBusy(true);
+    try {
+      await api.acceptConsent(CONSENT_VERSION);
+      consentApproved.current = true;
+      closePrivacy(true);
+    } catch (cause) {
+      closePrivacy(false);
+      failure(cause);
+    } finally {
+      setConsentBusy(false);
+    }
+  }
+  async function submitText() {
+    if (!api.token) {
+      needLogin("text");
+      return;
+    }
+    const id = current.current?.id;
+    if (!(await ensureConsent()) || id !== current.current?.id) return;
+    if (
+      session.submitQuestion(
+        session.getSnapshot().question,
+        session.getSnapshot().liveStatus === "on",
+      )
+    ) {
+      questionInput.current?.clear();
+      followConversation.current = true;
+      Keyboard.dismiss();
+      setPane("conversation");
+    }
+  }
+  async function startHandsfree() {
+    const id = current.current?.id;
+    if (!(await ensureConsent()) || id !== current.current?.id) return;
+    if (!(await microphonePermission())) {
+      setError(
+        tr(
+          "允许麦克风后，点「开启随时聊」",
+          "After allowing microphone access, tap Talk hands-free",
+        ),
+      );
+      return;
+    }
+    await session.enableContinuous();
+  }
+  async function signedIn(next: User) {
+    const intent = pendingAction.current;
+    pendingAction.current = null;
+    const local = session.checkpoint();
     setUser(next);
+    setAccountState("ready");
+    consentApproved.current = false;
     setCollection("private");
-    setTab("library");
+    setTab(intent?.kind === "upload" ? "upload" : "library");
     try {
       await refreshPrivate();
       if (current.current) {
         const cp = await sync.load(current.current.id);
-        session.load(current.current, cp);
+        session.load(
+          current.current,
+          intent?.episodeId === current.current.id ? local : cp,
+        );
         session.metadataLoaded();
+        if (intent?.question) session.setQuestion(intent.question);
+      }
+      if (intent?.kind === "upload") await selectUpload();
+      else if (intent?.episodeId === current.current?.id) {
+        if (intent?.kind === "text") {
+          setComposerOpen(true);
+          await submitText();
+        }
+        if (intent?.kind === "handsfree") await startHandsfree();
+        if (intent?.kind === "manual")
+          setError(
+            tr(
+              "已登录，再次按住即可说话",
+              "Signed in. Hold to talk when ready.",
+            ),
+          );
       }
     } catch (cause) {
       failure(cause);
     }
   }
+  async function login(email: string, code: string) {
+    setError("");
+    await signedIn(await api.verify(email, code));
+  }
   async function selectUpload() {
-    if (!user) {
-      setTab("account");
+    if (!api.token) {
+      needLogin("upload");
       return;
     }
+    if (!(await ensureConsent())) return;
     const result = await DocumentPicker.getDocumentAsync({
       type: "audio/*",
       copyToCacheDirectory: true,
     });
     if (result.canceled) return;
     const asset = result.assets[0];
+    const saved = new File(Paths.document, `aside-upload-${Date.now()}`);
+    new File(asset.uri).copy(saved);
     const file: AudioFile = {
-      uri: asset.uri,
+      uri: saved.uri,
       name: asset.name,
       mimeType: asset.mimeType ?? "application/octet-stream",
       size: asset.size ?? 0,
     };
-    if (!file.size)
+    if (!file.size) {
+      saved.delete();
       throw Error(tr("无法读取文件大小", "Cannot read file size"));
+    }
+    await api.cancelUpload();
     clearUploadFile();
     lastUpload.current = file;
     await uploadFile(file);
   }
   async function uploadFile(file: AudioFile) {
+    if (uploadAbort.current || !(await ensureConsent())) return;
+    if (uploadAbort.current) return;
     const revision = generation.current;
     const abort = new AbortController();
     uploadAbort.current = abort;
     setUpload({ name: file.name, progress: 0, phase: "uploading" });
     try {
       const next = await api.upload(file, abort.signal, (progress, phase) => {
-        if (phase === "processing") uploadAbort.current = null;
+        // Keep ownership until completion; cancellation also stops native tasks.
         setUpload({ name: file.name, progress, phase });
       });
-      if (revision !== generation.current) return;
       clearUploadFile();
       await refreshPrivate();
+      if (revision !== generation.current) return;
       await load(next.id);
     } catch (error) {
-      if (abort.signal.aborted)
+      if (abort.signal.aborted) {
+        clearUploadFile();
         throw new Error(
           tr(
-            "上传已取消。点击重试，并在上传期间保持 App 在前台。",
-            "Upload cancelled. Tap Retry upload and keep the app open.",
+            "上传已取消。可以重新选择音频。",
+            "Upload cancelled. You can choose an audio file again.",
           ),
         );
+      }
       throw error;
     } finally {
       uploadAbort.current = null;
@@ -571,22 +722,11 @@ function Main() {
       session.setListeningMode("manual");
       return;
     }
-    if (!user) {
-      setTab("account");
+    if (!api.token) {
+      needLogin("handsfree");
       return;
     }
-    void (async () => {
-      if (!(await microphonePermission())) {
-        setError(
-          tr(
-            "允许麦克风后，点「开启随时聊」",
-            "After allowing microphone access, tap Talk hands-free",
-          ),
-        );
-        return;
-      }
-      await session.enableContinuous();
-    })().catch(failure);
+    void startHandsfree().catch(failure);
   };
   const button = (
     label: string,
@@ -1042,17 +1182,143 @@ function Main() {
                     {user.description}
                   </Text>
                 ) : null}
+                <AppleSignIn
+                  api={api}
+                  locale={locale}
+                  linking
+                  onSignedIn={async (next) => {
+                    setUser(next);
+                  }}
+                />
                 {button(
-                  tr("编辑网页版资料", "Edit profile on web"),
-                  () => run(() => Linking.openURL(api.base + "/space")),
+                  tr("编辑资料", "Edit profile"),
+                  () => {
+                    setProfileAlias(user.alias);
+                    setProfileDescription(user.description);
+                    setProfileEditing(true);
+                  },
                   "edit-profile",
                   true,
+                  accountBusy,
+                )}
+                {profileEditing && (
+                  <View style={{ gap: 12 }}>
+                    <TextInput
+                      accessibilityLabel={tr("昵称", "Display name")}
+                      value={profileAlias}
+                      onChangeText={setProfileAlias}
+                      maxLength={40}
+                      style={[styles.input, textStyle]}
+                    />
+                    <TextInput
+                      accessibilityLabel={tr("简介", "Bio")}
+                      value={profileDescription}
+                      onChangeText={setProfileDescription}
+                      maxLength={500}
+                      multiline
+                      style={[styles.input, textStyle]}
+                    />
+                    {button(
+                      tr("保存资料", "Save profile"),
+                      () =>
+                        run(async () => {
+                          setAccountBusy(true);
+                          try {
+                            setUser(
+                              (
+                                await api.updateProfile(
+                                  profileAlias,
+                                  profileDescription,
+                                )
+                              ).user,
+                            );
+                            setProfileEditing(false);
+                          } finally {
+                            setAccountBusy(false);
+                          }
+                        }),
+                      "save-profile",
+                      false,
+                      accountBusy || !profileAlias.trim(),
+                    )}
+                  </View>
+                )}
+                {button(
+                  tr("撤回 AI 授权", "Withdraw AI consent"),
+                  () =>
+                    Alert.alert(
+                      tr("撤回 AI 授权？", "Withdraw AI consent?"),
+                      tr(
+                        "会停止当前对话和上传，之后仍可收听。已发送的数据无法收回。",
+                        "Stops conversation and upload. Listening remains available. Data already sent cannot be recalled.",
+                      ),
+                      [
+                        { text: tr("取消", "Cancel"), style: "cancel" },
+                        {
+                          text: tr("撤回", "Withdraw"),
+                          onPress: () =>
+                            run(async () => {
+                              session.stop();
+                              uploadAbort.current?.abort();
+                              await api.cancelUpload();
+                              consentApproved.current = false;
+                              await api.revokeConsent();
+                            }),
+                        },
+                      ],
+                    ),
+                  "withdraw-consent",
+                  true,
+                  accountBusy,
+                )}
+                {button(
+                  tr("删除账号", "Delete account"),
+                  () =>
+                    Alert.alert(
+                      tr("永久删除账号？", "Permanently delete account?"),
+                      tr(
+                        "你的音频、转录、收听进度和问答记录都会删除。登录立即失效，服务器随后清理数据；失败时会自动重试。此操作无法撤销。",
+                        "Your audio, transcripts, progress and conversations will be deleted. Sign-in is revoked immediately; server cleanup follows and retries failures. This cannot be undone.",
+                      ),
+                      [
+                        { text: tr("取消", "Cancel"), style: "cancel" },
+                        {
+                          text: tr("永久删除", "Delete permanently"),
+                          style: "destructive",
+                          onPress: () =>
+                            run(async () => {
+                              setAccountBusy(true);
+                              try {
+                                session.stop();
+                                uploadAbort.current?.abort();
+                                await api.cancelUpload();
+                                await api.deleteAccount();
+                                await clearAccount();
+                                Alert.alert(
+                                  tr("已提交删除", "Deletion requested"),
+                                  tr(
+                                    "账号已停用，正在清理数据。",
+                                    "Your account is disabled and data cleanup is underway.",
+                                  ),
+                                );
+                              } finally {
+                                setAccountBusy(false);
+                              }
+                            }),
+                        },
+                      ],
+                    ),
+                  "delete-account",
+                  true,
+                  accountBusy,
                 )}
                 {button(
                   tr("退出登录", "Sign out"),
                   () =>
                     run(async () => {
                       await save().catch(() => {});
+                      uploadAbort.current?.abort();
+                      await api.cancelUpload();
                       try {
                         await api.logout();
                       } finally {
@@ -1084,12 +1350,27 @@ function Main() {
                 )}
               </View>
             ) : (
-              <LoginForm
-                locale={locale}
-                colors={colors}
-                sendCode={(email) => api.startLogin(email)}
-                signIn={login}
-              />
+              <>
+                <AppleSignIn api={api} onSignedIn={signedIn} locale={locale} />
+                <Text style={{ color: colors.muted }}>
+                  {tr(
+                    "已有账号？先用原邮箱登录，再绑定 Apple，保留已有内容。",
+                    "Already have an account? Sign in with your original email, then link Apple to keep your library.",
+                  )}
+                </Text>
+                <LoginForm
+                  locale={locale}
+                  colors={colors}
+                  sendCode={(email) => api.startLogin(email)}
+                  signIn={login}
+                />
+              </>
+            )}
+            {button(
+              tr("隐私与 AI 数据处理", "Privacy and AI data processing"),
+              () => setPrivacyVisible(true),
+              "privacy",
+              true,
             )}
           </ScrollView>
         ) : tab === "upload" ? (
@@ -1114,8 +1395,12 @@ function Main() {
             </Text>
             <Text style={{ color: colors.muted }}>
               {tr(
-                "单篇最长 5 小时、最大 1 GiB。上传期间请留在 App。",
-                "Up to 5 hours and 1 GiB. Keep the app open while uploading.",
+                Platform.OS === "ios"
+                  ? "单篇最长 5 小时、最大 1 GiB。支持后台上传；中断后可续传。"
+                  : "单篇最长 5 小时、最大 1 GiB。中断后可从已保存的进度续传。",
+                Platform.OS === "ios"
+                  ? "Up to 5 hours and 1 GiB. Uploads continue in the background and can be resumed."
+                  : "Up to 5 hours and 1 GiB. Interrupted uploads can resume saved progress.",
               )}
             </Text>
             {upload ? (
@@ -1252,7 +1537,11 @@ function Main() {
                 {episode.status === "failed"
                   ? button(
                       tr("重试分析", "Retry analysis"),
-                      () => run(() => api.retry(episode.id)),
+                      () =>
+                        run(async () => {
+                          if (await ensureConsent())
+                            await api.retry(episode.id);
+                        }),
                       "retry-analysis",
                     )
                   : null}
@@ -1838,9 +2127,10 @@ function Main() {
                                 setError("");
                                 void (async () => {
                                   if (!user) {
-                                    setTab("account");
+                                    needLogin("manual");
                                     return;
                                   }
+                                  if (!(await ensureConsent())) return;
                                   if (!(await microphonePermission())) {
                                     setError(
                                       tr(
@@ -1954,24 +2244,7 @@ function Main() {
                       />
                       {button(
                         tr("发送", "Send"),
-                        () => {
-                          if (!user) {
-                            setTab("account");
-                            return;
-                          }
-                          // Read the current draft; a keyboard event can precede React's render.
-                          if (
-                            session.submitQuestion(
-                              session.getSnapshot().question,
-                              session.getSnapshot().liveStatus === "on",
-                            )
-                          ) {
-                            questionInput.current?.clear();
-                            followConversation.current = true;
-                            Keyboard.dismiss();
-                            setPane("conversation");
-                          }
-                        },
+                        () => run(submitText),
                         "send-question",
                       )}
                       {button(
@@ -2038,7 +2311,7 @@ function Main() {
                       tr("我的音频", "My audio"),
                       () => {
                         if (!user) {
-                          setTab("account");
+                          needLogin("library");
                           return;
                         }
                         setCollection("private");
@@ -2536,6 +2809,17 @@ function Main() {
           </View>
         </InputAccessoryView>
       ) : null}
+      <PrivacyPanel
+        visible={privacyVisible}
+        consent={!!consentRequest.current}
+        locale={locale}
+        dark={dark}
+        busy={consentBusy}
+        close={() => closePrivacy()}
+        accept={() => {
+          void acceptPrivacy();
+        }}
+      />
     </SafeAreaView>
   );
 }

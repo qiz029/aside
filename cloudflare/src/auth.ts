@@ -2,6 +2,13 @@ import { z } from "zod";
 import type { Env } from "./env.js";
 import { HttpError, json, readBody, readJson } from "./http.js";
 import { CloudStore } from "./store.js";
+import {
+  appleEnabled,
+  appleClient,
+  validateApple,
+  protectAppleToken,
+} from "./apple.js";
+import { AI_CONSENT_VERSION } from "./account-data.js";
 
 const authCookie = "aside_auth";
 const stateCookie = "aside_google_state";
@@ -23,6 +30,7 @@ interface UserRow {
   description: string;
   avatar_key: string | null;
   google_picture: string | null;
+  deleted_at: number | null;
 }
 
 function cookieValue(request: Request, name: string) {
@@ -69,7 +77,7 @@ function publicUser(row: UserRow) {
   };
 }
 async function userById(env: Env, id: string) {
-  return env.DB.prepare("SELECT * FROM users WHERE id=?")
+  return env.DB.prepare("SELECT * FROM users WHERE id=? AND deleted_at IS NULL")
     .bind(id)
     .first<UserRow>();
 }
@@ -80,7 +88,7 @@ export async function accountFromRequest(request: Request, env: Env) {
     : cookieValue(request, authCookie);
   if (!token || !/^[a-f0-9]{64}$/.test(token)) return null;
   const row = await env.DB.prepare(
-    "SELECT u.* FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires>? AND s.kind=?",
+    "SELECT u.* FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires>? AND s.kind=? AND u.deleted_at IS NULL",
   )
     .bind(await hash(token), Date.now(), bearer ? "mobile" : "web")
     .first<UserRow>();
@@ -166,7 +174,11 @@ async function findOrCreateUser(
   const row = await env.DB.prepare("SELECT * FROM users WHERE email=?")
     .bind(email)
     .first<UserRow>();
-  if (!row) throw new HttpError(503, "无法创建账号");
+  if (!row || row.deleted_at !== null)
+    throw new HttpError(
+      409,
+      "账号正在删除，请稍后重试 / Account deletion is in progress",
+    );
   if (google) {
     await env.DB.prepare(
       "INSERT OR IGNORE INTO auth_identities(provider,subject,user_id) VALUES('google',?,?)",
@@ -443,6 +455,113 @@ async function googleCallback(request: Request, env: Env) {
   );
   return response;
 }
+async function appleStart(request: Request, env: Env, user: UserRow | null) {
+  const { clientId } = z
+    .object({ clientId: z.string().max(200) })
+    .parse(await readJson(request));
+  appleClient(env, clientId);
+  const limits = new CloudStore(env.DB, env.AUDIO);
+  await limits.reserve(
+    `auth:${Math.floor(Date.now() / 3600000)}:apple:${await keyedHash(env.SESSION_SECRET, request.headers.get("cf-connecting-ip") ?? "local")}`,
+    100,
+  );
+  const nonce = randomHex(32);
+  await env.DB.prepare(
+    "INSERT INTO apple_challenges(nonce,client_id,user_id,expires) VALUES(?,?,?,?)",
+  )
+    .bind(nonce, clientId, user?.id ?? null, Date.now() + 300000)
+    .run();
+  return json({ nonce });
+}
+async function appleVerify(
+  request: Request,
+  env: Env,
+  current: UserRow | null,
+) {
+  const data = z
+    .object({
+      nonce: z.string().regex(/^[a-f0-9]{64}$/),
+      code: z.string().min(1).max(4096),
+      name: z.string().max(100).optional(),
+    })
+    .parse(await readJson(request));
+  const challenge = await env.DB.prepare(
+    "DELETE FROM apple_challenges WHERE nonce=? AND expires>? RETURNING client_id,user_id",
+  )
+    .bind(data.nonce, Date.now())
+    .first<{ client_id: string; user_id: string | null }>();
+  if (!challenge || challenge.user_id !== (current?.id ?? null))
+    throw new HttpError(400, "Apple 登录已过期，请重试");
+  const identity = await validateApple(
+    env,
+    challenge.client_id,
+    data.code,
+    data.nonce,
+  );
+  const existing = await env.DB.prepare(
+    "SELECT user_id FROM auth_identities WHERE provider='apple' AND subject=?",
+  )
+    .bind(identity.subject)
+    .first<{ user_id: string }>();
+  if (existing && current && existing.user_id !== current.id)
+    throw new HttpError(
+      409,
+      "此 Apple 账号已绑定其他账号 / Apple account already linked",
+    );
+  let user = existing
+    ? requireUser(await userById(env, existing.user_id))
+    : current;
+  if (!user) {
+    const collision = await env.DB.prepare("SELECT id FROM users WHERE email=?")
+      .bind(identity.email)
+      .first();
+    // Never merge by an email claim. Prove ownership through the existing login first.
+    if (collision)
+      throw new HttpError(
+        409,
+        "请先用邮箱登录，再在账号设置中绑定 Apple / Sign in by email first, then link Apple in Account",
+      );
+    const id = crypto.randomUUID();
+    await env.DB.prepare(
+      "INSERT INTO users(id,email,alias,created_at,updated_at) VALUES(?,?,?,?,?)",
+    )
+      .bind(
+        id,
+        identity.email,
+        data.name?.trim().slice(0, 40) || "Listener",
+        Date.now(),
+        Date.now(),
+      )
+      .run();
+    user = requireUser(await userById(env, id));
+  }
+  await env.DB.prepare(
+    "INSERT INTO auth_identities(provider,subject,user_id,refresh_token,client_id) VALUES('apple',?,?,?,?) ON CONFLICT(provider,subject) DO UPDATE SET refresh_token=excluded.refresh_token,client_id=excluded.client_id WHERE auth_identities.user_id=excluded.user_id",
+  )
+    .bind(
+      identity.subject,
+      user.id,
+      await protectAppleToken(env, identity.refresh),
+      challenge.client_id,
+    )
+    .run();
+  const linked = await env.DB.prepare(
+    "SELECT user_id FROM auth_identities WHERE provider='apple' AND subject=?",
+  )
+    .bind(identity.subject)
+    .first<{ user_id: string }>();
+  if (linked?.user_id !== user.id)
+    throw new HttpError(409, "Apple account already linked");
+  return json({
+    user: publicUser(user),
+    ...(current
+      ? {}
+      : {
+          token: await issueSession(request, env, user.id, true),
+          expiresAt: Date.now() + sessionLifetime,
+        }),
+  });
+}
 async function uploadAvatar(request: Request, env: Env, user: UserRow) {
   const type = request.headers.get("content-type")?.split(";")[0];
   if (!type || !["image/png", "image/jpeg", "image/webp"].includes(type))
@@ -480,6 +599,7 @@ export async function authRoute(
       user: user ? publicUser(user) : null,
       emailEnabled: !!env.EMAIL && !!env.AUTH_EMAIL_FROM,
       googleEnabled: !!env.GOOGLE_CLIENT_ID && !!env.GOOGLE_CLIENT_SECRET,
+      appleEnabled: appleEnabled(env),
     });
   if (
     ["/api/auth/email/start", "/api/auth/mobile/email/start"].includes(path) &&
@@ -493,6 +613,71 @@ export async function authRoute(
     method === "POST"
   )
     return verifyCode(request, env, visitor);
+  if (path === "/api/auth/mobile/apple/start" && method === "POST")
+    return appleStart(request, env, user);
+  if (path === "/api/auth/mobile/apple/verify" && method === "POST")
+    return appleVerify(request, env, user);
+  if (path === "/api/auth/consent" && method === "GET") {
+    const current = requireUser(user);
+    const consent = await env.DB.prepare(
+      "SELECT version FROM account_consents WHERE user_id=?",
+    )
+      .bind(current.id)
+      .first<{ version: string }>();
+    return json({
+      accepted: consent?.version === AI_CONSENT_VERSION,
+      version: AI_CONSENT_VERSION,
+    });
+  }
+  if (path === "/api/auth/consent" && method === "POST") {
+    const current = requireUser(user);
+    const data = z
+      .object({ version: z.literal(AI_CONSENT_VERSION) })
+      .parse(await readJson(request));
+    await env.DB.prepare(
+      "INSERT INTO account_consents(user_id,version,accepted_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET version=excluded.version,accepted_at=excluded.accepted_at",
+    )
+      .bind(current.id, data.version, Date.now())
+      .run();
+    return json({ ok: true });
+  }
+  if (path === "/api/auth/consent" && method === "DELETE") {
+    const current = requireUser(user);
+    await env.DB.prepare("DELETE FROM account_consents WHERE user_id=?")
+      .bind(current.id)
+      .run();
+    const sessions = await env.DB.prepare(
+      "SELECT session_id FROM voice_usage WHERE owner_id=? AND finalized=0",
+    )
+      .bind(current.id)
+      .all<{ session_id: string }>();
+    for (const session of sessions.results)
+      await env.LIVE.get(env.LIVE.idFromName(current.id)).close(
+        session.session_id,
+      );
+    return json({ ok: true });
+  }
+  if (path === "/api/auth/account" && method === "DELETE") {
+    const current = requireUser(user);
+    z.object({ confirmation: z.literal("DELETE") }).parse(
+      await readJson(request),
+    );
+    await env.DB.batch([
+      env.DB.prepare("UPDATE users SET deleted_at=? WHERE id=?").bind(
+        Date.now(),
+        current.id,
+      ),
+      env.DB.prepare("DELETE FROM auth_sessions WHERE user_id=?").bind(
+        current.id,
+      ),
+      env.DB.prepare(
+        "UPDATE episodes SET deleted_at=COALESCE(deleted_at,?) WHERE owner_id=?",
+      ).bind(Date.now(), current.id),
+    ]);
+    const response = json({ ok: true, deletionPending: true }, 202);
+    response.headers.append("Set-Cookie", cookie(request, authCookie, "", 0));
+    return response;
+  }
   if (path === "/api/auth/google" && method === "GET")
     return googleStart(request, env, visitor, user);
   if (path === "/api/auth/google/callback" && method === "GET")

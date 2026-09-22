@@ -87,10 +87,20 @@ Native CI builds are a separate manually dispatched workflow. Its APK uses an ep
 
 To make cancellation observable, run the fixture with `PORT=4313`, then `node mobile/tests/upload-proxy.mjs` on port 4311. Point installed validation binaries at 4311 (and reverse that port on Android). Create the switch file printed by the proxy to delay each upload part for 20 seconds. The proxy consumes request bodies, preserves bearer headers and strips already-decoded compression headers; it contains no production behavior.
 
-Copy `Aside-upload.wav` into Android Downloads / iOS app Documents. Run `upload-background-android.yaml`, or open iOS Files to the app's Documents folder and run `upload-background-ios.yaml` on an iPhone 16 Pro. Verify the localized cancellation message, retry action and server-side `DELETE /uploads/:id` after pressing Home. Remove the switch file and run `upload-retry.yaml`; the selected local file should upload, finish real media analysis and open its transcript. Do not run simultaneous UI flows on one device.
+Copy `Aside-upload.wav` into Android Downloads / iOS app Documents. Run `upload-background-android.yaml`, or open iOS Files to the app's Documents folder and run `upload-background-ios.yaml` on an iPhone 16 Pro. Accept AI consent before choosing the file. Pressing Home must not cancel the upload. On iOS, confirm subsequent parts and completion arrive while backgrounded. For a simulated network failure, verify Retry reuses the same upload ID and skips acknowledged parts; remove the switch file and run `upload-retry.yaml`. The selected file should finish real media analysis and open its transcript. Do not run simultaneous UI flows on one device.
 
 `permission-denied.yaml` explicitly sets `launchApp.permissions.all: deny`: Maestro otherwise grants permissions at launch. `cancel-capture.yaml` and `background-question.yaml` verify cancellation, and reopening must leave the episode paused. For the 30-second cap, retain native recorder start/stop timestamps and read the checkpoint before/after; a previously rendered answer is insufficient evidence of a newly completed turn.
 
 ## Live input timeline regression
 
 GPT-Live requires incoming media (silence is sufficient) to advance text-driven speech. The RTC fixture waits for an incoming frame before producing an answer; recvonly transport cannot pass voice acceptance. Run `python mobile/tests/test_rtc.py` in the fixture Python environment to check both the failing recvonly case and successful synthetic-silence case without paid API calls. Both native adapters now supply zero PCM in manual mode and real microphone PCM in continuous mode. Native C and Java queue tests compare exact sample traces for prefix preservation, ignored replies, quiet gaps and overflow. Simulator transport evidence does not establish physical microphone quality, echo cancellation or Bluetooth behavior.
+
+Account/privacy update: native AI actions now require explicit consent. Existing
+voice/upload flows must first complete the consent screen using
+`accept-ai-consent`; do not bypass consent in the fixture backend.
+`account-privacy.yaml` checks readable policy, declining consent without opening
+Files, canceling deletion, and deleting a disposable test account.
+The iOS background upload flow now expects continued transfer, not cancellation.
+Retain server evidence of part/completion requests while the app is backgrounded;
+the screenshot alone does not establish background execution. Android retains
+resumable progress but does not claim system background execution.

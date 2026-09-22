@@ -41,6 +41,7 @@ const config: ExpoConfig = {
   newArchEnabled: true,
   ios: {
     supportsTablet: true,
+    usesAppleSignIn: process.env.ASIDE_APPLE_SIGN_IN === "1",
     bundleIdentifier: local ? "com.asidefm.app.dev" : "com.asidefm.app",
     buildNumber: process.env.BUILD_NUMBER ?? "1",
     infoPlist: {
@@ -48,6 +49,18 @@ const config: ExpoConfig = {
       UIFileSharingEnabled: true,
       LSSupportsOpeningDocumentsInPlace: true,
       UIBackgroundModes: ["audio"],
+      UIApplicationSceneManifest: {
+        UIApplicationSupportsMultipleScenes: false,
+        UISceneConfigurations: {
+          UIWindowSceneSessionRoleApplication: [
+            {
+              UISceneConfigurationName: "Default Configuration",
+              UISceneDelegateClassName:
+                "$(PRODUCT_MODULE_NAME).AsideSceneDelegate",
+            },
+          ],
+        },
+      },
       NSMicrophoneUsageDescription:
         "Listen for your questions while conversation mode is on, or record a question while you hold the talk button.",
     },
@@ -67,6 +80,9 @@ const config: ExpoConfig = {
       { enableBackgroundPlayback: true, enableBackgroundRecording: false },
     ],
     "expo-secure-store",
+    ...(process.env.ASIDE_APPLE_SIGN_IN === "1"
+      ? ["expo-apple-authentication"]
+      : []),
     "expo-localization",
     "./plugins/with-aside.cjs",
     ["@config-plugins/react-native-webrtc", { cameraPermission: false }],
@@ -74,6 +90,7 @@ const config: ExpoConfig = {
   extra: {
     apiUrl,
     testApi,
+    appleSignInEnabled: process.env.ASIDE_APPLE_SIGN_IN === "1",
     eas: {
       projectId:
         process.env.EAS_PROJECT_ID ?? "91adc426-36cf-4264-a618-63e33b112cda",

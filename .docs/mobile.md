@@ -49,7 +49,7 @@ The media image includes runtime npm dependencies and the FFmpeg/ffprobe shared 
 
 Checkpoint GET returns `version`; PUT sends that version. A stale write returns 409. Both clients serialize writes and let users choose local or remote state on conflict. Old web bundles must be refreshed after this release: unversioned writes only succeed against version 0. Future rollback must preserve the compare-and-swap contract rather than restoring unconditional writes.
 
-Uploads stream file ranges into the existing R2 multipart endpoints. They are foreground-only; backgrounding cancels an uncompleted upload. After completion is submitted, analysis continues on the server. Shared upload limits remain 1 GiB / 5 hours and per-account quotas.
+Uploads use the existing R2 multipart endpoints and retain acknowledged parts for retry. iOS transfers run through a background URLSession; Android retains its resumable JS transfer. After completion is submitted, analysis continues on the server. Shared upload limits remain 1 GiB / 5 hours and per-account quotas. See the account and upload update below for lifecycle details.
 
 ## Audio lifecycle
 
@@ -81,3 +81,89 @@ With voice already connected, typed questions also speak their answers through t
 - Run Maestro flows in `mobile/tests` on each simulator and save reports outside Git. These exercise production app screens, native playback/recording, real Worker routes and a synthetic model peer; they do not prove real-model answer quality or production speech latency.
 
 Never distribute a test-API binary as the default install. Rebuild without `ASIDE_TEST_API` and without the localhost API URL. Physical Bluetooth, calls, sustained locked-screen battery behavior, Personal Team installation, Ad Hoc and TestFlight signing are separate device/distribution acceptance checks.
+
+## iOS account and upload improvements (2026-09-21)
+
+Apply `0011_mobile_accounts.sql` before deploying this backend. The mobile build
+uses `/api/auth/consent` before uploading or sending questions. Listening to
+prepared audio remains available without consent. The in-app notice and public
+`/privacy.html` are generated from `mobile/src/privacy-policy.ts`; regenerate
+with `node --import tsx scripts/generate-privacy.ts`. Configure a verified privacy
+contact address before store submission; the current notice links the existing
+public project support page and asks users not to post private data there.
+
+Account deletion requires the explicit DELETE confirmation, immediately disables
+all sessions and hides owned content. `cleanupAccount` removes original files,
+analysis artifacts, avatars, conversations, usage rows, identities and user data;
+Apple refresh tokens are revoked first. The existing five-minute scheduled job
+retries failed cleanup. Monitor users with a non-null `deleted_at`; a prolonged
+provider failure must not be treated as completed deletion. Apple refresh tokens
+are encrypted under a key derived from `SESSION_SECRET`; retain this secret until
+all such tokens are migrated or revoked when rotating it.
+
+### Enabling Apple sign-in
+
+Apple sign-in is intentionally disabled by default, including Personal Team
+builds. No Apple credentials are included in this repository. Until configured,
+the app keeps email sign-in and hides the Apple button.
+
+1. In a paid Apple Developer team, enable Sign in with Apple for each intended
+   bundle identifier (`com.asidefm.app` and optionally `com.asidefm.app.dev`).
+2. Create a Sign in with Apple key. Configure Worker secrets `APPLE_TEAM_ID`,
+   `APPLE_KEY_ID`, and `APPLE_PRIVATE_KEY` (the complete PKCS#8 `.p8` content).
+   Configure `APPLE_CLIENT_IDS` as a comma-separated allowlist of those bundle IDs.
+   Use `wrangler secret put --config wrangler.production.jsonc` with stdin or the
+   interactive prompt; never put private keys in shell arguments or source files.
+3. Set `ASIDE_APPLE_SIGN_IN=1` for the EAS/local build, regenerate the native project
+   and provisioning profile, install pods, and build a new binary. This flag adds
+   the native capability and enables the button only if the backend is configured.
+4. On a real device, test first sign-in, returning sign-in, cancellation, hidden
+   email, linking to an email account, signing out/in, and deleting the account
+   with authorization revocation. Server tests use generated synthetic Apple keys
+   and are not evidence of a real Apple login.
+
+An existing email account is never silently merged using an Apple email claim.
+Existing listeners sign in with their original email and use the Apple button
+in Account to link the identity. The Apple subject is the stable identity;
+hidden relay email does not change the linked library. Logging in after trying
+to upload or ask restores that intended action and the current question draft.
+Manual recording still requires a new press after sign-in.
+
+### Background upload behavior
+
+On iOS, `AsideUploadManager` uses a background URLSession with file-backed
+requests. Native delegates advance 8 MiB parts and submit completion without
+relying on JavaScript running. A protected, backup-excluded Application Support
+manifest records each acknowledged part; its bearer token is in Keychain with
+AfterFirstUnlockThisDeviceOnly access. Relaunch reattaches to the same session.
+Failed transfers retain their journal and can be retried; the 24-hour server
+upload expiry still applies. iOS controls scheduling, and user force-quit can
+stop system transfers until the app is opened again.
+
+Android keeps its JS transfer but persists acknowledgements and the selected
+file, so returning/retrying can resume parts instead of starting a new upload.
+This does not claim Android background execution. Cancel and sign-out clear
+local pending files and attempt to abort the server upload. The server also
+expires abandoned pending uploads. Successful upload clears local transfer data.
+
+Acceptance: run the account/security tests, resume tests, and an iOS Release
+build. On a device, start a multi-part upload, press Home, lock the screen, and
+verify the server receives subsequent parts and completion before reopening.
+Repeat with a network interruption and process restart; check that the upload ID
+and acknowledged parts are reused. Verify cancellation stops further requests.
+A simulator/build pass alone does not establish physical-device scheduling.
+
+### Xcode 27 scene lifecycle
+
+`AsideSceneDelegate.swift` owns the single UIKit window and starts Expo's existing
+React Native factory from `scene(_:willConnectTo:options:)`. The config plugin
+moves window creation out of SDK 54's AppDelegate template and adds the scene
+manifest. Cold/warm URL and user-activity events are forwarded to the existing
+Expo/React Native linking handlers. Background URLSession events still go through
+AppDelegate, including launches that do not create a UI scene.
+
+This fixes the observed `UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption`
+startup trap when building with Xcode 27. See [Apple's scene migration guidance](https://developer.apple.com/documentation/uikit/transitioning-to-the-uikit-scene-based-life-cycle).
+When using the current Xcode locally, the legacy AsyncStorage resource pod also
+needs `IPHONEOS_DEPLOYMENT_TARGET=15.1` passed to xcodebuild (some pod targets still
+default to 13.4, below this SDK's supported range).

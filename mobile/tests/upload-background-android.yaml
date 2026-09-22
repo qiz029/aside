@@ -19,11 +19,5 @@ appId: com.asidefm.app.dev
 - launchApp:
     stopApp: false
 - waitForAnimationToEnd
-- extendedWaitUntil:
-    visible:
-      id: retry-upload
-    timeout: 15000
-- assertNotVisible:
-    id: cancel-upload
-- assertVisible: "Upload cancelled.*"
-- takeScreenshot: upload-background-cancelled
+- assertNotVisible: "Upload cancelled.*"
+- takeScreenshot: upload-background-resumable

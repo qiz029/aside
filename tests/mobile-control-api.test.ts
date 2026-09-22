@@ -6,6 +6,8 @@ type MobileApi = Required<
   Pick<PlayerBackend, "control" | "updateControl" | "live" | "usage">
 > & {
   token: string | null;
+  accountId: string | null;
+  cancelUpload(): Promise<void>;
   onExpired?: () => void;
   restore(): Promise<void>;
 };
@@ -21,13 +23,15 @@ async function fixture(
   const global = globalThis as unknown as Record<string, unknown>;
   global[key] = { fetcher, storage };
   const modules: Record<string, string> = {
+    "react-native": 'export const Platform={OS:"android"}, NativeModules={};',
+    "@react-native-async-storage/async-storage": `const store = globalThis[${JSON.stringify(key)}].storage; export default {getItem:async(key)=>store.get(key)??null,setItem:async(key,value)=>{store.set(key,value)},removeItem:async(key)=>{store.delete(key)}};`,
     "expo-constants":
       'export default {expoConfig:{extra:{apiUrl:"https://api.example.com"}}};',
     "expo-secure-store": `const store = globalThis[${JSON.stringify(key)}].storage;
        export const getItemAsync=async(key)=>store.get(key)??null,
          setItemAsync=async(key,value)=>{store.set(key,value)},
          deleteItemAsync=async(key)=>{store.delete(key)};`,
-    "expo-file-system": "export class File {}",
+    "expo-file-system": "export class File { exists=false; }",
     "expo/fetch": `export const fetch = globalThis[${JSON.stringify(key)}].fetcher;`,
   };
   const bundle = await build({
@@ -40,10 +44,16 @@ async function fixture(
       {
         name: "os-boundary",
         setup(builder) {
-          builder.onResolve({ filter: /^expo(?:-|\/)/ }, ({ path }) => ({
-            path,
-            namespace: "os",
-          }));
+          builder.onResolve(
+            {
+              filter:
+                /^(?:expo(?:-|\/)|react-native$|@react-native-async-storage\/async-storage$)/,
+            },
+            ({ path }) => ({
+              path,
+              namespace: "os",
+            }),
+          );
           builder.onLoad({ filter: /.*/, namespace: "os" }, ({ path }) => ({
             contents: modules[path],
             loader: "js",
@@ -168,7 +178,7 @@ test("mobile execution acknowledgements use authenticated PUT and reject inactiv
     assert.equal(init.method, "PUT");
     assert.equal(init.signal, signal);
     assert.equal(
-      new Headers(init.headers).get("Authorization"),
+      new Headers(init?.headers).get("Authorization"),
       "Bearer a-long-lived-secret",
     );
     assert.deepEqual(JSON.parse(String(init.body)), update);
@@ -182,19 +192,37 @@ test("mobile execution acknowledgements use authenticated PUT and reject inactiv
 
 test("only controlled mobile sessions opt in to native conversation policy", async (t) => {
   const bodies: unknown[] = [];
-  t.mock.method(globalThis, "fetch", async (_url: string, init: RequestInit) => {
-    bodies.push(JSON.parse(String(init.body)));
-    return Response.json({ session: { id: "test-live" }, transport: { sdp: "answer" } });
-  });
+  t.mock.method(
+    globalThis,
+    "fetch",
+    async (_url: string, init: RequestInit) => {
+      bodies.push(JSON.parse(String(init.body)));
+      return Response.json({
+        session: { id: "test-live" },
+        transport: { sdp: "answer" },
+      });
+    },
+  );
   const api = await fixture(fetch);
   api.token = null;
   const request = { sdp: "offer", atMs: 1000, history: [] };
   await api.live("episode", request);
   assert.equal(liveSchema.parse(bodies[0]).control, undefined);
-  await api.live("episode", { ...request, control: { debug: false, player: {
-    version: 0, revision: 1, sequence: 0, positionMs: 1000,
-    wasPlaying: true, audibleSource: "podcast", config: createPlayerConfig(),
-  } } });
+  await api.live("episode", {
+    ...request,
+    control: {
+      debug: false,
+      player: {
+        version: 0,
+        revision: 1,
+        sequence: 0,
+        positionMs: 1000,
+        wasPlaying: true,
+        audibleSource: "podcast",
+        config: createPlayerConfig(),
+      },
+    },
+  });
   assert.equal(liveSchema.parse(bodies[1]).control?.client, "mobile");
 });
 
@@ -205,7 +233,7 @@ test("restarting mobile closes its persisted orphan before creating a paid repla
   let created = 0;
   t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
     assert.equal(
-      new Headers(init.headers).get("Authorization"),
+      new Headers(init?.headers).get("Authorization"),
       `Bearer ${token}`,
     );
     const action = url.split("/").at(-1)!;
@@ -231,4 +259,70 @@ test("restarting mobile closes its persisted orphan before creating a paid repla
   await restarted.live("episode", {} as Parameters<PlayerBackend["live"]>[1]);
   assert.deepEqual(calls, ["live", "usage", "live"]);
   assert.equal(JSON.parse(storage.get("aside.live")!).sessionId, "session-2");
+});
+
+test("cancelling an upload with an expired credential cannot recurse into sign-out", async (t) => {
+  const storage = new Map([
+    [
+      "aside.upload.account-a",
+      JSON.stringify({
+        id: "upload-a",
+        file: { uri: "file:///pending" },
+        parts: [],
+      }),
+    ],
+  ]);
+  const api = await fixture(async () => {
+    throw Error("unexpected stream");
+  }, storage);
+  api.accountId = "account-a";
+  let expired = 0,
+    requests = 0;
+  api.onExpired = () => {
+    expired++;
+  };
+  t.mock.method(
+    globalThis,
+    "fetch",
+    async (_url: unknown, init?: RequestInit) => {
+      requests++;
+      assert.equal(
+        new Headers(init?.headers).get("Authorization"),
+        "Bearer a-long-lived-secret",
+      );
+      return Response.json({ error: "Expired" }, { status: 401 });
+    },
+  );
+  await api.cancelUpload();
+  assert.equal(expired, 0);
+  assert.equal(requests, 1);
+  assert.equal(storage.has("aside.upload.account-a"), false);
+});
+
+test("late cancellation cleans the old account without removing another account's upload", async (t) => {
+  const storage = new Map([
+    [
+      "aside.upload.account-a",
+      JSON.stringify({ id: "upload-a", file: { uri: "file:///a" } }),
+    ],
+    [
+      "aside.upload.account-b",
+      JSON.stringify({ id: "upload-b", file: { uri: "file:///b" } }),
+    ],
+  ]);
+  const api = await fixture(async () => {
+    throw Error("unexpected stream");
+  }, storage);
+  api.accountId = "account-a";
+  t.mock.method(
+    globalThis,
+    "fetch",
+    async () => new Response(null, { status: 200 }),
+  );
+  const cancelling = api.cancelUpload();
+  api.accountId = "account-b";
+  api.token = "account-b-token";
+  await cancelling;
+  assert.equal(storage.has("aside.upload.account-a"), false);
+  assert.equal(storage.has("aside.upload.account-b"), true);
 });

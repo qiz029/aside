@@ -1,5 +1,7 @@
 const {
   withAndroidManifest,
+  withAppDelegate,
+  withEntitlementsPlist,
   withAppBuildGradle,
   withXcodeProject,
   withMainApplication,
@@ -8,11 +10,19 @@ const {
 const fs = require("node:fs");
 const path = require("node:path");
 module.exports = function (config) {
+  config = withEntitlementsPlist(config, (config) => {
+    if (!config.ios?.usesAppleSignIn)
+      delete config.modResults["com.apple.developer.applesignin"];
+    return config;
+  });
   config = withXcodeProject(config, (config) => {
     const project = config.modResults;
     const projectName = config.modRequest.projectName;
     for (const sourceName of [
       "AsideAudioSession.m",
+      "AsideUpload.swift",
+      "AsideSceneDelegate.swift",
+      "AsideUploadBridge.m",
       "AsideSilentAudioDevice.m",
       "AsideSilentAudioDevice.h",
       "AsidePcmQueue.h",
@@ -25,12 +35,50 @@ module.exports = function (config) {
           sourceName,
         ),
       );
-      if (sourceName.endsWith(".m"))
+      if (sourceName.endsWith(".m") || sourceName.endsWith(".swift"))
         IOSConfig.XcodeUtils.addBuildSourceFileToGroup({
           filepath: `${projectName}/${sourceName}`,
           groupName: projectName,
           project,
         });
+    }
+    return config;
+  });
+  config = withAppDelegate(config, (config) => {
+    let source = config.modResults.contents;
+    if (!source.includes("var asideLaunchOptions:")) {
+      source = source.replace(
+        "  var window: UIWindow?",
+        "  var window: UIWindow?\n  var asideLaunchOptions: [UIApplication.LaunchOptionsKey: Any]?",
+      );
+      source = source.replace(
+        "    bindReactNativeFactory(factory)",
+        "    bindReactNativeFactory(factory)\n    asideLaunchOptions = launchOptions",
+      );
+      source = source.replace(
+        /#if os\(iOS\) \|\| os\(tvOS\)[\s\S]*?#endif/,
+        "    // AsideSceneDelegate starts React Native in its scene-owned window.",
+      );
+    }
+    config.modResults.contents = source;
+
+    const marker = "// Aside background upload events";
+    if (!config.modResults.contents.includes(marker)) {
+      config.modResults.contents = config.modResults.contents.replace(
+        "  // Linking API",
+        `  ${marker}
+  public override func application(
+    _ application: UIApplication,
+    handleEventsForBackgroundURLSession identifier: String,
+    completionHandler: @escaping () -> Void
+  ) {
+    if !AsideUploadManager.shared.handleEvents(identifier, completion: completionHandler) {
+      super.application(application, handleEventsForBackgroundURLSession: identifier, completionHandler: completionHandler)
+    }
+  }
+
+  // Linking API`,
+      );
     }
     return config;
   });

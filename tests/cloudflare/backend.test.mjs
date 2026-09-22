@@ -1,3 +1,4 @@
+import { cleanupAccount } from "../../cloudflare/src/account-data.ts";
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { readFile, readdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -19,6 +20,9 @@ import { rollupDailyStats } from "../../cloudflare/src/stats.ts";
 import { budget } from "../../cloudflare/src/trial.ts";
 import { createPlayerConfig } from "@aside/engine/player";
 import { streamedResponse } from "../fixtures/streamed-response.ts";
+import { generateKeyPair, exportJWK, exportPKCS8, SignJWT } from "jose";
+let appleKey, appleJwk;
+const appleCodes = new Map();
 let mf, db, bucket;
 let networkCalls = [];
 const liveCreations = [];
@@ -43,6 +47,11 @@ const origin = "https://aside.test";
 const testerIp = "192.0.2.10";
 const testerIpHash = createHmac("sha256", "local-test-secret-at-least-32-characters").update(testerIp).digest("hex");
 before(async () => {
+  const pair = await generateKeyPair("RS256", {extractable: true});
+  appleKey = pair.privateKey;
+  appleJwk = {...await exportJWK(pair.publicKey), kid: "test-apple", alg: "RS256", use: "sig"};
+  const teamKey = await generateKeyPair("ES256", {extractable: true});
+  const applePrivate = await exportPKCS8(teamKey.privateKey);
   const shell = await readFile("frontend/index.html", "utf8");
   const bundle = await build({
     entryPoints: ["tests/cloudflare/worker.mjs"],
@@ -90,6 +99,10 @@ before(async () => {
         ASIDE_LIVE_ACCOUNT_SESSION_SECONDS: "1800",
         ALLOW_UPLOADS: "true",
         AUTH_EMAIL_FROM: "login@auth.asidefm.com",
+        APPLE_CLIENT_IDS: "com.asidefm.app.dev",
+        APPLE_TEAM_ID: "TESTTEAM",
+        APPLE_KEY_ID: "TESTKEY",
+        APPLE_PRIVATE_KEY: applePrivate,
         GOOGLE_CLIENT_ID: "google-test-id",
         GOOGLE_CLIENT_SECRET: "google-test-secret",
         ADMIN_KEY: "admin-test-key-at-least-32-characters",
@@ -106,6 +119,17 @@ before(async () => {
       },
       outboundService: async (request) => {
         networkCalls.push(new URL(request.url).pathname);
+        if (request.url === "https://appleid.apple.com/auth/keys") return Response.json({keys: [appleJwk]});
+        if (request.url === "https://appleid.apple.com/auth/revoke") return new Response(null, {status: 200});
+        if (request.url === "https://appleid.apple.com/auth/token") {
+          const code = new URLSearchParams(await request.text()).get("code");
+          const claims = appleCodes.get(code);
+          appleCodes.delete(code);
+          if (!claims) return new Response(null, {status: 400});
+          const token = await new SignJWT(claims).setProtectedHeader({alg: "RS256", kid: "test-apple"})
+            .setIssuer("https://appleid.apple.com").setIssuedAt().setExpirationTime("5m").sign(appleKey);
+          return Response.json({id_token: token, refresh_token: "test-refresh"});
+        }
         if (request.url === "https://oauth2.googleapis.com/token")
           return Response.json({ access_token: "google-test-access" });
         if (request.url === "https://openidconnect.googleapis.com/v1/userinfo")
@@ -234,7 +258,7 @@ after(async () => {
   await mf?.dispose();
 });
 beforeEach(async () => {
-  await db.prepare("DELETE FROM budgets WHERE bucket LIKE 'burst:%'").run();
+  await db.prepare("DELETE FROM budgets WHERE bucket LIKE 'burst:%' OR bucket LIKE 'auth:%'").run();
 });
 async function visitor(verified = true) {
   const response = await mf.dispatchFetch(origin + "/api/health");
@@ -2888,3 +2912,117 @@ test(`${client ?? "Web"}: Live sideband executes tools and recovers a missing de
 });
 
 // The Responses preload test was retired with the fragment classifier (see ADR 0004).
+
+async function mobileAccountForTest() {
+  const email = `p01-${crypto.randomUUID()}@example.com`;
+  const post = (path, body, token) => mf.dispatchFetch(origin + path, {method: "POST", headers: {"Content-Type": "application/json", ...(token ? {Authorization: `Bearer ${token}`} : {})}, body: JSON.stringify(body)});
+  assert.equal((await post("/api/auth/mobile/email/start", {email})).status, 200);
+  const response = await post("/api/auth/mobile/email/verify", {email, code: await setTestLoginCode(email)});
+  assert.equal(response.status, 200);
+  const account = await response.json();
+  return {...account, request: (path, method = "GET", body) => mf.dispatchFetch(origin + path, {method, headers: {Authorization: `Bearer ${account.token}`, "Content-Type": "application/json"}, ...(body ? {body: JSON.stringify(body)} : {})})};
+}
+test("mobile AI consent gates upload and questions, supports refusal and withdrawal", async () => {
+  const account = await mobileAccountForTest();
+  assert.equal((await (await account.request("/api/auth/consent")).json()).accepted, false);
+  assert.equal((await account.request("/api/uploads", "POST", {title: "audio", size: 44})).status, 403);
+  await seed("consent-public", "curator", true);
+  assert.equal((await account.request("/api/episodes/consent-public/audio")).status, 200);
+  assert.equal((await account.request("/api/episodes/consent-public/question", "POST", {})).status, 403);
+  assert.equal((await account.request("/api/auth/consent", "POST", {version: "outdated"})).status, 400);
+  assert.equal((await account.request("/api/auth/consent", "POST", {version: "2026-09-21"})).status, 200);
+  const started = await account.request("/api/uploads", "POST", {title: "audio", size: 44});
+  assert.equal(started.status, 201);
+  const {id} = await started.json();
+  assert.equal((await account.request("/api/auth/consent", "DELETE")).status, 200);
+  assert.equal((await account.request(`/api/uploads/${id}/part?number=1`, "PUT", {})).status, 403);
+  assert.equal((await account.request("/api/episodes/consent-public/retry", "POST", {})).status, 403);
+  assert.equal((await account.request("/api/uploads", "POST", {title: "audio", size: 44})).status, 403);
+});
+test("account deletion invalidates every session and removes only that account's data", async () => {
+  const account = await mobileAccountForTest();
+  const other = await mobileAccountForTest();
+  await seed("delete-own", account.user.id);
+  await account.request("/api/auth/consent", "POST", {version: "2026-09-21"});
+  const pending = await account.request("/api/uploads", "POST", {title: "pending", size: 44});
+  assert.equal(pending.status, 201);
+  await seed("keep-other", other.user.id);
+  await bucket.put(`avatars/${account.user.id}/avatar`, "avatar");
+  assert.equal((await account.request("/api/auth/account", "DELETE", {confirmation: "no"})).status, 400);
+  assert.equal((await account.request("/api/auth/account", "DELETE", {confirmation: "DELETE"})).status, 202);
+  assert.equal((await account.request("/api/auth/session")).status, 401);
+  for (let i = 0; i < 100; i++) {
+    if (!(await db.prepare("SELECT id FROM users WHERE id=?").bind(account.user.id).first())) break;
+    await new Promise(r => setTimeout(r, 10));
+  }
+  assert.equal(await db.prepare("SELECT id FROM users WHERE id=?").bind(account.user.id).first(), null);
+  assert.equal(await bucket.get("episodes/delete-own/original"), null);
+  assert.equal(await bucket.get(`avatars/${account.user.id}/avatar`), null);
+  assert.equal((await other.request("/api/episodes/keep-other/audio")).status, 200);
+});
+async function appleAttempt({token, sub = "apple-" + crypto.randomUUID(), email = "apple-" + crypto.randomUUID() + "@privaterelay.appleid.com", nonceOverride, aud = "com.asidefm.app.dev"} = {}) {
+  const request = (path, body) => mf.dispatchFetch(origin + path, {method: "POST", headers: {"Content-Type": "application/json", ...(token ? {Authorization: `Bearer ${token}`} : {})}, body: JSON.stringify(body)});
+  const start = await request("/api/auth/mobile/apple/start", {clientId: "com.asidefm.app.dev"});
+  assert.equal(start.status, 200, await start.clone().text());
+  const {nonce} = await start.json();
+  const code = crypto.randomUUID();
+  appleCodes.set(code, {sub, email, email_verified: true, nonce: nonceOverride ?? nonce, aud});
+  return {response: await request("/api/auth/mobile/apple/verify", {nonce, code}), replay: () => request("/api/auth/mobile/apple/verify", {nonce, code})};
+}
+test("Apple verifies issuer/audience/nonce and consumes the challenge only once", async () => {
+  assert.equal((await appleAttempt({nonceOverride: "wrong"})).response.status, 400);
+  assert.equal((await appleAttempt({aud: "another.app"})).response.status, 400);
+  const valid = await appleAttempt();
+  assert.equal(valid.response.status, 200, await valid.response.clone().text());
+  assert.equal((await valid.replay()).status, 400);
+  const {user} = await valid.response.json();
+  const row = await db.prepare("SELECT refresh_token FROM auth_identities WHERE user_id=?").bind(user.id).first();
+  assert.ok(row.refresh_token && !row.refresh_token.includes("test-refresh"));
+});
+test("Apple linking preserves the existing account across hidden email and rejects cross-account linking", async () => {
+  const account = await mobileAccountForTest();
+  const sub = "link-" + crypto.randomUUID();
+  const first = await appleAttempt({token: account.token, sub});
+  assert.equal(first.response.status, 200, await first.response.clone().text());
+  assert.equal((await first.response.json()).user.id, account.user.id);
+  const login = await appleAttempt({sub});
+  assert.equal((await login.response.json()).user.id, account.user.id);
+  const other = await mobileAccountForTest();
+  assert.equal((await appleAttempt({token: other.token, sub})).response.status, 409);
+  assert.equal((await appleAttempt({email: other.user.email})).response.status, 409, "email claims cannot silently merge accounts");
+});
+
+test("deleting an Apple-linked account revokes the provider token before removing the identity", async () => {
+  const result = await appleAttempt();
+  assert.equal(result.response.status, 200);
+  const {token, user} = await result.response.json();
+  const before = networkCalls.filter(x => x === "/auth/revoke").length;
+  const response = await mf.dispatchFetch(origin + "/api/auth/account", {method: "DELETE", headers: {Authorization: `Bearer ${token}`, "Content-Type": "application/json"}, body: JSON.stringify({confirmation: "DELETE"})});
+  assert.equal(response.status, 202);
+  for (let i = 0; i < 100; i++) {
+    if (!(await db.prepare("SELECT id FROM users WHERE id=?").bind(user.id).first())) break;
+    await new Promise(r => setTimeout(r, 10));
+  }
+  assert.equal(await db.prepare("SELECT id FROM users WHERE id=?").bind(user.id).first(), null);
+  assert.ok(networkCalls.filter(x => x === "/auth/revoke").length > before);
+});
+
+test("account cleanup can resume after aborting an upload and a later storage failure", async () => {
+  const account = await signedInAccount();
+  const uploaded = await account.request("/api/uploads", "POST", {title: "cleanup-retry", size: 44});
+  assert.equal(uploaded.status, 201);
+  const {id} = await uploaded.json();
+  await db.prepare("UPDATE users SET deleted_at=? WHERE id=?").bind(Date.now(), account.id).run();
+  let fail = true, aborted = 0;
+  const env = {DB: db, AUDIO: {
+    resumeMultipartUpload: (key, uploadId) => ({abort: async () => {aborted++; await bucket.resumeMultipartUpload(key, uploadId).abort();}}),
+    delete: key => bucket.delete(key),
+    list: options => {if (fail) throw Error("temporary storage failure"); return bucket.list(options);},
+  }};
+  await assert.rejects(cleanupAccount(env, account.id), /temporary storage failure/);
+  assert.equal((await db.prepare("SELECT state FROM uploads WHERE id=?").bind(id).first()).state, "aborted");
+  fail = false;
+  await cleanupAccount(env, account.id);
+  assert.equal(aborted, 1);
+  assert.equal(await db.prepare("SELECT id FROM users WHERE id=?").bind(account.id).first(), null);
+});

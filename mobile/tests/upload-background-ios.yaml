@@ -1,4 +1,5 @@
 # iPhone 16 Pro, Files open to Aside Dev's Documents folder with Aside-upload.wav.
+# Accept AI consent before opening Files. Use a throttled multi-part fixture.
 appId: com.asidefm.app.dev
 ---
 - tapOn:
@@ -6,17 +7,12 @@ appId: com.asidefm.app.dev
 - extendedWaitUntil:
     visible:
       id: cancel-upload
-    timeout: 10000
+    timeout: 15000
 - pressKey: Home
 - waitForAnimationToEnd
+# Confirm continued parts and completion in the fixture server logs before reopening.
 - launchApp:
     stopApp: false
 - waitForAnimationToEnd
-- extendedWaitUntil:
-    visible:
-      id: retry-upload
-    timeout: 15000
-- assertNotVisible:
-    id: cancel-upload
-- assertVisible: "Upload cancelled.*"
-- takeScreenshot: upload-background-cancelled
+- assertNotVisible: "Upload cancelled.*"
+- takeScreenshot: upload-background-restored

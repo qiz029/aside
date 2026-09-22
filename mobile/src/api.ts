@@ -1,3 +1,6 @@
+import { NativeModules, Platform } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { sendRemainingParts, type UploadJournal } from "./upload-journal";
 import Constants from "expo-constants";
 import * as SecureStore from "expo-secure-store";
 import { File } from "expo-file-system";
@@ -54,6 +57,8 @@ export class MobileApi implements PlayerBackend {
     (Constants.expoConfig?.extra?.apiUrl as string) ?? "https://asidefm.com"
   ).replace(/\/$/, "");
   token: string | null = null;
+  accountId: string | null = null;
+  appleEnabled = false;
   onExpired?: () => void;
   private readonly liveJournal = new LiveSessionJournal({
     read: () => SecureStore.getItemAsync("aside.live"),
@@ -155,6 +160,7 @@ export class MobileApi implements PlayerBackend {
       user: User;
       expiresAt: number;
     }>("/auth/mobile/email/verify", { email, code });
+    this.accountId = result.user.id;
     this.token = result.token;
     this.recovery = undefined;
     await SecureStore.setItemAsync("aside.token", result.token);
@@ -163,6 +169,7 @@ export class MobileApi implements PlayerBackend {
   async forget() {
     const token = this.token;
     this.token = null;
+    this.accountId = null;
     this.recovery = undefined;
     await SecureStore.deleteItemAsync("aside.token");
     if (token) await this.liveJournal.forget(token);
@@ -171,8 +178,92 @@ export class MobileApi implements PlayerBackend {
     await this.json("/auth/logout", {});
     await this.forget();
   }
-  me() {
-    return this.request<{ user: User | null }>("/auth/session");
+  async me() {
+    const result = await this.request<{
+      user: User | null;
+      appleEnabled?: boolean;
+    }>("/auth/session");
+    this.accountId = result.user?.id ?? null;
+    this.appleEnabled = result.appleEnabled ?? false;
+    return result;
+  }
+  appleStart(clientId: string) {
+    return this.json<{ nonce: string }>("/auth/mobile/apple/start", {
+      clientId,
+    });
+  }
+  async appleVerify(nonce: string, code: string, name?: string) {
+    const result = await this.json<{ user: User; token?: string }>(
+      "/auth/mobile/apple/verify",
+      { nonce, code, name },
+    );
+    this.accountId = result.user.id;
+    if (result.token) {
+      this.token = result.token;
+      this.recovery = undefined;
+      await SecureStore.setItemAsync("aside.token", result.token);
+    }
+    return result.user;
+  }
+  consent() {
+    return this.request<{ accepted: boolean; version: string }>(
+      "/auth/consent",
+    );
+  }
+  acceptConsent(version: string) {
+    return this.json("/auth/consent", { version });
+  }
+  revokeConsent() {
+    return this.request("/auth/consent", { method: "DELETE" });
+  }
+  deleteAccount() {
+    return this.json("/auth/account", { confirmation: "DELETE" }, "DELETE");
+  }
+  updateProfile(alias: string, description: string) {
+    return this.json<{ user: User }>(
+      "/profile",
+      { alias, description },
+      "PATCH",
+    );
+  }
+  private uploadKey() {
+    if (!this.accountId) throw new Error("Sign in to upload");
+    return `aside.upload.${this.accountId}`;
+  }
+  async pendingUpload(): Promise<UploadJournal | null> {
+    if (!this.accountId) return null;
+    const raw = await AsyncStorage.getItem(this.uploadKey());
+    return raw ? JSON.parse(raw) : null;
+  }
+  private async discardUpload(
+    journal: UploadJournal,
+    key: string,
+    token: string | null,
+  ) {
+    if (Platform.OS === "ios")
+      await NativeModules.AsideUpload.cancel(journal.id);
+    // Clear only this account's journal. A late cancellation cannot erase a replacement.
+    const stored = await AsyncStorage.getItem(key);
+    if (stored && JSON.parse(stored).id === journal.id)
+      await AsyncStorage.removeItem(key);
+    const file = new File(journal.file.uri);
+    if (file.exists) file.delete();
+    // Cleanup must not recurse through onExpired, and offline sign-out must stay bounded.
+    if (token)
+      await withAbortTimeout(new AbortController().signal, 5000, (signal) =>
+        fetch(this.base + `/api/uploads/${journal.id}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+          credentials: "omit",
+          signal,
+        }),
+      ).catch(() => {});
+  }
+  async cancelUpload() {
+    const key = this.accountId ? this.uploadKey() : null;
+    const token = this.token;
+    const journal = await this.pendingUpload();
+    if (journal && key) await this.discardUpload(journal, key, token);
   }
   list() {
     return this.request<Episode[]>("/episodes");
@@ -320,55 +411,86 @@ export class MobileApi implements PlayerBackend {
   ) {
     if (file.size > 1024 ** 3)
       throw Error("文件不能超过 1 GiB / Maximum file size: 1 GiB");
-    const upload = await this.json<{ id: string; partSize: number }>(
-      "/uploads",
-      { title: file.name, size: file.size },
-    );
-    let completed = false;
+    const key = this.uploadKey();
+    const token = this.token;
+    checkCancelled(signal);
+    let journal = await this.pendingUpload();
+    if (journal && journal.file.uri !== file.uri)
+      throw Error("Resume or cancel the pending upload first");
+    if (!journal) {
+      const started = await this.json<{ id: string; partSize: number }>(
+        "/uploads",
+        { title: file.name, size: file.size },
+      );
+      journal = { ...started, file, parts: [] };
+      await AsyncStorage.setItem(key, JSON.stringify(journal));
+    }
     try {
-      const source = new File(file.uri),
-        handle = source.open();
-      const parts: { partNumber: number; etag: string }[] = [];
-      try {
-        for (
-          let offset = 0, n = 1;
-          offset < file.size;
-          offset += upload.partSize, n++
-        ) {
-          checkCancelled(signal);
-          handle.offset = offset;
-          const bytes = handle.readBytes(
-            Math.min(upload.partSize, file.size - offset),
-          );
-          const part = await this.request<{ etag: string }>(
-            `/uploads/${upload.id}/part?number=${n}`,
-            {
-              method: "PUT",
-              headers: { "Content-Type": "application/octet-stream" },
-              body: bytes as unknown as BodyInit,
-              signal,
-            },
-          );
-          parts.push({ partNumber: n, etag: part.etag });
-          onProgress(
-            Math.min(1, (offset + bytes.length) / file.size),
-            "uploading",
-          );
-        }
-      } finally {
-        handle.close();
-      }
       checkCancelled(signal);
-      completed = true;
-      onProgress(1, "processing");
-      return await this.json<Episode>(`/uploads/${upload.id}/complete`, {
-        parts,
-      });
-    } catch (error) {
-      if (!completed)
-        await this.request(`/uploads/${upload.id}`, { method: "DELETE" }).catch(
-          () => {},
+      if (Platform.OS === "ios") {
+        await NativeModules.AsideUpload.start(
+          journal.id,
+          this.base,
+          token,
+          file.uri,
+          file.size,
+          journal.partSize,
         );
+        while (true) {
+          checkCancelled(signal);
+          if (this.token !== token)
+            throw Error("Account changed during upload");
+          const status = await NativeModules.AsideUpload.status(journal.id);
+          if (status.state === "done") break;
+          if (status.state === "paused" || status.state === "missing")
+            throw Error(
+              "上传已暂停，重试将从已保存的进度继续 / Upload paused. Retry to resume saved progress.",
+            );
+          onProgress(
+            status.progress,
+            status.state === "processing" ? "processing" : "uploading",
+          );
+          await new Promise((resolve) => setTimeout(resolve, 750));
+        }
+      } else {
+        const handle = new File(file.uri).open();
+        try {
+          await sendRemainingParts(
+            journal,
+            async (number, offset, length) => {
+              checkCancelled(signal);
+              handle.offset = offset;
+              return this.request<{ etag: string }>(
+                `/uploads/${journal!.id}/part?number=${number}`,
+                {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/octet-stream" },
+                  body: handle.readBytes(length) as unknown as BodyInit,
+                  signal,
+                },
+              );
+            },
+            (value) => AsyncStorage.setItem(key, JSON.stringify(value)),
+            (value) => onProgress(value, "uploading"),
+          );
+        } finally {
+          handle.close();
+        }
+        checkCancelled(signal);
+        onProgress(1, "processing");
+        await this.json(`/uploads/${journal.id}/complete`, {
+          parts: journal.parts,
+        });
+      }
+      if (this.token !== token) throw Error("Account changed during upload");
+      const result = await this.episode(journal.id);
+      if (Platform.OS === "ios")
+        await NativeModules.AsideUpload.cancel(journal.id);
+      await AsyncStorage.removeItem(key);
+      return result;
+    } catch (error) {
+      // Network errors retain the journal and acknowledged parts. Explicit cancel discards it.
+      if (signal.aborted) await this.discardUpload(journal, key, token);
       throw error;
     }
   }
