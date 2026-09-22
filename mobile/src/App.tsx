@@ -52,7 +52,16 @@ import Animated, {
   withSpring,
   withTiming,
 } from "react-native-reanimated";
-import { Scrubber } from "./Scrubber";
+import {
+  PlaybackTimeline,
+  ListeningIndicator,
+  CaptureStatus,
+} from "./PlayerActivity";
+import {
+  selectStore,
+  selectPlayerScreen,
+  samePlayerScreen,
+} from "./session-selection";
 import { getLocales } from "expo-localization";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { groupByCollection, type Episode } from "@aside/engine/core";
@@ -206,34 +215,18 @@ function Main() {
       volume: audio.player.volume,
     }));
   }, [api, audio, session]);
-  const snapshot = useSyncExternalStore(session.subscribe, session.getSnapshot);
-  const [inputLevel, setInputLevel] = useState(0);
-  useEffect(() => {
-    if (snapshot.listeningMode !== "auto" || snapshot.liveStatus !== "on") {
-      setInputLevel(0);
-      return;
-    }
-    const timer = setInterval(
-      () => setInputLevel(session.microphoneLevel()),
-      100,
-    );
-    return () => clearInterval(timer);
-  }, [session, snapshot.listeningMode, snapshot.liveStatus]);
-  const [recordingSeconds, setRecordingSeconds] = useState(0);
-  useEffect(() => {
-    setRecordingSeconds(0);
-    if (!snapshot.manualHeld || snapshot.liveStatus !== "armed") return;
-    const start = Date.now();
-    const timer = setInterval(
-      () =>
-        setRecordingSeconds(
-          Math.min(30, Math.floor((Date.now() - start) / 1000)),
-        ),
-      250,
-    );
-    return () => clearInterval(timer);
-  }, [snapshot.manualHeld, snapshot.liveStatus]);
+  const screenSnapshot = useMemo(
+    () =>
+      selectStore(
+        session.getSnapshot,
+        (value) => selectPlayerScreen(value, episode?.analysis?.passages),
+        samePlayerScreen,
+      ),
+    [session, episode?.analysis?.passages],
+  );
+  const snapshot = useSyncExternalStore(session.subscribe, screenSnapshot);
   const [followTranscript, setFollowTranscript] = useState(true);
+
   const transcriptRef = useRef<FlatList>(null),
     chatRef = useRef<FlatList>(null),
     pressVersion = useRef(0),
@@ -513,12 +506,7 @@ function Main() {
       audio.dispose();
     };
   }, []);
-  const passageIndex =
-    episode?.analysis?.passages.findIndex(
-      (p) =>
-        snapshot.state.positionMs >= p.startMs &&
-        snapshot.state.positionMs < p.endMs,
-    ) ?? -1;
+  const passageIndex = snapshot.passageIndex;
   const scrollToCurrentPassage = () => {
     if (followTranscript && passageIndex >= 0 && pane === "transcript")
       transcriptRef.current?.scrollToIndex({
@@ -1395,12 +1383,8 @@ function Main() {
             </Text>
             <Text style={{ color: colors.muted }}>
               {tr(
-                Platform.OS === "ios"
-                  ? "单篇最长 5 小时、最大 1 GiB。支持后台上传；中断后可续传。"
-                  : "单篇最长 5 小时、最大 1 GiB。中断后可从已保存的进度续传。",
-                Platform.OS === "ios"
-                  ? "Up to 5 hours and 1 GiB. Uploads continue in the background and can be resumed."
-                  : "Up to 5 hours and 1 GiB. Interrupted uploads can resume saved progress.",
+                "单篇最长 5 小时、最大 1 GiB。支持后台上传；中断后可续传。",
+                "Up to 5 hours and 1 GiB. Uploads continue in the background and can be resumed.",
               )}
             </Text>
             {upload ? (
@@ -1576,8 +1560,8 @@ function Main() {
                         contentContainerStyle={styles.reading}
                         renderItem={({ item }) => {
                           const current =
-                            snapshot.state.positionMs >= item.startMs &&
-                            snapshot.state.positionMs < item.endMs;
+                            episode.analysis?.passages[passageIndex]?.id ===
+                            item.id;
                           return (
                             <Pressable
                               onPress={() => {
@@ -1797,57 +1781,12 @@ function Main() {
                   ]}
                 >
                   <View style={{ display: keyboardVisible ? "none" : "flex" }}>
-                    <Scrubber
-                      positionMs={snapshot.state.positionMs}
+                    <PlaybackTimeline
+                      session={session}
                       durationMs={episode.durationMs}
                       colors={colors}
-                      label={tr("播放进度", "Playback position")}
-                      fineLabel={(speed) =>
-                        speed === 1
-                          ? tr(
-                              "手指上移，拖得更精细",
-                              "Slide up for finer scrubbing",
-                            )
-                          : tr(
-                              `${speed === 0.5 ? "半速" : "四分之一速"}精细拖动`,
-                              `${speed === 0.5 ? "Half" : "Quarter"}-speed scrubbing`,
-                            )
-                      }
-                      formatTime={formatTime}
-                      onSeek={(value) => {
-                        session.seek(value);
-                        session.start();
-                      }}
+                      tr={tr}
                     />
-                    <View style={styles.timeRow}>
-                      <Text
-                        testID="playback-position"
-                        maxFontSizeMultiplier={1.5}
-                        style={{
-                          color: colors.muted,
-                          fontSize: 11,
-                          fontVariant: ["tabular-nums"],
-                        }}
-                      >
-                        {formatTime(snapshot.state.positionMs)}
-                      </Text>
-                      <Text
-                        maxFontSizeMultiplier={1.5}
-                        style={{
-                          color: colors.muted,
-                          fontSize: 11,
-                          fontVariant: ["tabular-nums"],
-                        }}
-                      >
-                        −
-                        {formatTime(
-                          Math.max(
-                            0,
-                            episode.durationMs - snapshot.state.positionMs,
-                          ),
-                        )}
-                      </Text>
-                    </View>
                     <View style={styles.transportRow}>
                       {button(
                         `${rate}×`,
@@ -1974,112 +1913,22 @@ function Main() {
                       ["arming", "transcribing", "connecting"].includes(
                         snapshot.liveStatus,
                       )) && (
-                      <Text
-                        testID="manual-capture-status"
-                        maxFontSizeMultiplier={1.6}
-                        style={{ color: colors.muted, fontSize: 12 }}
-                      >
-                        {captureCancelled
-                          ? tr("已取消", "Recording cancelled")
-                          : snapshot.manualHeld
-                            ? snapshot.liveStatus === "arming"
-                              ? tr("正在准备麦克风…", "Preparing microphone…")
-                              : tr(
-                                  `松开发送 · 滑出取消 · ${recordingSeconds}s`,
-                                  `Release to send · Slide to cancel · ${recordingSeconds}s`,
-                                )
-                            : snapshot.liveStatus === "transcribing"
-                              ? tr("正在转写…", "Transcribing…")
-                              : snapshot.liveStatus === "connecting"
-                                ? tr("正在连接语音…", "Connecting voice…")
-                                : snapshot.busy
-                                  ? tr(
-                                      "按住继续提问",
-                                      "Hold to ask another question",
-                                    )
-                                  : tr("按住说话", "Hold to talk")}
-                      </Text>
+                      <CaptureStatus
+                        snapshot={snapshot}
+                        captureCancelled={captureCancelled}
+                        colors={colors}
+                        tr={tr}
+                      />
                     )}
                   {(!composerOpen || snapshot.listeningMode === "auto") && (
                     <View testID="question-toolbar" style={styles.voiceBar}>
                       {snapshot.listeningMode === "auto" ? (
-                        <View
-                          style={[
-                            styles.listeningPill,
-                            {
-                              backgroundColor:
-                                snapshot.liveStatus === "on"
-                                  ? colors.highlight
-                                  : colors.fill,
-                            },
-                          ]}
+                        <ListeningIndicator
+                          session={session}
+                          status={snapshot.liveStatus}
+                          colors={colors}
+                          tr={tr}
                         >
-                          <View
-                            style={[
-                              styles.listeningDot,
-                              {
-                                // Amber while the microphone hears a voice.
-                                backgroundColor:
-                                  snapshot.liveStatus !== "on"
-                                    ? colors.muted
-                                    : inputLevel > 0.04
-                                      ? colors.amber
-                                      : colors.timestamp,
-                              },
-                            ]}
-                          />
-                          <Text
-                            testID="voice-connection-status"
-                            maxFontSizeMultiplier={1.6}
-                            style={{
-                              flex: 1,
-                              color: colors.text,
-                              fontSize: 14,
-                              fontWeight: "600",
-                            }}
-                          >
-                            {snapshot.liveStatus === "on"
-                              ? tr(
-                                  "正在聆听 · 直接开口就好",
-                                  "Listening · just speak",
-                                )
-                              : snapshot.liveStatus === "connecting"
-                                ? tr("正在连接…", "Connecting…")
-                                : tr("麦克风已关闭", "Microphone is off")}
-                          </Text>
-                          {snapshot.liveStatus === "on" && (
-                            <View
-                              testID="microphone-level"
-                              accessibilityLabel={tr(
-                                "麦克风音量",
-                                "Microphone activity",
-                              )}
-                              style={{
-                                flexDirection: "row",
-                                height: 22,
-                                alignItems: "center",
-                                gap: 3,
-                              }}
-                            >
-                              {[0.65, 1, 0.8, 0.5].map((scale, i) => (
-                                <View
-                                  key={i}
-                                  style={{
-                                    width: 3,
-                                    borderRadius: 2,
-                                    height: Math.max(
-                                      4,
-                                      Math.min(22, inputLevel * 160 * scale),
-                                    ),
-                                    backgroundColor:
-                                      inputLevel > 0.04
-                                        ? colors.amber
-                                        : colors.timestamp,
-                                  }}
-                                />
-                              ))}
-                            </View>
-                          )}
                           {button(
                             snapshot.liveStatus !== "off"
                               ? tr("关闭", "Stop")
@@ -2088,7 +1937,7 @@ function Main() {
                             "toggle-conversation",
                             true,
                           )}
-                        </View>
+                        </ListeningIndicator>
                       ) : !composerOpen ? (
                         <View style={{ flex: 1 }}>
                           {button(
@@ -3029,18 +2878,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 1,
   },
-  listeningPill: {
-    flex: 1,
-    minHeight: 52,
-    borderRadius: 26,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    paddingLeft: 18,
-    paddingRight: 4,
-    paddingVertical: 4,
-  },
-  listeningDot: { width: 10, height: 10, borderRadius: 5 },
   resumeBar: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -3074,11 +2911,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 14,
     elevation: 6,
-  },
-  timeRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: -6,
   },
   tabs: { flexDirection: "row", borderTopWidth: StyleSheet.hairlineWidth },
   cardTitle: { fontSize: 17, lineHeight: 24 },

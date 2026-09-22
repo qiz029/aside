@@ -11,10 +11,11 @@
   },
   "dependencies": {
     "@aside/engine": "*",
+    "@aside/player-runtime": "*",
     "@ricky0123/vad-web": "^0.0.30",
+    "@tanstack/react-virtual": "^3.14.13",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "@aside/player-runtime": "*"
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "vite": "^7.0.0"

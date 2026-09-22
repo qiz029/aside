@@ -132,7 +132,7 @@ test("a failed session transition does not poison subsequent attempts", async ()
   });
   await assert.rejects(c.record(Symbol()), /interrupted/);
   await c.playPodcast();
-  assert.deepEqual(active, [true]);
+  assert.deepEqual(active, [false, true]);
 });
 
 test("follow-up capture stops the live audio unit before changing the native session", async () => {
@@ -332,4 +332,48 @@ test("late continuous cleanup cannot close a replacement microphone", async () =
   events.length = 0;
   await c.finishQuestion(old);
   assert.deepEqual(events, []);
+});
+
+test("denied voice focus releases the lease and allows an explicit playback retry", async () => {
+  let denied = true;
+  let input = false,
+    answer = false,
+    focus = false,
+    active = false;
+  const c = new AudioSessionCoordinator({
+    configure: async () => {},
+    activate: async (value) => {
+      active = value;
+    },
+    enableInput: async (value) => {
+      input = value;
+    },
+    enableAnswer: async (value) => {
+      answer = value;
+    },
+    enableFocus: async (value) => {
+      if (value && denied) throw Error("focus denied");
+      focus = value;
+    },
+  });
+  const owner = Symbol();
+  await assert.rejects(c.listen(owner), /focus denied/);
+  assert.deepEqual(
+    { input, answer, focus, active },
+    { input: false, answer: false, focus: false, active: false },
+  );
+  denied = false;
+  await c.playPodcast();
+  assert.equal(active, true);
+  await c.listen(Symbol());
+  assert.deepEqual(
+    { input, answer, focus },
+    { input: true, answer: true, focus: true },
+  );
+  await c.finishQuestion(owner);
+  assert.equal(
+    input,
+    true,
+    "failed owner's late cleanup cannot disable the new microphone",
+  );
 });

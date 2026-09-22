@@ -53,3 +53,21 @@ else if (!moduleSource.includes(routeAfter))
     "Review the expo-audio Bluetooth route options after upgrading the SDK.",
   );
 await writeFile(modulePath, moduleSource);
+
+// SDK 54's ExoPlayer does not opt into headset-unplug handling by default.
+// Keep this in native code so a sleeping JS runtime cannot leak audio to speaker.
+const androidPlayerPath = join(
+  dirname(path),
+  "../android/src/main/java/expo/modules/audio/AudioPlayer.kt",
+);
+let androidPlayer = await readFile(androidPlayerPath, "utf8");
+const noisyBefore = "    .setAudioAttributes(AudioAttributes.DEFAULT, false)";
+const noisyAfter = noisyBefore + "\n    .setHandleAudioBecomingNoisy(true)";
+if (!androidPlayer.includes(noisyAfter)) {
+  if (!androidPlayer.includes(noisyBefore))
+    throw Error(
+      "Review Android headset-unplug handling after upgrading expo-audio.",
+    );
+  androidPlayer = androidPlayer.replace(noisyBefore, noisyAfter);
+}
+await writeFile(androidPlayerPath, androidPlayer);

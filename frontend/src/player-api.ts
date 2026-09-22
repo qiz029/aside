@@ -1,3 +1,4 @@
+import { resumableUpload } from "./resumable-upload";
 import { CheckpointConflict } from "@aside/player-runtime/checkpoint-sync";
 import { configureTrial, trialFetch } from "./trial-access";
 import type {
@@ -31,6 +32,8 @@ export interface SpacePage {
 }
 export interface UploadOptions {
   title: string;
+  owner: string;
+  resumeId?: string;
   signal?: AbortSignal;
   onStarted?: (id: string) => void;
   onProgress?: (
@@ -95,7 +98,10 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     const error = errorSchema.safeParse(body);
     throw Object.assign(
       Error(error.success ? error.data.error : response.statusText),
-      { code: typeof body?.code === "string" ? body.code : undefined },
+      {
+        code: typeof body?.code === "string" ? body.code : undefined,
+        status: response.status,
+      },
     );
   }
   return response.json();
@@ -118,18 +124,20 @@ async function whenFree<T>(run: () => Promise<T>, signal?: AbortSignal) {
     }
 }
 export const playerBackend: PlayerBackend = {
-  async question(id, request, signal, progress) {
+  async question(id, request, signal, progress, onAnswer) {
     const result = await readQuestion(
       await trialFetch(`/api/episodes/${id}/question`, {
         ...json(request),
         headers: {
           "Content-Type": "application/json",
           Accept: "application/x-ndjson",
+          ...(onAnswer ? { "X-Aside-Answer-Stream": "1" } : {}),
         },
         signal,
       }),
       progress,
       request.revision,
+      onAnswer,
     );
     return result;
   },
@@ -204,46 +212,28 @@ export const episodeLibrary = {
     const health = await episodeLibrary.health();
     if (health.uploadsEnabled === false) throw Error("当前仅开放示例节目试听");
     if (health.uploadMode === "multipart") {
-      const upload = await api<{ id: string; partSize: number }>("/uploads", {
-        ...json({
-          title: (options?.title || file.name.replace(/\.[^.]+$/, ""))
-            .trim()
-            .slice(0, 200),
-          size: file.size,
-        }),
-        signal: options?.signal,
-      });
-      options?.onStarted?.(upload.id);
-      const parts: { partNumber: number; etag: string }[] = [];
-      try {
-        for (let offset = 0; offset < file.size; offset += upload.partSize) {
-          const partNumber = parts.length + 1;
-          parts.push(
-            await api(`/uploads/${upload.id}/part?number=${partNumber}`, {
-              method: "PUT",
-              body: file.slice(offset, offset + upload.partSize),
-              signal: options?.signal,
-            }),
-          );
-          options?.onProgress?.(
-            Math.min(offset + upload.partSize, file.size),
-            file.size,
-            "uploading",
-          );
-        }
-        options?.signal?.throwIfAborted();
-      } catch (error) {
-        await api(`/uploads/${upload.id}`, { method: "DELETE" }).catch(
-          () => {},
+      if (!options?.owner) throw Error("请先登录后上传");
+      const run = () =>
+        resumableUpload<Episode>(file, { ...options, request: api });
+      if (navigator.locks)
+        return navigator.locks.request(
+          `aside.upload.${options.owner}`,
+          { ifAvailable: true },
+          (lock) => {
+            if (!lock) throw Error("另一个标签页正在上传，请等待完成后重试");
+            return run();
+          },
         );
-        throw error;
-      }
-      // Do not abort after completion starts: the server may already be analyzing.
-      options?.onProgress?.(file.size, file.size, "processing");
-      return api<Episode>(`/uploads/${upload.id}/complete`, json({ parts }));
+      return run();
     }
+
+    options?.onProgress?.(0, file.size, "uploading");
     const body = new FormData();
     body.append("audio", file);
-    return api<Episode>("/episodes", { method: "POST", body });
+    return api<Episode>("/episodes", {
+      method: "POST",
+      body,
+      signal: options?.signal,
+    });
   },
 };

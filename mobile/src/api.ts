@@ -1,6 +1,6 @@
-import { NativeModules, Platform } from "react-native";
+import { NativeModules, Platform, PermissionsAndroid } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { sendRemainingParts, type UploadJournal } from "./upload-journal";
+import { type UploadJournal } from "./upload-journal";
 import Constants from "expo-constants";
 import * as SecureStore from "expo-secure-store";
 import { File } from "expo-file-system";
@@ -240,8 +240,7 @@ export class MobileApi implements PlayerBackend {
     key: string,
     token: string | null,
   ) {
-    if (Platform.OS === "ios")
-      await NativeModules.AsideUpload.cancel(journal.id);
+    await NativeModules.AsideUpload.cancel(journal.id);
     // Clear only this account's journal. A late cancellation cannot erase a replacement.
     const stored = await AsyncStorage.getItem(key);
     if (stored && JSON.parse(stored).id === journal.id)
@@ -427,66 +426,63 @@ export class MobileApi implements PlayerBackend {
     }
     try {
       checkCancelled(signal);
-      if (Platform.OS === "ios") {
-        await NativeModules.AsideUpload.start(
+      if (Platform.OS === "android" && Number(Platform.Version) >= 33) {
+        // Denying notification permission does not prevent an explicitly started transfer.
+        await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+        );
+        checkCancelled(signal);
+      }
+      const saved = await NativeModules.AsideUpload.status(journal.id);
+      if (saved.state === "cancelled") {
+        await this.discardUpload(journal, key, token);
+        throw Error(
+          "上传已取消，请重新选择音频 / Upload cancelled. Choose the audio file again.",
+        );
+      }
+      checkCancelled(signal);
+      if (this.token !== token) throw Error("Account changed during upload");
+      if (saved.state !== "done") {
+        const args = [
           journal.id,
           this.base,
           token,
           file.uri,
           file.size,
           journal.partSize,
-        );
-        while (true) {
-          checkCancelled(signal);
-          if (this.token !== token)
-            throw Error("Account changed during upload");
-          const status = await NativeModules.AsideUpload.status(journal.id);
-          if (status.state === "done") break;
-          if (status.state === "paused" || status.state === "missing")
-            throw Error(
-              "上传已暂停，重试将从已保存的进度继续 / Upload paused. Retry to resume saved progress.",
-            );
-          onProgress(
-            status.progress,
-            status.state === "processing" ? "processing" : "uploading",
-          );
-          await new Promise((resolve) => setTimeout(resolve, 750));
-        }
-      } else {
-        const handle = new File(file.uri).open();
-        try {
-          await sendRemainingParts(
-            journal,
-            async (number, offset, length) => {
-              checkCancelled(signal);
-              handle.offset = offset;
-              return this.request<{ etag: string }>(
-                `/uploads/${journal!.id}/part?number=${number}`,
-                {
-                  method: "PUT",
-                  headers: { "Content-Type": "application/octet-stream" },
-                  body: handle.readBytes(length) as unknown as BodyInit,
-                  signal,
-                },
-              );
-            },
-            (value) => AsyncStorage.setItem(key, JSON.stringify(value)),
-            (value) => onProgress(value, "uploading"),
-          );
-        } finally {
-          handle.close();
-        }
+        ];
+        if (Platform.OS === "android") args.push(JSON.stringify(journal.parts));
+        await NativeModules.AsideUpload.start(...args);
+      }
+      while (true) {
         checkCancelled(signal);
-        onProgress(1, "processing");
-        await this.json(`/uploads/${journal.id}/complete`, {
-          parts: journal.parts,
-        });
+        if (this.token !== token) throw Error("Account changed during upload");
+        const status = await NativeModules.AsideUpload.status(journal.id);
+        if (status.state === "done") break;
+        if (status.state === "cancelled") {
+          await this.discardUpload(journal, key, token);
+          throw Error(
+            "上传已取消，请重新选择音频 / Upload cancelled. Choose the audio file again.",
+          );
+        }
+        if (status.state === "paused" || status.state === "missing")
+          throw Error(
+            "上传已暂停，重试将从已保存的进度继续 / Upload paused. Retry to resume saved progress.",
+          );
+        onProgress(
+          status.progress,
+          status.state === "processing" ? "processing" : "uploading",
+        );
+        await new Promise((resolve) => setTimeout(resolve, 750));
       }
       if (this.token !== token) throw Error("Account changed during upload");
       const result = await this.episode(journal.id);
-      if (Platform.OS === "ios")
-        await NativeModules.AsideUpload.cancel(journal.id);
-      await AsyncStorage.removeItem(key);
+      checkCancelled(signal);
+      if (this.token !== token) throw Error("Account changed during upload");
+      await NativeModules.AsideUpload.cancel(journal.id);
+      const stored = await AsyncStorage.getItem(key);
+      if (stored && JSON.parse(stored).id === journal.id)
+        await AsyncStorage.removeItem(key);
       return result;
     } catch (error) {
       // Network errors retain the journal and acknowledged parts. Explicit cancel discards it.

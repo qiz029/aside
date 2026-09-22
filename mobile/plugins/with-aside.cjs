@@ -87,6 +87,19 @@ module.exports = function (config) {
     if (process.env.ASIDE_TEST_API === "1")
       app.$["android:usesCleartextTraffic"] = "true";
     else delete app.$["android:usesCleartextTraffic"];
+    app.service ??= [];
+    const uploadService = "com.aside.audio.AsideUploadService";
+    app.service = app.service.filter(
+      (service) => service.$["android:name"] !== uploadService,
+    );
+    app.service.push({
+      $: {
+        "android:name": uploadService,
+        "android:exported": "false",
+        "android:foregroundServiceType": "dataSync",
+        "android:stopWithTask": "false",
+      },
+    });
     return config;
   });
   config = withMainApplication(config, (config) => {
@@ -97,6 +110,9 @@ module.exports = function (config) {
       "AsidePcmQueue.java",
       "AsideAudioPipeline.java",
       "AsideAudioPackage.java",
+      "AsideUploadModule.java",
+      "AsideUploadService.java",
+      "AsideUploadTransfer.java",
     ])
       fs.copyFileSync(
         path.join(__dirname, "../native/android", file),

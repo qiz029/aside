@@ -1,3 +1,4 @@
+import { selectStore, selectPlayerScreen, samePlayerScreen } from "../mobile/src/session-selection.js";
 import { pendingDecisionMs } from "../player-runtime/src/conversation";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -3582,3 +3583,37 @@ for (const drained of [false, true]) {
     assert.equal(s.audio.playing, drained);
   });
 }
+
+// Real runtime snapshots allocate history arrays on every tick. The mobile selector
+// must suppress those renders without hiding newly accepted questions or controls.
+test("mobile screen updates on passage boundaries and semantic changes, not playback ticks", () => {
+  const s = setup();
+  const screen = selectStore(
+    s.session.getSnapshot,
+    (value) => selectPlayerScreen(value, episode.analysis!.passages),
+    samePlayerScreen,
+  );
+  const initial = screen();
+  for (let ms = 31250; ms < 40000; ms += 250) {
+    s.audio.positionMs = ms;
+    s.session.audioTick();
+    assert.equal(screen(), initial);
+    assert.equal(
+      s.session.getSnapshot().state.positionMs,
+      ms,
+      "timeline still sees every tick",
+    );
+  }
+  s.audio.positionMs = 40000;
+  s.session.audioTick();
+  const next = screen();
+  assert.notEqual(next, initial);
+  assert.equal(next.passageIndex, 1);
+  s.session.setQuestion("A new question");
+  assert.equal(screen().question, "A new question");
+  assert.notEqual(screen(), next);
+  const draft = screen();
+  s.session.setPlaybackRate(1.5);
+  assert.notEqual(screen(), draft);
+  s.session.dispose();
+});

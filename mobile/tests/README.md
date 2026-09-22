@@ -87,7 +87,7 @@ Native CI builds are a separate manually dispatched workflow. Its APK uses an ep
 
 To make cancellation observable, run the fixture with `PORT=4313`, then `node mobile/tests/upload-proxy.mjs` on port 4311. Point installed validation binaries at 4311 (and reverse that port on Android). Create the switch file printed by the proxy to delay each upload part for 20 seconds. The proxy consumes request bodies, preserves bearer headers and strips already-decoded compression headers; it contains no production behavior.
 
-Copy `Aside-upload.wav` into Android Downloads / iOS app Documents. Run `upload-background-android.yaml`, or open iOS Files to the app's Documents folder and run `upload-background-ios.yaml` on an iPhone 16 Pro. Accept AI consent before choosing the file. Pressing Home must not cancel the upload. On iOS, confirm subsequent parts and completion arrive while backgrounded. For a simulated network failure, verify Retry reuses the same upload ID and skips acknowledged parts; remove the switch file and run `upload-retry.yaml`. The selected file should finish real media analysis and open its transcript. Do not run simultaneous UI flows on one device.
+Copy `Aside-upload.wav` into Android Downloads / iOS app Documents. Run `upload-background-android.yaml`, or open iOS Files to the app's Documents folder and run `upload-background-ios.yaml` on an iPhone 16 Pro. Accept AI consent before choosing the file. Pressing Home must not cancel the upload. On both platforms, confirm subsequent parts and completion arrive while backgrounded. On Android also inspect the active `AsideUploadService` and its notification; canceling from that notification must stop subsequent part requests. For a simulated network failure, verify Retry reuses the same upload ID and skips acknowledged parts; remove the switch file and run `upload-retry.yaml`. The selected file should finish real media analysis and open its transcript. Do not run simultaneous UI flows on one device.
 
 `permission-denied.yaml` explicitly sets `launchApp.permissions.all: deny`: Maestro otherwise grants permissions at launch. `cancel-capture.yaml` and `background-question.yaml` verify cancellation, and reopening must leave the episode paused. For the 30-second cap, retain native recorder start/stop timestamps and read the checkpoint before/after; a previously rendered answer is insufficient evidence of a newly completed turn.
 
@@ -102,5 +102,39 @@ voice/upload flows must first complete the consent screen using
 Files, canceling deletion, and deleting a disposable test account.
 The iOS background upload flow now expects continued transfer, not cancellation.
 Retain server evidence of part/completion requests while the app is backgrounded;
-the screenshot alone does not establish background execution. Android retains
-resumable progress but does not claim system background execution.
+the screenshot alone does not establish background execution.
+Android uses a user-started `dataSync` foreground service with a bounded native
+file stream, a cancelable notification and an atomic journal in no-backup storage.
+It retries transient failures twice, then retains acknowledged parts for an
+explicit retry. Android 15+ service timeouts pause the transfer. An OS process
+kill/force-stop requires reopening Aside and retrying; the journal deliberately
+contains no bearer token. Denying notification permission does not prevent upload.
+
+## Android P1 regression checks
+
+`npm test` includes native Java upload-policy and microphone-reuse tests, mobile
+API handoff/recovery tests, audio-focus failure cleanup and a real runtime selector
+regression. Java 17+ and the existing C compiler are required for native tests.
+`npm run check` covers shared, Cloudflare and native TypeScript boundaries.
+After `expo prebuild --platform android --no-install`, compile with
+`./gradlew :app:compileDebugJavaWithJavac` inside `mobile/android`; run
+`expo export --platform android` inside `mobile` to verify the production JS bundle.
+
+The selector regression requires every 250 ms position update to reach the
+playback timeline while the rest of the page updates only on passage/semantic
+changes. Microphone and recording timers live in their own components.
+This verifies update isolation, not device frame rate or battery consumption.
+
+Before physical-device sign-off, record model/Android version and check:
+- Bluetooth earphones and car audio: connect, disconnect and switch output while
+  listening and while a reply is playing; unplugging must pause before speaker output.
+- Phone call: interrupt an answer, end the call, confirm microphone/answer remain
+  stopped, then explicitly continue and verify the resume anchor and output route.
+- Lock for at least 30 minutes during playback; compare actual positions and test
+  lock-screen pause/play/seek, then reopen without a duplicate audio stream.
+- Upload through Home/lock; verify server part/completion timestamps while the UI
+  is backgrounded. Repeat with notification cancellation, network loss/retry and
+  a process restart; acknowledged parts must not be retransmitted.
+
+Unit tests/native compilation do not establish physical Bluetooth routing,
+long-lock playback, OEM battery policy behavior or audible quality.

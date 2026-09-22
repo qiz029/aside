@@ -1,6 +1,17 @@
+import {
+  selectStore,
+  selectPlayerScreen,
+  samePlayerScreen,
+} from "@aside/player-runtime/session-selection";
 import { CheckpointSync } from "@aside/player-runtime/checkpoint-sync";
 import { requestMicrophonePermission } from "./microphone";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { Episode } from "@aside/engine/core";
 import type { PlayerCommand, PlayerConfig } from "@aside/engine/player";
 import { ListeningSession, type ListeningMode } from "./listening-session";
@@ -54,11 +65,18 @@ export function usePlayerController() {
   );
   const save = () =>
     selected.current ? sync.save(session.checkpoint()) : Promise.resolve();
-  const snapshot = useSyncExternalStore(session.subscribe, session.getSnapshot);
+  const screen = useMemo(
+    () =>
+      selectStore(session.getSnapshot, selectPlayerScreen, samePlayerScreen),
+    [session],
+  );
+  const snapshot = useSyncExternalStore(session.subscribe, screen);
   useEffect(() => {
     savePlayerConfig(snapshot.playerConfig);
   }, [snapshot.playerConfig]);
   const [episodes, setEpisodes] = useState<Episode[]>([]);
+  const latestEpisodes = useRef(episodes);
+  latestEpisodes.current = episodes;
   const [episodesLoading, setEpisodesLoading] = useState(true);
   const [episode, setEpisode] = useState<Episode>();
   const [uploadsEnabled, setUploadsEnabled] = useState(false);
@@ -164,46 +182,59 @@ export function usePlayerController() {
       void save().catch(() => {});
       session.stop();
     };
+    let polling = false;
+    const pollLibrary = async (force = false) => {
+      if (disposed || polling || document.hidden) return;
+      const processing = (item: Episode) =>
+        item.status === "queued" || item.status === "analyzing";
+      const current = selected.current;
+      if (
+        !force &&
+        !latestEpisodes.current.some(processing) &&
+        !(current && processing(current))
+      )
+        return;
+      polling = true;
+      try {
+        const list = await episodeLibrary.list();
+        if (disposed) return;
+        setEpisodes(list);
+        if (current && processing(current)) {
+          const next = await episodeLibrary.get(current.id);
+          if (disposed || selected.current?.id !== next.id) return;
+          selected.current = next;
+          session.updateEpisode(next);
+          setEpisode(next);
+        }
+      } catch {
+      } finally {
+        polling = false;
+      }
+    };
     const visible = () => {
-      if (document.visibilityState === "visible")
+      if (!document.hidden) {
         void sync.refresh().catch(() => {});
+        void pollLibrary(true);
+      }
     };
     document.addEventListener("visibilitychange", visible);
+    window.addEventListener("online", visible);
     window.addEventListener("pagehide", pagehide);
-    const poll = window.setInterval(() => {
-      void episodeLibrary
-        .list()
-        .then((list) => {
-          if (!disposed) {
-            setEpisodes(list);
-            setEpisodesLoading(false);
-          }
-        })
-        .catch(() => {});
-      const current = selected.current;
-      if (current && current.status !== "ready")
-        void episodeLibrary
-          .get(current.id)
-          .then((next) => {
-            if (disposed || selected.current?.id !== next.id) return;
-            selected.current = next;
-            session.updateEpisode(next);
-            setEpisode(next);
-          })
-          .catch(() => {});
-    }, 2500);
+    const poll = window.setInterval(() => void pollLibrary(), 5000);
     const checkpoint = window.setInterval(() => {
       void save().catch(() => {});
     }, 15000);
-    let previous = session.getSnapshot();
+    let previousMode = session.getSnapshot().state.mode;
+    let previousHistory = session.checkpoint().history;
     const unsubscribe = session.subscribe(() => {
       const next = session.getSnapshot();
       if (
-        next.state.mode !== previous.state.mode ||
-        next.history !== previous.history
+        next.state.mode !== previousMode ||
+        session.checkpoint().history !== previousHistory
       )
         void save().catch(() => {});
-      previous = next;
+      previousMode = next.state.mode;
+      previousHistory = session.checkpoint().history;
     });
     return () => {
       disposed = true;
@@ -211,6 +242,7 @@ export function usePlayerController() {
       clearInterval(poll);
       clearInterval(checkpoint);
       window.removeEventListener("pagehide", pagehide);
+      window.removeEventListener("online", visible);
       document.removeEventListener("visibilitychange", visible);
       unsubscribe();
       session.dispose();
@@ -218,6 +250,7 @@ export function usePlayerController() {
   }, [session]);
   return {
     ...snapshot,
+    session,
     checkpointConflict: sync.conflict !== undefined,
     keepLocalCheckpoint: () => {
       void sync

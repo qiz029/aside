@@ -8,6 +8,12 @@ type MobileApi = Required<
   token: string | null;
   accountId: string | null;
   cancelUpload(): Promise<void>;
+  upload(
+    file: { uri: string; name: string; mimeType: string; size: number },
+    signal: AbortSignal,
+    progress: (value: number, phase: "uploading" | "processing") => void,
+  ): Promise<unknown>;
+  request<T>(path: string, init?: RequestInit): Promise<T>;
   onExpired?: () => void;
   restore(): Promise<void>;
 };
@@ -18,12 +24,17 @@ import { createPlayerConfig } from "@aside/engine/player";
 async function fixture(
   fetcher: typeof fetch,
   storage = new Map<string, string>(),
+  native = {
+    cancel: async (_id: string) => {},
+    start: async (..._args: unknown[]) => {},
+    status: async (_id: string) => ({ state: "missing", progress: 0 }),
+  },
 ) {
   const key = `mobileApi_${crypto.randomUUID()}`;
   const global = globalThis as unknown as Record<string, unknown>;
-  global[key] = { fetcher, storage };
+  global[key] = { fetcher, storage, native };
   const modules: Record<string, string> = {
-    "react-native": 'export const Platform={OS:"android"}, NativeModules={};',
+    "react-native": `export const Platform={OS:"android",Version:33}, PermissionsAndroid={PERMISSIONS:{POST_NOTIFICATIONS:"notifications"},request:async()=>"denied"}, NativeModules={AsideUpload:globalThis[${JSON.stringify(key)}].native};`,
     "@react-native-async-storage/async-storage": `const store = globalThis[${JSON.stringify(key)}].storage; export default {getItem:async(key)=>store.get(key)??null,setItem:async(key,value)=>{store.set(key,value)},removeItem:async(key)=>{store.delete(key)}};`,
     "expo-constants":
       'export default {expoConfig:{extra:{apiUrl:"https://api.example.com"}}};',
@@ -325,4 +336,172 @@ test("late cancellation cleans the old account without removing another account'
   await cancelling;
   assert.equal(storage.has("aside.upload.account-a"), false);
   assert.equal(storage.has("aside.upload.account-b"), true);
+});
+
+const uploadFile = {
+  uri: "file:///saved-audio",
+  name: "audio.mp3",
+  mimeType: "audio/mpeg",
+  size: 20,
+};
+test("Android upload delegates bytes and saved parts to native even when notifications are denied", async () => {
+  const storage = new Map<string, string>();
+  const journal = {
+    id: "upload-id",
+    partSize: 8,
+    file: uploadFile,
+    parts: [{ partNumber: 1, etag: "first" }],
+  };
+  storage.set("aside.upload.account", JSON.stringify(journal));
+  const calls: unknown[][] = [],
+    cancelled: string[] = [];
+  let state = "paused";
+  const api = await fixture(
+    async () => {
+      throw Error("unexpected stream");
+    },
+    storage,
+    {
+      start: async (...args) => {
+        calls.push(args);
+        state = "done";
+      },
+      status: async () => ({ state, progress: 1 }),
+      cancel: async (id) => {
+        cancelled.push(id);
+      },
+    },
+  );
+  api.accountId = "account";
+  const episode = { id: journal.id };
+  api.request = async <T>(path: string): Promise<T> => {
+    assert.equal(
+      path,
+      "/episodes/upload-id",
+      "JS must not read or send upload bytes",
+    );
+    return episode as T;
+  };
+  assert.equal(
+    await api.upload(uploadFile, new AbortController().signal, () => {}),
+    episode,
+  );
+  assert.deepEqual(calls, [
+    [
+      journal.id,
+      "https://api.example.com",
+      "a-long-lived-secret",
+      uploadFile.uri,
+      20,
+      8,
+      JSON.stringify(journal.parts),
+    ],
+  ]);
+  assert.deepEqual(cancelled, [journal.id]);
+  assert.equal(storage.has("aside.upload.account"), false);
+});
+test("a native completed upload restores after process restart without reuploading", async () => {
+  const storage = new Map([
+    [
+      "aside.upload.account",
+      JSON.stringify({
+        id: "completed",
+        partSize: 8,
+        file: uploadFile,
+        parts: [],
+      }),
+    ],
+  ]);
+  const api = await fixture(
+    async () => {
+      throw Error("unexpected stream");
+    },
+    storage,
+    {
+      start: async () => {
+        throw Error("must not restart completed transfer");
+      },
+      status: async () => ({ state: "done", progress: 1 }),
+      cancel: async () => {},
+    },
+  );
+  api.accountId = "account";
+  api.request = async <T>(): Promise<T> => ({ id: "completed" }) as T;
+  await api.upload(uploadFile, new AbortController().signal, () => {});
+  assert.equal(storage.size, 0);
+});
+test("native upload failure retains the journal for explicit retry", async () => {
+  const value = JSON.stringify({
+    id: "paused",
+    partSize: 8,
+    file: uploadFile,
+    parts: [],
+  });
+  const storage = new Map([["aside.upload.account", value]]);
+  let starts = 0;
+  const api = await fixture(
+    async () => {
+      throw Error("unexpected stream");
+    },
+    storage,
+    {
+      start: async () => {
+        starts++;
+      },
+      status: async () => ({ state: "paused", progress: 0.4 }),
+      cancel: async () => {
+        throw Error("failure must not cancel the saved upload");
+      },
+    },
+  );
+  api.accountId = "account";
+  await assert.rejects(
+    api.upload(uploadFile, new AbortController().signal, () => {}),
+    /Upload paused/,
+  );
+  assert.equal(starts, 1);
+  assert.equal(storage.get("aside.upload.account"), value);
+});
+
+test("cancelling during native handoff stops the transfer and removes only its journal", async (t) => {
+  const storage = new Map([
+    [
+      "aside.upload.account",
+      JSON.stringify({
+        id: "cancel-me",
+        partSize: 8,
+        file: uploadFile,
+        parts: [],
+      }),
+    ],
+  ]);
+  const abort = new AbortController();
+  const cancelled: string[] = [];
+  t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
+    assert.equal(url, "https://api.example.com/api/uploads/cancel-me");
+    assert.equal(init.method, "DELETE");
+    return new Response("{}", { status: 200 });
+  });
+  const api = await fixture(
+    async () => {
+      throw Error("unexpected stream");
+    },
+    storage,
+    {
+      start: async () => {
+        abort.abort();
+      },
+      status: async () => ({ state: "uploading", progress: 0 }),
+      cancel: async (id) => {
+        cancelled.push(id);
+      },
+    },
+  );
+  api.accountId = "account";
+  await assert.rejects(
+    api.upload(uploadFile, abort.signal, () => {}),
+    { name: "AbortError" },
+  );
+  assert.deepEqual(cancelled, ["cancel-me"]);
+  assert.equal(storage.size, 0);
 });

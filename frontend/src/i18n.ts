@@ -275,6 +275,14 @@ export const english: Record<string, string> = {
   上传已取消: "Upload cancelled",
   "上传完成，正在启动自动分析…": "Upload complete. Starting analysis…",
   我的音频: "My audio",
+  "上传中断，可继续上传": "Upload interrupted. You can resume it.",
+  继续上传: "Resume upload",
+  请选择上次上传的同一个音频文件:
+    "Select the same audio file to resume uploading.",
+  "浏览器无法保存上传进度，请允许网站存储后重试":
+    "Allow website storage to save upload progress, then try again.",
+  "另一个标签页正在上传，请等待完成后重试":
+    "Another tab is uploading. Wait for it to finish, then try again.",
   "上传中断，可取消后重新上传":
     "Upload interrupted. Cancel and choose the file again.",
   正在检查音频: "Checking audio",

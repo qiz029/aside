@@ -1,3 +1,4 @@
+import { readUpload, forgetUpload } from "./resumable-upload";
 import { LibraryDrawer } from "./LibraryDrawer";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Episode } from "@aside/engine/core";
@@ -73,6 +74,10 @@ export function Space({
   const [busyId, setBusyId] = useState("");
   const [uploadEnabled, setUploadEnabled] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const uploadEpoch = useRef(0);
+  const resumeTarget = useRef<string | undefined>(undefined);
+  const lastFile = useRef<{ id: string; file: File } | null>(null);
+  const cancelRequested = useRef(false);
   const controller = useRef<AbortController | null>(null);
   const uploadBusy = useRef(false);
   const input = useRef<HTMLInputElement>(null);
@@ -104,6 +109,13 @@ export function Space({
   }, []);
   useEffect(() => {
     let active = true;
+    setUser(undefined);
+    setError("");
+    setProgress(null);
+    setChecking(false);
+    setActiveUploadId("");
+    setPage(undefined);
+    setEpisodes([]);
     loadedPages.current = 1;
     refreshVersion.current++;
     void fetch("/api/auth/session")
@@ -120,16 +132,42 @@ export function Space({
       .catch(() => active && setError(t("请求失败，请重试")));
     return () => {
       active = false;
+      refreshVersion.current++;
+      uploadEpoch.current++;
+      controller.current?.abort();
+      controller.current = null;
+      uploadBusy.current = false;
+      lastFile.current = null;
+      resumeTarget.current = undefined;
     };
   }, [accountVersion]);
+  const processing = episodes.some(
+    (item) => item.status === "queued" || item.status === "analyzing",
+  );
   useEffect(() => {
     if (!user) return;
-    const timer = window.setInterval(
-      () => void refresh().catch(() => {}),
-      5000,
-    );
-    return () => clearInterval(timer);
-  }, [user?.id]);
+    let polling = false;
+    const poll = async () => {
+      if (document.hidden || polling) return;
+      polling = true;
+      try {
+        await refresh();
+      } catch {
+      } finally {
+        polling = false;
+      }
+    };
+    const timer = processing
+      ? window.setInterval(() => void poll(), 5000)
+      : undefined;
+    document.addEventListener("visibilitychange", poll);
+    window.addEventListener("online", poll);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", poll);
+      window.removeEventListener("online", poll);
+    };
+  }, [user?.id, processing]);
   useEffect(() => {
     if (
       !user ||
@@ -144,50 +182,85 @@ export function Space({
     if (first) onOpen(first.id, false);
   }, [user?.id, page, episodes, player]);
 
-  async function choose(file?: File) {
-    if (!file || uploadBusy.current) return;
+  async function choose(file?: File, resumeId?: string) {
+    if (!file || uploadBusy.current || !user) return;
+    const owner = user.id;
+    const epoch = ++uploadEpoch.current;
+    const current = () => epoch === uploadEpoch.current;
+    const abort = new AbortController();
+    controller.current = abort;
+    cancelRequested.current = false;
     uploadBusy.current = true;
     setError("");
     setUploadName(file.name);
     setChecking(true);
-    let started = false;
+    setPhase("uploading");
+    let uploadId = resumeId ?? "";
     try {
       if (file.size < 44 || file.size > MAX_UPLOAD_BYTES)
         throw Error(t("音频文件需小于 1 GiB"));
       const length = await inspectDuration(file);
+      abort.signal.throwIfAborted();
       if (length !== null && length > MAX_AUDIO_DURATION_MS)
         throw Error(t("单个音频不能超过 5 小时"));
-      setChecking(false);
-      const abort = new AbortController();
-      controller.current = abort;
-      setProgress(0);
       setPhase("uploading");
-      started = true;
       await episodeLibrary.upload(file, {
+        owner,
+        resumeId,
         title: fileTitle(file.name),
         signal: abort.signal,
-        onStarted: setActiveUploadId,
+        onStarted: (id) => {
+          uploadId = id;
+          if (!current()) return;
+          lastFile.current = { id, file };
+          setActiveUploadId(id);
+          setChecking(false);
+        },
         onProgress: (bytes, total, nextPhase) => {
+          if (!current()) return;
+          setChecking(false);
           setProgress(Math.round((bytes / total) * 100));
           setPhase(nextPhase);
         },
       });
-      await refresh();
+      if (current()) {
+        lastFile.current = null;
+        await refresh();
+      }
     } catch (cause) {
-      setError(
-        controller.current?.signal.aborted
-          ? t("上传已取消")
-          : message(cause instanceof Error ? cause.message : String(cause)),
-      );
-      if (started) await refresh().catch(() => {});
+      if (!current()) return;
+      if (abort.signal.aborted && cancelRequested.current && uploadId) {
+        try {
+          await episodeLibrary.cancelUpload(uploadId);
+          forgetUpload(owner, uploadId);
+          lastFile.current = null;
+        } catch (cancelError) {
+          cause = cancelError;
+        }
+      }
+      if (!current()) return;
+      setError(message(cause instanceof Error ? cause.message : String(cause)));
+      if (uploadId) await refresh().catch(() => {});
     } finally {
-      controller.current = null;
-      uploadBusy.current = false;
-      setChecking(false);
-      setProgress(null);
-      setActiveUploadId("");
-      setUploadName("");
+      if (current()) {
+        controller.current = null;
+        uploadBusy.current = false;
+        setChecking(false);
+        setProgress(null);
+        setActiveUploadId("");
+        setUploadName("");
+      }
     }
+  }
+  function resume(id: string) {
+    if (uploadBusy.current) return;
+    if (lastFile.current?.id === id) {
+      void choose(lastFile.current.file, id);
+      return;
+    }
+    resumeTarget.current = id;
+    setError(t("请选择上次上传的同一个音频文件"));
+    input.current?.click();
   }
   async function act(id: string, action: "retry" | "delete" | "cancel") {
     if (
@@ -200,7 +273,11 @@ export function Space({
     try {
       if (action === "retry") await episodeLibrary.retry(id);
       if (action === "delete") await episodeLibrary.delete(id);
-      if (action === "cancel") await episodeLibrary.cancelUpload(id);
+      if (action === "cancel") {
+        await episodeLibrary.cancelUpload(id);
+        if (user) forgetUpload(user.id, id);
+        if (lastFile.current?.id === id) lastFile.current = null;
+      }
       if (action === "delete" && activeEpisodeId === id) {
         location.href = "/space";
         return;
@@ -249,14 +326,29 @@ export function Space({
               .map((item) => ({
                 id: item.id,
                 title: item.title,
-                meta: `${formatSize(item.size)} · ${t("上传中断，可取消后重新上传")}`,
+                meta: `${formatSize(item.size)} · ${t(readUpload(user.id, item.id) ? "上传中断，可继续上传" : "上传中断，可取消后重新上传")}`,
                 actions: (
-                  <button
-                    disabled={busyId === item.id}
-                    onClick={() => void act(item.id, "cancel")}
-                  >
-                    {t("取消")}
-                  </button>
+                  <>
+                    {readUpload(user.id, item.id) && (
+                      <button
+                        disabled={
+                          busyId === item.id ||
+                          checking ||
+                          progress !== null ||
+                          !uploadEnabled
+                        }
+                        onClick={() => resume(item.id)}
+                      >
+                        {t("继续上传")}
+                      </button>
+                    )}
+                    <button
+                      disabled={busyId === item.id}
+                      onClick={() => void act(item.id, "cancel")}
+                    >
+                      {t("取消")}
+                    </button>
+                  </>
                 ),
               })) ?? []),
             ...episodes.map((item) => ({
@@ -320,7 +412,10 @@ export function Space({
                 page.usedThisMonth >= page.monthlyLimit ||
                 page.usedStorage >= page.storageLimit
               }
-              onClick={() => input.current?.click()}
+              onClick={() => {
+                resumeTarget.current = undefined;
+                input.current?.click();
+              }}
               aria-describedby="space-upload-limit"
             >
               {t("选择音频")}
@@ -334,7 +429,9 @@ export function Space({
               onChange={(event) => {
                 const file = event.currentTarget.files?.[0];
                 event.currentTarget.value = "";
-                void choose(file);
+                const resumeId = resumeTarget.current;
+                resumeTarget.current = undefined;
+                void choose(file, resumeId);
               }}
             />
             <p id="space-upload-limit" className="space-sidebar-limit">
@@ -372,11 +469,14 @@ export function Space({
                   <span style={{ width: `${progress}%` }} />
                 </div>
               )}
-              {progress !== null && phase === "uploading" && (
+              {(checking || progress !== null) && phase === "uploading" && (
                 <button
                   type="button"
                   className="btn btn-quiet btn-sm"
-                  onClick={() => controller.current?.abort()}
+                  onClick={() => {
+                    cancelRequested.current = true;
+                    controller.current?.abort(new Error(t("上传已取消")));
+                  }}
                 >
                   {t("取消上传")}
                 </button>

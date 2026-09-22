@@ -72,6 +72,9 @@ const config: ExpoConfig = {
       "RECORD_AUDIO",
       "FOREGROUND_SERVICE",
       "FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+      "FOREGROUND_SERVICE_DATA_SYNC",
+      "POST_NOTIFICATIONS",
+      "WAKE_LOCK",
     ],
   },
   plugins: [

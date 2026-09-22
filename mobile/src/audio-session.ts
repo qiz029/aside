@@ -63,6 +63,27 @@ export class AudioSessionCoordinator {
           this.podcastPlaying
         )
           this.podcast?.resume();
+      })
+      .catch(async (error) => {
+        if (revision === this.revision) {
+          // A denied focus/category transition cannot retain a phantom voice lease.
+          this.owner = null;
+          this.continuousOwner = undefined;
+          this.podcastPlaying = false;
+          for (const release of [
+            () => this.native.enableAnswer?.(false),
+            () => this.native.enableInput?.(false),
+            () => this.native.enableFocus?.(false),
+            () => this.native.activate(false),
+          ]) {
+            try {
+              await release();
+            } catch {
+              /* Continue releasing the other units. */
+            }
+          }
+        }
+        throw error;
       });
     this.queue = operation;
     return operation;
