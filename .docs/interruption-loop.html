@@ -1,0 +1,789 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Aside 插话回路</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Serif+SC:wght@500;700&display=swap">
+<style>
+  :root {
+    --bg: #f6f1e8;
+    --surface: #efe8dc;
+    --panel: #fffbf4;
+    --fill: #efe9df;
+    --line: #e6ddcf;
+    --line-strong: #c9bca9;
+    --ink: #2b2520;
+    --ink-soft: #6b6157;
+    --ink-faint: #9a8f82;
+    --accent: #334d3d;
+    --accent-strong: #253f2d;
+    --olive: #4f7260;
+    --sage: #a9c2b3;
+    --sage-soft: #e3e9df;
+    --alert-bg: #f4e8de;
+    --alert-ink: #875944;
+    --user: #875944;
+    --user-soft: #f4e8de;
+    --tech: #334d3d;
+    --tech-soft: #e3e9df;
+    --live: #4a5a8a;
+    --live-soft: #e4e7f1;
+    --raise: 0 1px 2px #2b25201a, 0 3px 10px -4px #2b25201f;
+    --serif: "Noto Serif SC", Georgia, "PingFang SC", "Songti SC", serif;
+    --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #1b1916;
+      --surface: #23201c;
+      --panel: #2a2621;
+      --fill: #302b25;
+      --line: #3b3630;
+      --line-strong: #56504a;
+      --ink: #efe8dc;
+      --ink-soft: #b9afa2;
+      --ink-faint: #857b6f;
+      --accent: #9dbba9;
+      --accent-strong: #bcd3c4;
+      --olive: #8fb39f;
+      --sage: #4f6a5a;
+      --sage-soft: #2b352f;
+      --alert-bg: #3a2d24;
+      --alert-ink: #e0b898;
+      --user: #e0b898;
+      --user-soft: #3a2d24;
+      --tech: #9dbba9;
+      --tech-soft: #2b352f;
+      --live: #aab6e0;
+      --live-soft: #2b2f40;
+      --raise: 0 1px 2px #00000040, 0 3px 10px -4px #00000060;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #1b1916;
+    --surface: #23201c;
+    --panel: #2a2621;
+    --fill: #302b25;
+    --line: #3b3630;
+    --line-strong: #56504a;
+    --ink: #efe8dc;
+    --ink-soft: #b9afa2;
+    --ink-faint: #857b6f;
+    --accent: #9dbba9;
+    --accent-strong: #bcd3c4;
+    --olive: #8fb39f;
+    --sage: #4f6a5a;
+    --sage-soft: #2b352f;
+    --alert-bg: #3a2d24;
+    --alert-ink: #e0b898;
+    --user: #e0b898;
+    --user-soft: #3a2d24;
+    --tech: #9dbba9;
+    --tech-soft: #2b352f;
+    --live: #aab6e0;
+    --live-soft: #2b2f40;
+    --raise: 0 1px 2px #00000040, 0 3px 10px -4px #00000060;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page {
+    max-width: 960px;
+    margin: 0 auto;
+    padding-block: 40px 72px;
+    padding-inline: 20px;
+  }
+  h1, h2, h3 { font-family: var(--serif); text-wrap: balance; margin: 0; }
+  h1 { font-size: clamp(30px, 5vw, 44px); line-height: 1.2; font-weight: 700; letter-spacing: -0.01em; }
+  h2 { font-size: 24px; line-height: 1.3; font-weight: 700; }
+  h3 { font-size: 17px; line-height: 1.4; font-weight: 700; }
+  p { margin: 0; }
+  a { color: var(--accent); }
+  code, .chip {
+    font-family: var(--mono);
+    font-size: 0.86em;
+  }
+  code {
+    background: var(--fill);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 0 5px;
+    white-space: nowrap;
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--olive);
+  }
+
+  /* masthead */
+  .masthead { display: grid; gap: 16px; padding-bottom: 32px; border-bottom: 1px solid var(--line-strong); }
+  .lede { font-size: 17px; color: var(--ink-soft); max-width: 40em; }
+  .meta { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 10px; border-radius: 999px;
+    background: var(--fill); border: 1px solid var(--line);
+    color: var(--ink-soft); font-size: 12px; white-space: nowrap;
+  }
+  .chip b { color: var(--ink); font-weight: 500; }
+
+  section { padding-block: 40px; border-bottom: 1px solid var(--line); }
+  section:last-of-type { border-bottom: 0; }
+  .section-head { display: grid; gap: 8px; margin-bottom: 24px; max-width: 44em; }
+  .section-head p { color: var(--ink-soft); }
+
+  /* diagrams */
+  .figure {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 16px;
+    overflow-x: auto;
+  }
+  .figure svg { display: block; width: 100%; height: auto; min-width: 560px; }
+  .figure figcaption { font-size: 13px; color: var(--ink-soft); margin-top: 12px; line-height: 1.6; }
+  svg text { font-family: var(--sans); fill: var(--ink); }
+  svg .mono { font-family: var(--mono); fill: var(--ink-faint); }
+  svg .track { fill: none; stroke: var(--line-strong); stroke-width: 2; }
+  svg .flow { fill: none; stroke: var(--accent); stroke-width: 2; }
+  svg .flow-dash { fill: none; stroke: var(--user); stroke-width: 1.6; stroke-dasharray: 5 4; }
+  svg .node { fill: var(--panel); stroke: var(--accent); stroke-width: 2; }
+  svg .node-user { fill: var(--user-soft); stroke: var(--user); }
+  svg .node-live { fill: var(--live-soft); stroke: var(--live); }
+  svg .node-tech { fill: var(--tech-soft); stroke: var(--tech); }
+  svg .lbl { font-size: 14px; font-weight: 600; }
+  svg .sub { font-size: 11px; fill: var(--ink-soft); }
+  svg .edge { font-size: 11.5px; fill: var(--ink-soft); }
+  svg .edge-mono { font-family: var(--mono); font-size: 10.5px; fill: var(--ink-faint); }
+  svg .box { fill: var(--panel); stroke: var(--line-strong); stroke-width: 1.5; rx: 10; }
+  svg .box-title { font-family: var(--serif); font-size: 16px; font-weight: 700; }
+  svg .center { font-size: 12.5px; fill: var(--ink-soft); }
+  svg .arrow { fill: var(--accent); }
+  svg .arrow-user { fill: var(--user); }
+  svg .arrow-live { fill: var(--live); }
+  svg .link-live { fill: none; stroke: var(--live); stroke-width: 2; }
+  svg .link-tech { fill: none; stroke: var(--tech); stroke-width: 2; }
+  svg .link-user { fill: none; stroke: var(--user); stroke-width: 2; }
+
+  /* legend */
+  .legend { display: flex; flex-wrap: wrap; gap: 10px 20px; margin-top: 14px; font-size: 13px; color: var(--ink-soft); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 12px; height: 12px; border-radius: 3px; border: 1.5px solid; }
+  .swatch.user { background: var(--user-soft); border-color: var(--user); }
+  .swatch.tech { background: var(--tech-soft); border-color: var(--tech); }
+  .swatch.live { background: var(--live-soft); border-color: var(--live); }
+
+  /* phases */
+  .phases { display: grid; gap: 20px; }
+  .phase {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: var(--raise);
+    overflow: hidden;
+  }
+  .phase-head {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 14px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface);
+  }
+  .phase-num {
+    font-family: var(--serif);
+    font-size: 26px;
+    font-weight: 700;
+    color: var(--accent);
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .phase-title { display: grid; gap: 2px; }
+  .phase-title .mode { font-family: var(--mono); font-size: 12px; color: var(--ink-faint); }
+  .phase-time {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--olive);
+    text-align: right;
+    white-space: nowrap;
+  }
+  .phase-body { display: grid; grid-template-columns: 1fr 1.35fr; }
+  .col { padding: 18px 20px; display: grid; gap: 10px; align-content: start; }
+  .col + .col { border-left: 1px solid var(--line); }
+  .col-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding-bottom: 6px;
+    border-bottom: 2px solid;
+    width: fit-content;
+  }
+  .col-user .col-label { color: var(--user); border-color: var(--user); }
+  .col-tech .col-label { color: var(--tech); border-color: var(--tech); }
+  .col ul, .col ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+  .col li { padding-left: 2px; }
+  .col li::marker { color: var(--ink-faint); }
+  .col-tech ol li::marker { font-family: var(--mono); font-size: 12px; }
+  .hear {
+    font-family: var(--serif);
+    font-size: 16px;
+    line-height: 1.6;
+    color: var(--ink);
+    padding: 10px 14px;
+    background: var(--user-soft);
+    border-left: 3px solid var(--user);
+    border-radius: 0 8px 8px 0;
+  }
+  .hear small { display: block; font-family: var(--sans); font-size: 12px; color: var(--user); margin-top: 4px; }
+  .ev {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    padding: 0 6px;
+    border-radius: 4px;
+    border: 1px solid;
+    white-space: nowrap;
+    line-height: 1.6;
+    vertical-align: 1px;
+  }
+  .ev-ndjson { color: var(--tech); border-color: var(--tech); background: var(--tech-soft); }
+  .ev-live { color: var(--live); border-color: var(--live); background: var(--live-soft); }
+  .ev-ui { color: var(--user); border-color: var(--user); background: var(--user-soft); }
+
+  /* branches */
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px 20px;
+    display: grid;
+    gap: 10px;
+    align-content: start;
+  }
+  .card p { color: var(--ink-soft); font-size: 14px; }
+  .card ul { margin: 0; padding-left: 18px; font-size: 14px; display: grid; gap: 4px; }
+
+  /* table */
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-weight: 600; color: var(--ink-soft); font-size: 12.5px; letter-spacing: 0.04em; }
+  td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .table-wrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+
+  .notes { display: grid; gap: 10px; margin: 0; padding-left: 20px; max-width: 46em; }
+  .notes li { color: var(--ink); }
+  .notes li b { font-weight: 600; }
+
+  footer { padding-top: 28px; font-size: 13px; color: var(--ink-soft); display: grid; gap: 6px; }
+  footer ul { margin: 0; padding-left: 18px; display: grid; gap: 2px; }
+
+  @media (max-width: 720px) {
+    .phase-body { grid-template-columns: 1fr; }
+    .col + .col { border-left: 0; border-top: 1px solid var(--line); }
+    .cards { grid-template-columns: 1fr; }
+    .phase-head { grid-template-columns: auto 1fr; }
+    .phase-time { grid-column: 2; text-align: left; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .phase { transition: box-shadow .2s; }
+  }
+</style>
+
+<div class="page">
+  <header class="masthead">
+    <div class="eyebrow">Aside · 语音插话的用户体验与技术链路</div>
+    <h1>从听到问，再回到听</h1>
+    <p class="lede">用户戴着耳机听节目，开口问一句，AI 以主播的口吻答完，等一等，再从被打断的那句话前面接着放。这一页按这个回路的六个阶段，对照记录用户感受到什么、浏览器和后端各做了什么。2026-09-22 起，用户一开口就能看到自己的话，被当成闲聊的问题可以一键重问，断线会自动重连。</p>
+    <div class="meta">
+      <span class="chip"><b>架构版本</b> Responses 委派（ADR 0004，2026-09-18）</span>
+      <span class="chip"><b>语音</b> gpt-live-1</span>
+      <span class="chip"><b>后台模型</b> gpt-5.6-luna · reasoning low · priority</span>
+      <span class="chip"><b>快速判断</b> Jev 1.13 · 置信度 ≥ 0.7 抢先 · 忽略限 8 个词内</span>
+      <span class="chip"><b>最近更新</b> 2026-09-22 插话体验（<code>9154e59</code>）</span>
+      <span class="chip"><b>入口</b> 自动插话模式（本页主线）</span>
+    </div>
+  </header>
+
+  <section id="loop">
+    <div class="section-head">
+      <h2>一眼看完的回路</h2>
+      <p>播放器状态机只有这几种模式，每次插话都沿这个环走一圈。追问从"等待"直接回到"开口"，不会重新锁定续播位置。</p>
+    </div>
+    <figure class="figure">
+      <svg viewBox="0 0 760 330" role="img" aria-label="Aside 插话回路：正在听、开口、判断、回答、追问等待、续播，然后回到正在听">
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" class="arrow"/>
+          </marker>
+          <marker id="ah-user" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" class="arrow-user"/>
+          </marker>
+        </defs>
+        <!-- track -->
+        <path class="track" d="M140 80 H620 A90 90 0 0 1 620 260 H140 A90 90 0 0 1 140 80 Z"/>
+        <!-- flow arrows between nodes -->
+        <path class="flow" d="M176 80 H344" marker-end="url(#ah)"/>
+        <path class="flow" d="M416 80 H584" marker-end="url(#ah)"/>
+        <path class="flow" d="M646 100 A90 90 0 0 1 646 240" marker-end="url(#ah)"/>
+        <path class="flow" d="M584 260 H416" marker-end="url(#ah)"/>
+        <path class="flow" d="M344 260 H176" marker-end="url(#ah)"/>
+        <path class="flow" d="M114 240 A90 90 0 0 1 114 100" marker-end="url(#ah)"/>
+        <!-- follow-up shortcut -->
+        <path class="flow-dash" d="M380 224 C380 170 380 150 380 116" marker-end="url(#ah-user)"/>
+        <text x="392" y="176" class="sub">追问：同一次插话</text>
+        <text x="392" y="191" class="sub">续播锚点不变</text>
+        <!-- nodes top -->
+        <circle cx="140" cy="80" r="36" class="node"/>
+        <text x="140" y="76" text-anchor="middle" class="lbl">正在听</text>
+        <text x="140" y="93" text-anchor="middle" class="mono" font-size="10">playing</text>
+        <circle cx="380" cy="80" r="36" class="node node-user"/>
+        <text x="380" y="76" text-anchor="middle" class="lbl">开口</text>
+        <text x="380" y="93" text-anchor="middle" class="mono" font-size="10">listening</text>
+        <circle cx="620" cy="80" r="36" class="node node-tech"/>
+        <text x="620" y="76" text-anchor="middle" class="lbl">判断</text>
+        <text x="620" y="93" text-anchor="middle" class="mono" font-size="10">classifying</text>
+        <!-- nodes bottom -->
+        <circle cx="620" cy="260" r="36" class="node node-live"/>
+        <text x="620" y="256" text-anchor="middle" class="lbl">回答</text>
+        <text x="620" y="273" text-anchor="middle" class="mono" font-size="10">answering</text>
+        <circle cx="380" cy="260" r="36" class="node node-user"/>
+        <text x="380" y="256" text-anchor="middle" class="lbl">追问等待</text>
+        <text x="380" y="273" text-anchor="middle" class="mono" font-size="10">awaiting_followup</text>
+        <circle cx="140" cy="260" r="36" class="node"/>
+        <text x="140" y="256" text-anchor="middle" class="lbl">续播</text>
+        <text x="140" y="273" text-anchor="middle" class="mono" font-size="10">resuming</text>
+        <!-- outer annotations -->
+        <text x="140" y="30" text-anchor="middle" class="sub">本地麦克风常开，Live 已连接</text>
+        <text x="620" y="30" text-anchor="middle" class="sub">软让位：节目先停住，没结果就自己接着放</text>
+        <text x="620" y="312" text-anchor="middle" class="sub">淡出暂停（硬让位），Live 开口</text>
+        <text x="140" y="312" text-anchor="middle" class="sub">回到段落起点（最多 12 s），淡入</text>
+        <text x="380" y="312" text-anchor="middle" class="sub">Web 2 秒；移动端 3 / 8 秒或手动</text>
+        <!-- center note -->
+        <text x="200" y="160" class="center">一次插话（interruption）</text>
+        <text x="200" y="178" class="center">在用户第一次开口时锁定</text>
+        <text x="200" y="196" class="center">resumeMs，之后的追问都沿用。</text>
+      </svg>
+      <figcaption>模式名来自 <code>engine/src/core.ts</code> 的 <code>PlaybackState.mode</code>。图中省略了 <code>paused</code>（手动暂停）和 <code>reconnecting</code>（连接断开），它们不在正常回路上。</figcaption>
+    </figure>
+  </section>
+
+  <section id="topology">
+    <div class="section-head">
+      <h2>四个参与者，三条通道</h2>
+      <p>语音链路里没有"浏览器把文字发给后端、后端再调模型"这一步。GPT-Live 自己判断用户说完了没有，把对话交给 luna；后端只在旁路上执行 luna 的函数调用，再通过一条常驻的 NDJSON 流指挥浏览器。</p>
+    </div>
+    <figure class="figure">
+      <svg viewBox="0 0 760 350" role="img" aria-label="浏览器、后端、GPT-Live 和 luna 之间的连接拓扑">
+        <defs>
+          <marker id="t-live" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="arrow-live"/></marker>
+          <marker id="t-tech" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="arrow"/></marker>
+          <marker id="t-user" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="arrow-user"/></marker>
+        </defs>
+        <!-- boxes -->
+        <rect x="30" y="40" width="220" height="118" class="box"/>
+        <text x="50" y="68" class="box-title">浏览器</text>
+        <text x="50" y="90" class="sub">React + player-runtime</text>
+        <text x="50" y="108" class="sub">播放原音频、本地 VAD、执行播放器指令</text>
+        <text x="50" y="126" class="sub">AudioWorklet 播放回答音频</text>
+        <text x="50" y="146" class="mono" font-size="10">listening-session.ts · on-demand-voice.ts · live.ts</text>
+
+        <rect x="510" y="40" width="220" height="118" class="box"/>
+        <text x="530" y="68" class="box-title">GPT-Live</text>
+        <text x="530" y="90" class="sub">gpt-live-1，语音识别、轮次判断、朗读</text>
+        <text x="530" y="108" class="sub">自己不知道节目内容，</text>
+        <text x="530" y="126" class="sub">任何问题和播放请求都必须委派</text>
+        <text x="530" y="146" class="mono" font-size="10">delegation.type = "responses"</text>
+
+        <rect x="270" y="222" width="220" height="100" class="box"/>
+        <text x="290" y="250" class="box-title">后端</text>
+        <text x="290" y="272" class="sub">Cloudflare Worker / 本地 Node</text>
+        <text x="290" y="290" class="sub">执行工具、检索节目、指挥浏览器、记账</text>
+        <text x="290" y="310" class="mono" font-size="10">live-control.ts · live-delegation.ts</text>
+
+        <rect x="510" y="222" width="220" height="100" class="box"/>
+        <text x="530" y="250" class="box-title">luna</text>
+        <text x="530" y="272" class="sub">gpt-5.6-luna，主播人设 + 工具</text>
+        <text x="530" y="290" class="sub">指令含"已听文稿窗口"，随播放刷新</text>
+        <text x="530" y="310" class="mono" font-size="10">dialogue-policy.ts</text>
+
+        <!-- browser <-> live : WebRTC -->
+        <path class="link-live" d="M250 84 H510" marker-end="url(#t-live)"/>
+        <path class="link-live" d="M510 116 H250" marker-end="url(#t-live)"/>
+        <text x="380" y="76" text-anchor="middle" class="edge">WebRTC 麦克风音频 →</text>
+        <text x="380" y="134" text-anchor="middle" class="edge">← 回答音频 + 字幕（oai-events）</text>
+
+        <!-- browser <-> backend : NDJSON -->
+        <path class="link-tech" d="M120 158 C120 210 200 222 270 240" marker-end="url(#t-tech)"/>
+        <path class="link-tech" d="M270 292 C200 300 150 260 150 158" marker-end="url(#t-tech)"/>
+        <text x="60" y="204" class="edge">PUT /live-control</text>
+        <text x="60" y="220" class="edge-mono">播放状态、执行回报</text>
+        <text x="60" y="262" class="edge">GET /live-control（NDJSON）</text>
+        <text x="60" y="278" class="edge-mono">observing · classifying · engage</text>
+        <text x="60" y="292" class="edge-mono">decision · answered · discard</text>
+
+        <!-- backend <-> live : sideband -->
+        <path class="link-live" d="M600 158 C600 200 520 210 490 236" marker-end="url(#t-live)"/>
+        <path class="link-live" d="M470 226 C500 190 560 180 585 158" marker-end="url(#t-live)"/>
+        <text x="520" y="196" class="edge">sideband WebSocket</text>
+        <text x="520" y="211" class="edge-mono">↓ transcript、delegation.created、response.event</text>
+        <text x="500" y="182" class="edge-mono" text-anchor="end">↑ function_call_output、session.update</text>
+
+        <!-- live <-> luna -->
+        <path class="link-live" d="M600 158 V222" marker-end="url(#t-live)"/>
+        <path class="link-live" d="M660 222 V158" marker-end="url(#t-live)"/>
+        <text x="700" y="195" class="edge" text-anchor="middle">Responses</text>
+        <text x="700" y="209" class="edge" text-anchor="middle">委派</text>
+      </svg>
+      <figcaption>图中没有画第五个参与者 Jev：luna 开始处理一句话的同一刻，后端向 OpenRouter 上的 Jev（<code>typesafe/jev-1.13</code>）发一次 HTTPS 请求，只问"这句话属于哪一类"。它不在任何一条通道上，答案只回到后端（见第 3 阶段）。浏览器和后端之间没有 WebSocket。控制流是一条一直挂着的 HTTP NDJSON 响应，浏览器逐行读；回报走普通 PUT。后端到 GPT-Live 的 sideband 才是 WebSocket。</figcaption>
+    </figure>
+    <div class="legend">
+      <span><i class="swatch user"></i>用户侧、UI 状态</span>
+      <span><i class="swatch tech"></i>后端 NDJSON 事件</span>
+      <span><i class="swatch live"></i>GPT-Live 与 luna</span>
+    </div>
+  </section>
+
+  <section id="phases">
+    <div class="section-head">
+      <h2>六个阶段，逐步对照</h2>
+      <p>左栏是用户耳朵里和屏幕上的变化，右栏是同一时刻的技术动作。时间数字来自代码里的常量和真实会话探针。</p>
+    </div>
+    <div class="phases">
+
+      <article class="phase">
+        <div class="phase-head">
+          <div class="phase-num">1</div>
+          <div class="phase-title"><h3>正在听</h3><span class="mode">mode: playing</span></div>
+          <div class="phase-time">位置每秒同步一次</div>
+        </div>
+        <div class="phase-body">
+          <div class="col col-user">
+            <div class="col-label">用户听到、看到</div>
+            <div class="hear">节目正常播放。顶部区域收起，逐字稿像歌词一样高亮当前句。<small>底部状态：正在播放</small></div>
+            <ul>
+              <li>自动插话模式下，点播放时就已申请麦克风；页面上有麦克风电平的小指示。</li>
+              <li>戴耳机效果最好：外放的节目声也是人声，回声消除挡不住全部。</li>
+            </ul>
+          </div>
+          <div class="col col-tech">
+            <div class="col-label">技术流程</div>
+            <ol>
+              <li><b>本地麦克风常开。</b>Silero VAD 在浏览器里跑，人声概率超过 0.8、连续 120 ms 才算起声，650 ms 静音算说完。</li>
+              <li><b>Live 会话在开始收听时就建立</b>（continuous 模式），不等第一次开口。浏览器发 <code>POST /live</code> 带 SDP 和播放器状态；后端向 OpenAI 创建 <span class="ev ev-live">gpt-live-1</span> 会话，<code>delegation.type = "responses"</code>，后台模型 luna 带六个工具，同时附上 sideband。</li>
+              <li>浏览器再开 <code>GET /live-control</code>，收到 <span class="ev ev-ndjson">ready</span> 后才把 WebRTC 上的麦克风轨道打开。之后每 15 秒一条 <span class="ev ev-ndjson">heartbeat</span>。</li>
+              <li>播放中每秒 <code>PUT /live-control</code> 同步位置；后端发现当前段落变了，就用 <code>session.update</code> 刷新 luna 指令里的"已听文稿窗口"（最近约 6 KB 已听文本），最多每 3 秒一次。luna 永远只知道用户听到哪里，不会剧透。</li>
+              <li>Live 的回答音轨此时处在 <code>discard</code> 门控：WebRTC 轨道一直在走，但 AudioWorklet 队列把没获准的声音丢掉。</li>
+            </ol>
+          </div>
+        </div>
+      </article>
+
+      <article class="phase">
+        <div class="phase-head">
+          <div class="phase-num">2</div>
+          <div class="phase-title"><h3>开口</h3><span class="mode">mode: listening · NDJSON observing</span></div>
+          <div class="phase-time">起声 150 ms 内降音</div>
+        </div>
+        <div class="phase-body">
+          <div class="col col-user">
+            <div class="col-label">用户听到、看到</div>
+            <div class="hear">"等一下，他刚才说的精神胜利法是什么意思？"<small>用户一出声，节目立刻停住；状态变成"在听你说"，麦克风指示旁边用斜体逐字显示听到的话</small></div>
+            <ul>
+              <li>用户不用叫名字、不用说完整句子。</li>
+              <li>屏幕上的原话只是临时字幕：被接受后变成对话记录，被当成闲聊就消失；4 秒没有下文也会自己清掉。</li>
+              <li>如果只说了"等一下"就停住，节目会直接暂停，不等后台。</li>
+            </ul>
+          </div>
+          <div class="col col-tech">
+            <div class="col-label">技术流程</div>
+            <ol>
+              <li><b>本地 VAD 报告起声。</b>浏览器立即停住播客（<code>attention.speechLevel = 0</code>：零不是音量，是暂停），同时把 Live 输出门控切到 <code>hold</code>，开始缓存可能到来的回答音频。这仍然是软让位：播放状态不变、不锁位置，没有判断结果的话节目会自己接着放。外放时这也让节目声不再进麦克风、盖掉一句短短的"等一下"。</li>
+              <li>麦克风音频通过 WebRTC 直达 Live。Live 的识别片段 <code>session.input_transcript.delta</code> 同时从 sideband 到后端、从 data channel 到浏览器（浏览器只用来显示字幕和诊断）。</li>
+              <li>后端 <code>LiveDelegation</code> 收到第一个片段就<b>拍下输入快照</b>：<code>positionMs</code>、<code>wasPlaying</code>、谁在出声。这个 <code>positionMs</code> 就是后面续播锚点的依据，淡出多播的几百毫秒不算。片段间隔超过 1.2 秒视为新一句。</li>
+              <li>每个片段推一条 <span class="ev ev-ndjson">observing</span>，总是带上这句话目前的原文（末尾 500 字），浏览器用来显示"在听你说"的临时字幕，并按 <code>turnId</code> 记下来，供第 3 阶段的"点这里问"使用。控制流只属于这位听众本人；<span class="ev ev-ndjson">classifying</span> 的原文和对话上下文仍只在 <code>?debug</code> 下携带。</li>
+              <li><b>本地快速暂停：</b>如果到目前为止整句只是"等一下 / 等等 / wait / hold on / pause"，后端不等 luna，立刻推一条 pause 的 <span class="ev ev-ndjson">decision</span>；之后 luna 若再调 pause，复用这次结果，不暂停两遍。话继续说下去则不再命中。</li>
+            </ol>
+          </div>
+        </div>
+      </article>
+
+      <article class="phase">
+        <div class="phase-head">
+          <div class="phase-num">3</div>
+          <div class="phase-title"><h3>判断</h3><span class="mode">NDJSON classifying · 软让位</span></div>
+          <div class="phase-time">保持最多 2.5 s</div>
+        </div>
+        <div class="phase-body">
+          <div class="col col-user">
+            <div class="col-label">用户听到、看到</div>
+            <div class="hear">节目停着，像一个人被打断时先住口，确认对方是在跟自己说话。<small>底部状态：正在听你说</small></div>
+            <ul>
+              <li>如果这句话是跟旁边的人说的，节目通常在话音落下后约 0.2 秒就接着放，并以 400 ms 淡入。</li>
+              <li>被当成闲聊的话如果有 4 个词以上（汉字按字数算），麦克风指示旁会出现 8 秒的"没当成提问 · 点这里问"，一点就作为提问发出；再开口则撤掉。</li>
+              <li>说到一半停顿，节目继续等，从话音结束起最长 2.5 秒。</li>
+            </ul>
+          </div>
+          <div class="col col-tech">
+            <div class="col-label">技术流程</div>
+            <ol>
+              <li><b>GPT-Live 自己判定用户说完了</b>，把这一轮委派给 luna。sideband 收到 <code>session.delegation.created</code>，后端推 <span class="ev ev-ndjson">classifying</span>。</li>
+              <li>浏览器收到 <span class="ev ev-ndjson">classifying</span> 做<b>软让位</b>：目标是用户音量的 60%，150 ms 到位。同一次让位里播客只会更小声：本地 VAD 已经把它停住的话就保持停住，不会因为 classifying 回到 60%。每次 classifying 或 decision 都把 2.5 s 的保持计时重新起表。hold 队列继续缓存回答音频，但还不放。</li>
+              <li>luna 拿到的是：主播人设 + 播放器工具说明 + 最近已听的文稿窗口 + 当前段落已听的前 200 字 + 语言规则（跟随用户最新一句的语言，不跟节目）。它有六个工具：<code>get_passage</code>、<code>search_podcast</code>、<code>control_podcast</code>、<code>resume_podcast</code>、<code>ignore_input</code>、<code>wait_for_input</code>。</li>
+              <li><b>Jev 抢先。</b>luna 的第一个判断要 0.94 到 1.54 秒，节目停着的这段时间就是空白。所以 luna 的 <code>response.created</code> 一到，后端同时把这句话和播放状态发给 Jev，一个只在给定选项里选择、并给出校准置信度的小模型，约 0.2 秒返回"忽略 / 等待 / 暂停 / 继续 / 调整播放 / 提问"之一。置信度 ≥ 0.7 且答案是<b>忽略、暂停或继续</b>时（忽略只限 8 个词以内的话，更长的更可能是真问题，节目保持停住等 luna），后端立刻按它推 <span class="ev ev-ndjson">decision</span>。luna 照常跑完，<b>以 luna 为准</b>：判断相同就不重复下发（暂停和继续复用已回报的执行结果）；luna 认为这是提问，就照常 <span class="ev ev-ndjson">engage</span>，把刚接着放的节目重新停下并作答。</li>
+              <li>Jev 不抢先的情形：luna 已经先判断了；用户还在往下说（Jev 看到的只是半句）；上一条播放决定还没收到回报；答案是"调整播放"（Jev 不给参数）或"提问"（只有 luna 能答）。Jev 超时（3 s）或出错时什么都不发生，等 luna。每句话在 D1 的 <code>jev_shadow</code> 表留一行：两边的判断、各自耗时、Jev 是否抢先执行，不存原话。</li>
+              <li>luna 的每个函数调用以 <code>response.event</code> 回到后端。三类结果：
+                <ul>
+                  <li><b>旁人聊天</b>：<code>ignore_input</code> 立即回报，推 <span class="ev ev-ndjson">decision: ignore</span>（Jev 已经推过就不再推），浏览器让节目淡入接着放并丢掉 hold 队列里的声音。这句话够长时，浏览器用记下的原文显示"点这里问"；点击走 <code>POST /question</code>，答案交给 Live 朗读。后端记下这次忽略的时间，10 秒内有人再开口就写一条日志 <code>Aside voice spoke again after ignore</code>，作为误判的粗略信号。</li>
+                  <li><b>话没说完</b>：<code>wait_for_input</code>，推 <span class="ev ev-ndjson">decision: wait</span>，保持软让位，由 2.5 s 超时回升。</li>
+                  <li><b>要回答或要操作播放器</b>：进入第 4 阶段。</li>
+                </ul>
+              </li>
+            </ol>
+          </div>
+        </div>
+      </article>
+
+      <article class="phase">
+        <div class="phase-head">
+          <div class="phase-num">4</div>
+          <div class="phase-title"><h3>回答</h3><span class="mode">mode: answering · NDJSON engage → answered</span></div>
+          <div class="phase-time">说完到答案开口 1.2 – 2.7 s</div>
+        </div>
+        <div class="phase-body">
+          <div class="col col-user">
+            <div class="col-label">用户听到、看到</div>
+            <div class="hear">一声很轻的双音提示（Web），节目在 250 ms 内淡出、停住。紧接着主播的声音以第一人称说："精神胜利法是我刚才讲阿Q的时候提到的……"<small>底部状态：正在回答；对话区出现用户的话和逐句字幕</small></div>
+            <ul>
+              <li>回答用两三句口语说完简单问题，不念列表、不念链接。</li>
+              <li>英文提问得到英文回答，即使节目是中文。</li>
+              <li>对话区字幕跟着实际播出的声音逐段出现，不会先把整段文字甩出来。</li>
+              <li>回答中途再开口，旧回答立刻停，新的一轮开始。</li>
+              <li>不想听完可以点"停下回答"或按 Esc；停下后节目不自动续播，等用户点继续（与插话打断一样）。</li>
+            </ul>
+          </div>
+          <div class="col col-tech">
+            <div class="col-label">技术流程</div>
+            <ol>
+              <li><b>触发 engage 的两种信号：</b>luna 调用 <code>get_passage</code> / <code>search_podcast</code>（后端在服务端直接执行关键词检索，同时把命中段落收进 sources），或者 luna 开始输出第一个 <code>response.output_text.delta</code>。二者任一先到，后端推 <span class="ev ev-ndjson">engage</span>，携带 <code>decisionId</code>、输入快照和用户原话。</li>
+              <li>浏览器收到 <span class="ev ev-ndjson">engage</span> 后清掉临时字幕、播放提示音（<code>frontend/src/earcon.ts</code>），再<b>硬让位</b>：250 ms 淡出到静音再 pause；向状态机派发 <code>interrupt</code>，用快照里的 <code>positionMs</code> 通过 <code>resumePoint()</code> 算续播位置：包含该位置的语义段落起点，但最多回退 12 s；段落更长时取 12 s 内最早的文稿句首，没有句首就正好回退 12 s。结果记为 <code>interruption.resumeMs</code>。如果已经在一次插话里（追问），不重写锚点。</li>
+              <li>浏览器把 Live 输出门控切到 <code>play</code>：hold 队列里已缓存的开头按 FIFO 放出，所以答案的第一个音节不会被吃掉。字幕按已播 PCM 位置分批释放。<code>PUT /live-control</code> 回报 <code>applied: true</code>。</li>
+              <li><b>Live 自己朗读 luna 的文本。</b>浏览器不再 append commentary，后端也不再自己调 Responses API。检索结果以 <code>response.item.create</code> + <code>response.create</code> 从 sideband 交回，luna 继续生成。</li>
+              <li>luna 的 <code>response.completed</code> 到后，后端推 <span class="ev ev-ndjson">answered</span>（完整答案文本 + sources，用于引用展示和诊断；对话历史仍以 Live 实际播出的字幕为准），并把 usage 写入问答账本。</li>
+              <li><b>播放器操作分支：</b>luna 调 <code>control_podcast</code> / <code>resume_podcast</code> 时，后端推 <span class="ev ev-ndjson">decision</span>，等浏览器 PUT 回报（10 s 超时算未执行）后，才把"是否执行 + 观测到的播放状态"作为函数结果交回 luna。luna 不能在回报前宣称操作成功。控制类工具后 luna 不产生文本，Live 保持沉默；若有多余的口头确认，后端推 <span class="ev ev-ndjson">discard</span> 清掉。</li>
+            </ol>
+          </div>
+        </div>
+      </article>
+
+      <article class="phase">
+        <div class="phase-head">
+          <div class="phase-num">5</div>
+          <div class="phase-title"><h3>追问等待</h3><span class="mode">mode: awaiting_followup</span></div>
+          <div class="phase-time">Web 2 s · 移动端 3 / 8 s 或手动</div>
+        </div>
+        <div class="phase-body">
+          <div class="col col-user">
+            <div class="col-label">用户听到、看到</div>
+            <div class="hear">主播说完，安静下来。底部出现倒计时和"先别继续"按钮。<small>底部状态：还想聊聊吗</small></div>
+            <ul>
+              <li>这时直接接着问，不需要任何唤醒动作；回答会延续刚才的语境。</li>
+              <li>点"先别继续"（或按 H）后，这一整轮追问都不会自动续播，直到用户主动点继续。</li>
+              <li>这时手动调倍速、音量或静音，倒计时照走，不会被取消。</li>
+              <li>聊超过一分钟，对话区上方显示打断前最近一段完整听过的原文，帮用户接回上下文。</li>
+            </ul>
+          </div>
+          <div class="col col-tech">
+            <div class="col-label">技术流程</div>
+            <ol>
+              <li>AudioWorklet 报告队列播空（<code>active: false</code>），浏览器派发 <code>assistant_end</code>；状态机看到 <code>interruption</code> 仍在，进入 <code>awaiting_followup</code>。"说完"由实际播出的 PCM 决定，不由字幕或模型事件决定。</li>
+              <li><code>FollowupTimer</code> 起表：Web 用服务端 <code>ASIDE_AUTO_RESUME_MS</code>（默认 2000），页面上没有时长选择；移动端默认 3 s，可选 3 s / 8 s / 手动。移动端和未朗读的文字回答超过 350 字符或 180 个汉字时，等待至少 8 s。</li>
+              <li>到点时再核对一遍：revision 没变、没人在说话、没有 pending 请求、没有委派在跑、草稿框为空、没按"先别继续"、回答没被停下，才真正续播。任何一条不满足就不动。倍速、音量、静音只改配置，不走 <code>cancelWork</code>，所以不影响这里的任何一条。</li>
+              <li><b>Live 会话保持连接</b>（自动模式是 continuous），麦克风轨道仍在送音。用户再开口就回到第 2 阶段：Live 再次委派，luna 看到同一段对话历史，浏览器不重新锁锚点。</li>
+              <li>Live 语音对话不会因为静音自动续播：停顿可能是在思考。协议里没有"这一轮语音说完了"的事件，所以只有计时器、"继续"指令或按钮能触发续播。</li>
+            </ol>
+          </div>
+        </div>
+      </article>
+
+      <article class="phase">
+        <div class="phase-head">
+          <div class="phase-num">6</div>
+          <div class="phase-title"><h3>续播</h3><span class="mode">mode: resuming → playing</span></div>
+          <div class="phase-time">明确说"继续"后约 1.5 s</div>
+        </div>
+        <div class="phase-body">
+          <div class="col col-user">
+            <div class="col-label">用户听到、看到</div>
+            <div class="hear">节目从被打断的那一段开头重新放起（最多往回 12 秒），400 ms 从静音淡入，而不是从半句话中间硬接上。<small>底部状态：回到音频 → 正在播放</small></div>
+            <ul>
+              <li>三种触发：倒计时走完；说"继续 / go on / 回到播客"；点"继续听"或按 R。</li>
+              <li>"接着讲那一点"不算续播，是追问。模糊的话由 luna 判断。</li>
+            </ul>
+          </div>
+          <div class="col col-tech">
+            <div class="col-label">技术流程</div>
+            <ol>
+              <li><b>三条触发路径：</b>计时器到点调 <code>resume(0)</code>；用户原话命中 <code>explicitResume()</code> 的保守短语表，客户端本地 1.5 s 后续播；不明确的表达交给 luna，它调 <code>resume_podcast</code>，后端推 <span class="ev ev-ndjson">decision: resume</span>，服务端拥有判断时延迟为 0；Jev 以 ≥ 0.7 的置信度判为"继续"时，这条 decision 会比 luna 早约一秒发出，luna 的调用复用其结果。</li>
+              <li>状态机进入 <code>resuming</code>。执行前再校验 revision、模式和"没人在说话"。</li>
+              <li>静音 Live 输出（门控回 <code>discard</code>），把音频定位到 <code>interruption.resumeMs</code>，然后 <code>play(400)</code>：Web 用 GainNode 从 0 线性升到原音量，移动端分步调 <code>player.volume</code>。</li>
+              <li>播放成功后派发 <code>resumed</code>：清空 <code>interruption</code>、revision 加一、锚点释放。下一次开口会重新锁定新的锚点。</li>
+              <li>自动模式下 Live 会话继续保持，麦克风继续送音，回到第 1 阶段。按住说话模式则在续播后 5 s（<code>ASIDE_LIVE_GRACE_MS</code>）关闭云端会话；空闲 60 s 也会关闭。</li>
+              <li>续播后 <code>PUT /live-control</code> 同步新状态，后端丢弃这次话语的残留委派，luna 的文稿窗口继续随位置刷新。</li>
+            </ol>
+          </div>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <section id="branches">
+    <div class="section-head">
+      <h2>不是提问的三种情况</h2>
+      <p>同一条链路上，luna 也可能决定不回答。用户感受上的差别只在播客有没有停。</p>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <h3>只说了一个暂停词</h3>
+        <p>"等一下" "wait" "hold on" 单独出现。</p>
+        <ul>
+          <li>后端正则本地命中，立刻推 pause，播客 250 ms 淡出停住。</li>
+          <li>正则没覆盖的说法（"先停在这儿"）由 Jev 以 ≥ 0.7 的置信度判为暂停，同样立刻推 pause。</li>
+          <li>luna 稍后若也调 pause，复用这个结果。</li>
+          <li>探针实测：1.3 s 内停下。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>播放器操作</h3>
+        <p>"慢一点" "回放刚才那段" "静音"。</p>
+        <ul>
+          <li>luna 调 <code>control_podcast</code>，后端推 decision，浏览器执行后回报。</li>
+          <li>只改配置的批次不停播客，执行完释放软让位。</li>
+          <li>混合句（"暂停，然后解释一下 X"）先执行操作，回报后 luna 用 <code>followUpQuestion</code> 接着答。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>旁人聊天</h3>
+        <p>跟家人说"晚饭吃什么"。</p>
+        <ul>
+          <li>Live 可能根本不委派；委派了则 Jev 通常先判为忽略，luna 随后调 <code>ignore_input</code> 确认。</li>
+          <li>节目淡入接着放，hold 队列清空。Jev 只在 8 个词以内抢先忽略；它判错而 luna 认为是提问时，节目放了约一秒后重新停下，照常回答。</li>
+          <li>够长的话被忽略时留 8 秒"点这里问"，误判由用户一键纠正。</li>
+          <li>正在播的回答不会被旁人的话切断。</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="entries">
+    <div class="section-head">
+      <h2>另外两个入口</h2>
+      <p>自动插话是主线。按住说话和打字提问不走 Live 委派，走传统的 <code>/question</code> 请求，但回答仍由 Live 念出来。</p>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <h3>按住说话</h3>
+        <ul>
+          <li>按住时才申请麦克风，本地录 WAV，忽略 VAD。</li>
+          <li>松手后 <code>POST /transcribe-question</code>（whisper-1）转文字，再 <code>POST /question</code>（NDJSON 流）拿答案。</li>
+          <li>答案文本以 <code>commentary.append</code> 交给 Live 朗读；同时告诉 Live"后端正在处理，不要重复委派"。</li>
+          <li>续播后关闭云端会话。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>打字提问</h3>
+        <ul>
+          <li>任何模式都可用，包括只听模式。</li>
+          <li>直接 <code>POST /question</code>，后端最多五轮模型/工具循环，可用 <code>web_search</code>。</li>
+          <li>有 Live 连接时由 Live 朗读，否则只显示文字。</li>
+          <li>文字回答完成后同样进入追问等待。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>只听节目</h3>
+        <ul>
+          <li>不开麦克风，不建 Live 会话。</li>
+          <li>保留打字提问。</li>
+          <li>手动暂停会关闭监听和云端会话；AI 引起的暂停则保留监听。</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="numbers">
+    <div class="section-head">
+      <h2>关键数字</h2>
+      <p>延迟来自 <code>scripts/live-delegation-probe.ts</code> 的真实会话探针（九次会话），其余是代码常量与配置默认值。</p>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>指标</th><th>数值</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>说完到答案开口</td><td class="num">1.2 – 2.7 s</td><td>Responses 委派后。此前逐片段调 luna 时为 4 – 8 s，每句 3 – 7 次串行调用</td></tr>
+          <tr><td>说"等一下"到暂停</td><td class="num">1.3 s</td><td>本地快速暂停路径</td></tr>
+          <tr><td>luna 的第一个判断</td><td class="num">0.94 – 1.54 s</td><td>真实会话；人声停住节目后，这段就是空白</td></tr>
+          <tr><td>Jev 的判断</td><td class="num">p50 205 ms · p95 372 ms</td><td>2026-09-18 离线评测 78 句，从笔记本直连；线上尚无数据</td></tr>
+          <tr><td>Jev 抢先门槛</td><td class="num">置信度 ≥ 0.7</td><td>评测中覆盖 59/78 且全对；5 个错判最高 0.54。只限忽略、暂停、继续</td></tr>
+          <tr><td>起声停住播客</td><td class="num">立即暂停</td><td>本地 VAD 触发，<code>attention.speechLevel = 0</code>；持续说话最长停 30 s</td></tr>
+          <tr><td>软让位</td><td class="num">60% · 150 ms</td><td><code>classifying</code> 触发，已停住则保持停住；话音结束后无新判断 2.5 s 恢复</td></tr>
+          <tr><td>硬让位淡出</td><td class="num">250 ms</td><td><code>engage</code>、文字提问、语音 pause</td></tr>
+          <tr><td>追问等待</td><td class="num">Web 2 s · 移动端 3 s / 8 s / 手动</td><td>移动端与未朗读的长回答（&gt; 350 字符或 &gt; 180 汉字）至少 8 s</td></tr>
+          <tr><td>续播回退上限 / 淡入</td><td class="num">12 s / 400 ms</td><td><code>maxResumeRewindMs</code>、<code>resumeFadeMs</code>；起声停顿后的继续也淡入</td></tr>
+          <tr><td>"点这里问"</td><td class="num">≥ 4 个词 · 8 s</td><td>汉字按字计；Jev 抢先忽略限 ≤ 8 个词</td></tr>
+          <tr><td>临时字幕</td><td class="num">4 s</td><td>说完后没有任何决定时自动清除</td></tr>
+          <tr><td>明确"继续"到续播</td><td class="num">1.5 s</td><td>客户端短语匹配；luna 的 <code>resume_podcast</code> 为 0</td></tr>
+          <tr><td>VAD 起声 / 静音判定</td><td class="num">120 ms / 650 ms</td><td>人声概率阈值 0.8</td></tr>
+          <tr><td>新话语切分</td><td class="num">1.2 s</td><td>识别片段间隔超过此值视为新一句</td></tr>
+          <tr><td>执行回报超时</td><td class="num">10 s</td><td>超时向 luna 回报"未执行"，会话继续</td></tr>
+          <tr><td>文稿窗口刷新</td><td class="num">≤ 每 3 s</td><td>段落变化时 <code>session.update</code>，窗口约 6 KB</td></tr>
+          <tr><td>Live 会话上限</td><td class="num">120 s 游客 · 1800 s 账号（生产）</td><td>账号会话到时自动换新（<code>/live</code> 返回 <code>renewable: true</code>）；游客显示不报错的提示和"再开一段语音"</td></tr>
+          <tr><td>断线判定 / 自动重连</td><td class="num">25 s · 1 / 4 / 10 s</td><td>控制流 25 s 无事件（心跳 15 s 一次）判定断开，最多重连三次，都失败才报错</td></tr>
+          <tr><td>回答音频缓冲</td><td class="num">30 s</td><td>AudioWorklet 队列，溢出整段拒绝并报错</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="caveats">
+    <div class="section-head">
+      <h2>已知边界</h2>
+    </div>
+    <ul class="notes">
+      <li><b>Live 是非确定的。</b>它是否委派、用什么语言开口，每次都可能不同。改提示词后要用探针跑三次英文场景再下结论。</li>
+      <li><b>语言会被拉偏。</b>Live 提示里只要出现中文（比如主播风格），英文用户就会听到中文；所以主播人设只给 luna，Live 提示保持全英文，并在末尾加一条覆盖一切的语言规则。</li>
+      <li><b>"等一下"后面停顿</b>会让 Live 只委派这一个词。后端指令已要求以暂停词开头的问题不再花一轮做控制，直接回答。</li>
+      <li><b>Jev 是 alpha 接口。</b>2026-09-17 才发布，路径在 <code>/api/alpha/</code> 下，只有一个供应方，没有 SLA。它的任何失败都只意味着回到"等 luna"。抢先的依据只有自拟语料的离线评测，上线时生产上还没有一句真实语音经过它；<code>jev_shadow</code> 表里 <code>acted = 1 AND agree = 0</code> 的行数就是用户看到"被 luna 收回"的次数。</li>
+      <li><b>被收回的忽略可能吃掉开头。</b>Jev 判忽略时浏览器清空 hold 队列；如果 luna 随后决定回答，Live 在此之前缓冲的那一点开头已经丢了。2026-09-22 起 Jev 只对 8 个词以内的话抢先忽略，这种情况应当变少；真实听感仍未测。</li>
+      <li><b>断线自动重连有限。</b>控制流中断、超时或网络错误时在 1、4、10 秒后自动重连，最多三次；聊到一半断开时节目保持暂停，由用户决定何时继续。重连不重放断线前的决定。游客会话到时不自动重开，避免绕过试用时长。</li>
+      <li><b>新体验尚未真机验证。</b>临时字幕、提示音、淡入和自动重连只经过单元测试和浏览器替身测试；移动端对应界面只通过了类型检查，也没有提示音（需要原生触感依赖）。</li>
+      <li><b>字幕和音频是近似同步。</b>WebRTC 音频包和字幕没有共同的逐字 ID，字幕按已播 PCM 位置分批释放。</li>
+      <li><b>测试替身通过不等于真机通过。</b>单元和 Playwright 测试用模型替身；ADR 0004 标注"待生产真机验证"，尚未验证的包括真人麦克风端到端、中文短控制词的委派稳定性。</li>
+    </ul>
+  </section>
+
+  <footer>
+    <div>本页依据的代码与文档（main 分支；2026-09-18 更新 Jev 抢先判断与"人声立即停住节目"，2026-09-22 更新插话体验：临时字幕、点这里问、续播上限与淡入、停下回答、自动重连）。本页源文件在仓库 <code>.docs/interruption-loop.html</code>：</div>
+    <ul>
+      <li><code>player-runtime/src/listening-session.ts</code>、<code>conversation.ts</code>：状态机驱动、让位、锚点、追问计时</li>
+      <li><code>frontend/src/on-demand-voice.ts</code>、<code>live.ts</code>、<code>microphone.ts</code>：麦克风、WebRTC、回答音频门控</li>
+      <li><code>backend/src/live-delegation.ts</code>、<code>live-control.ts</code>、<code>dialogue-policy.ts</code>、<code>interactive-provider.ts</code>：委派执行、NDJSON、提示词、会话创建</li>
+      <li><code>backend/src/jev-shadow.ts</code>、<code>cloudflare/migrations/0008</code>–<code>0009</code>：Jev 请求、选项定义、对照记录</li>
+      <li><code>engine/src/core.ts</code>：<code>PlaybackState</code>、<code>resumePoint</code>、<code>utteranceUnits</code>、<code>explicitResume</code></li>
+      <li><code>frontend/src/VoiceActivity.tsx</code>、<code>earcon.ts</code>、<code>podcast-audio.ts</code>：临时字幕、点这里问、提示音、淡入</li>
+      <li><code>.docs/adr/0004-responses-delegation.md</code>、<code>.docs/server-voice-control.md</code>、<code>.docs/player-controls.md</code>、<code>.docs/architecture.md</code></li>
+    </ul>
+  </footer>
+</div>
+
+</body></html>
