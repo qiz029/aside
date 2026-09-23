@@ -577,3 +577,11 @@ npx wrangler d1 execute asidefm --remote --config wrangler.production.jsonc --co
 数据回填：Worker 上线时线上 8 条示例还没有 `collection` 字段，页面与发布前一致（`/zh` 的 HTML 里只有一个 `sample-list`，已核对）。随后由本人在生产 D1 执行 `content/collect-public-samples.sql`（3 条语句，写入 8 行；Claude 的会话无权写生产库）。执行后核对：`GET /api/episodes` 的 8 条都带 `attribution.collection`；Worker 输出的 `/zh` 有三个 collection 标题、`/` 有两个；用无头 Chrome 渲染线上页面，`/zh` 依次为鲁迅《呐喊》(2)、Longines Chronoscope 访谈 (4)、总统演讲 (2)，`/` 为后两者，只有 4 条的那一行显示箭头，播放器侧栏出现同样三个可折叠标题，无页面错误。collection 的先后取决于接口返回顺序（按入库时间），所以 Chronoscope 排在总统演讲之前。
 
 未验证：移动端的分组与折叠只通过了类型检查，未在真机或模拟器上看过；`tests/browser/public-samples.spec.ts` 的新断言需要提供这 8 条示例的环境，本地未跑。
+
+## 插话体验改进与 09-22 两个提交一起上线（2026-09-22）
+
+内容（`9154e59`）：服务端控制下显示"在听你说"和听众原文临时字幕（`observing` 现在总是带回听众自己的话），后端接下提问时 Web 播放轻提示音；被忽略且至少 4 个词的话提供 8 秒"点这里问"；Jev 抢先 ignore 只用于 8 个词以内；续播最多回退 12 秒并 400ms 淡入；手动改倍速/音量/静音不再取消倒计时与回答；停下回答（按钮与 Esc）、R/H 快捷键；控制流 25 秒无事件判定断开并自动重连三次，账号会话到时自动换新，访客到时显示不报错的提示。移动端同样接入字幕、重试、重连/到时状态、停下按钮和参考来源。同时首次上线本人 09-22 的 `281a3ff`（移动端账号隐私与可续传上传）与 `c72e8ad`（Android 可靠性与 Web 收听体验）。
+
+发布与核对：`npm run check`、Cloudflare 集成 57 项通过；单元测试 481 项中 474 项通过，失败的 7 项全在 Java 原生测试（本机没有 `javac`），在未改动的 main 上同样失败；浏览器测试 84 项中 i18n 默认语言与公共示例数量 2 项在未改动的 main 上同样失败，其余通过，含新增的"点这里问"2 项。部署前由本人执行迁移 `0011_mobile_accounts.sql`（`281a3ff` 需要，只增列与表）。发布前线上是本人 09-20 22:50Z 的 `b3f5f8d7`，origin/main 无他人新提交。从 main（`9154e59`）部署生产 Worker `1f8fc683-2282-439a-bc93-0ff357631675`（`--containers-rollout=none`），首页引用 `index-Ci7rbntW.js`，其中包含 `missed-offer`。`/`、`/space`、`/api/health` 均 200，`npm run test:mobile-service` 4 项通过。
+
+未验证：真人麦克风下的字幕、提示音、淡入和自动重连听感；访客与账号会话到时的线上表现；移动端新界面只通过了类型检查，未上真机或模拟器；误判率要等线上日志 `Aside voice spoke again after ignore` 积累后再看。
