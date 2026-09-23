@@ -16,7 +16,8 @@ import type {
 import type { PlayerConfig } from "@aside/engine/player";
 export interface PodcastAudio {
   positionMs: number;
-  play(): Promise<void>;
+  /** Start playback; with `fadeInMs` the podcast rises from silence to its level over that time. */
+  play(fadeInMs?: number): Promise<void>;
   pause(): void;
   configure(config: PlayerConfig): void;
   seek?(atMs: number): Promise<void>;

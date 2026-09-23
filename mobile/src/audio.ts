@@ -93,11 +93,11 @@ export class NativePodcastAudio implements PodcastAudio {
       { showSeekBackward: true, showSeekForward: true },
     );
   }
-  async play() {
+  async play(fadeInMs = 0) {
     const revision = ++this.playRevision;
     this.settleGeneration++;
     this.settling = false;
-    this.ramp(1, 0);
+    this.ramp(fadeInMs > 0 ? 0 : 1, 0);
     this.events.requestedPlay();
     this.cancelLoading?.();
     if (!this.player.isLoaded) {
@@ -131,7 +131,9 @@ export class NativePodcastAudio implements PodcastAudio {
     }
     if (revision !== this.playRevision) return;
     await this.coordinator.playPodcast();
-    if (revision === this.playRevision) this.player.play();
+    if (revision !== this.playRevision) return;
+    this.player.play();
+    if (fadeInMs > 0) this.ramp(1, fadeInMs);
   }
   pause() {
     this.events.requestedPause();

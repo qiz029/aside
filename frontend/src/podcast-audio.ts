@@ -38,12 +38,12 @@ export class BrowserPodcastAudio implements PodcastAudio {
   set positionMs(value: number) {
     if (this.element) this.element.currentTime = value / 1000;
   }
-  play() {
+  play(fadeInMs = 0) {
     const element = this.element;
     if (!element) return Promise.reject(Error("节目音频未就绪"));
     this.generation++;
     this.settling = false;
-    this.ramp(1, 0);
+    this.ramp(1, fadeInMs, fadeInMs > 0 ? 0 : undefined);
     const playing = element.play();
     this.route(element);
     return playing;
@@ -112,16 +112,16 @@ export class BrowserPodcastAudio implements PodcastAudio {
    * Moves the attention multiplier. Through Web Audio the ramp is sample
    * accurate; before the element is routed it steps `element.volume`.
    */
-  private ramp(target: number, durationMs: number) {
+  private ramp(target: number, durationMs: number, start?: number) {
     this.fade?.();
     this.fade = undefined;
-    const from = this.level;
+    const from = start ?? this.level;
     this.level = target;
     const { gain, context } = this;
     if (gain && context && this.usingGain()) {
       const now = context.currentTime;
       gain.gain.cancelScheduledValues(now);
-      gain.gain.setValueAtTime(gain.gain.value, now);
+      gain.gain.setValueAtTime(start ?? gain.gain.value, now);
       if (durationMs > 0)
         gain.gain.linearRampToValueAtTime(target, now + durationMs / 1000);
       else gain.gain.setValueAtTime(target, now);

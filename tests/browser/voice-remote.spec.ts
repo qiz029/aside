@@ -599,9 +599,11 @@ test("expiry during a spoken answer clears Answering and leaves podcast resume u
   await expect(page.locator(".status")).toContainText("Answering");
   await s.expire();
   await expect(page.locator(".status")).not.toContainText("Answering");
-  await expect(page.getByRole("alert")).toContainText(
-    "Voice session time limit reached",
+  // A guest's session ran out: a calm notice, not an error alert.
+  await expect(page.locator(".voice-notice")).toContainText(
+    "This free voice session has ended",
   );
+  await expect(page.getByRole("alert")).toHaveCount(0);
   await expect
     .poll(
       async () =>
@@ -1081,3 +1083,44 @@ for (const scenario of [
     expect(s.questionRequests()).toBe(0);
     expect(s.errors).toEqual([]);
   });
+
+test("an ignored question is offered back and asked with one tap", async ({
+  page,
+}) => {
+  const s = await setupRemote(page, false, () => ({ ignore: true }));
+  let asked: any;
+  await page.route("**/api/episodes/*/question", (route) => {
+    asked = route.request().postDataJSON();
+    return route.fulfill({
+      json: {
+        revision: asked.revision,
+        action: "answer",
+        answer: "He founded it in 1837.",
+        sources: [],
+        tools: [],
+      },
+    });
+  });
+  await s.speak(["Who was the founder they just mentioned?"]);
+  const offer = page.locator(".missed-offer");
+  await expect(offer).toContainText("Who was the founder");
+  expect(await s.audio.evaluate((a: HTMLAudioElement) => a.paused)).toBe(false);
+  await offer.click();
+  await expect
+    .poll(() => asked?.history?.at(-1)?.text)
+    .toBe("Who was the founder they just mentioned?");
+  await expect(offer).toHaveCount(0);
+  await expect
+    .poll(() => s.audio.evaluate((a: HTMLAudioElement) => a.paused))
+    .toBe(true);
+  expect(s.errors).toEqual([]);
+});
+
+test("a short ignored remark offers nothing back", async ({ page }) => {
+  const s = await setupRemote(page, false, () => ({ ignore: true }));
+  await s.speak(["yeah sure"]);
+  await expect.poll(() => s.utterances.length).toBe(1);
+  await page.waitForTimeout(300);
+  await expect(page.locator(".missed-offer")).toHaveCount(0);
+  expect(s.errors).toEqual([]);
+});

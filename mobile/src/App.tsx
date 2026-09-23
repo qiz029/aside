@@ -56,6 +56,9 @@ import {
   PlaybackTimeline,
   ListeningIndicator,
   CaptureStatus,
+  MissedChip,
+  VoiceExpiredNotice,
+  AnswerSources,
 } from "./PlayerActivity";
 import {
   selectStore,
@@ -756,9 +759,12 @@ function Main() {
       "close-question",
     ].includes(testID ?? "");
     const selectedChip = chip && !secondary;
-    const pill = ["toggle-conversation", "resume", "hold"].includes(
-      testID ?? "",
-    );
+    const pill = [
+      "toggle-conversation",
+      "resume",
+      "hold",
+      "stop-answer",
+    ].includes(testID ?? "");
     const foreground = selectedChip
       ? colors.onAccent
       : paneTab && secondary
@@ -845,6 +851,9 @@ function Main() {
       </Pressable>
     );
   };
+  const latestAnswer = snapshot.history.findLast(
+    (turn) => turn.role === "assistant",
+  );
   const rawError = error || snapshot.error;
   const microphoneDenied =
     /Microphone permission denied|Recording permission has not been granted/i.test(
@@ -1643,6 +1652,7 @@ function Main() {
                         // The newest variable-height item is always at offset 0;
                         // scrolling to an estimated unmeasured end can hide replies.
                         data={[...snapshot.history].reverse()}
+                        extraData={snapshot.sources}
                         keyExtractor={(turn, i) =>
                           turn.id ?? String(snapshot.history.length - i - 1)
                         }
@@ -1761,6 +1771,19 @@ function Main() {
                               >
                                 {item.text}
                               </Text>
+                              {item === latestAnswer && (
+                                <AnswerSources
+                                  key={item.id}
+                                  sources={snapshot.sources}
+                                  onSeek={(atMs) => {
+                                    session.seek(atMs);
+                                    session.start();
+                                  }}
+                                  onError={failure}
+                                  colors={colors}
+                                  tr={tr}
+                                />
+                              )}
                             </View>
                           )
                         }
@@ -1883,14 +1906,26 @@ function Main() {
                                 `${snapshot.resumeSeconds} 秒后继续`,
                                 `Resuming in ${snapshot.resumeSeconds}s`,
                               )
-                            : snapshot.resumeHeld ||
-                                snapshot.resumeNeedsConfirmation
+                            : snapshot.answerStopped
                               ? tr(
-                                  "已暂停 · 随时继续听",
-                                  "Paused · continue when ready",
+                                  "回答已停下，准备好了再继续听",
+                                  "Answer stopped. Keep listening when you're ready",
                                 )
-                              : tr("节目已暂停", "Podcast paused")}
+                              : snapshot.resumeHeld ||
+                                  snapshot.resumeNeedsConfirmation
+                                ? tr(
+                                    "已暂停 · 随时继续听",
+                                    "Paused · continue when ready",
+                                  )
+                                : tr("节目已暂停", "Podcast paused")}
                         </Text>
+                        {snapshot.state.mode === "answering" &&
+                          button(
+                            tr("停下", "Stop"),
+                            () => session.stopAnswer(),
+                            "stop-answer",
+                            true,
+                          )}
                         {!snapshot.resumeHeld &&
                           button(
                             tr("先别继续", "Wait"),
@@ -1920,12 +1955,34 @@ function Main() {
                         tr={tr}
                       />
                     )}
+                  {snapshot.voiceNotice === "expired" && (
+                    <VoiceExpiredNotice
+                      onReconnect={() => session.reconnectVoice()}
+                      colors={colors}
+                      tr={tr}
+                    />
+                  )}
+                  {snapshot.missed && (
+                    <MissedChip
+                      missed={snapshot.missed}
+                      onAsk={() => {
+                        if (session.askMissed()) {
+                          followConversation.current = true;
+                          setPane("conversation");
+                        }
+                      }}
+                      colors={colors}
+                      tr={tr}
+                    />
+                  )}
                   {(!composerOpen || snapshot.listeningMode === "auto") && (
                     <View testID="question-toolbar" style={styles.voiceBar}>
                       {snapshot.listeningMode === "auto" ? (
                         <ListeningIndicator
                           session={session}
                           status={snapshot.liveStatus}
+                          hearing={snapshot.hearing}
+                          reconnecting={snapshot.voiceReconnecting}
                           colors={colors}
                           tr={tr}
                         >

@@ -245,4 +245,6 @@ export interface LiveResult {
   session: { id: string };
   transport: { sdp: string };
   control?: boolean;
+  /** The session may be replaced by a new one when its time runs out (accounts). */
+  renewable?: boolean;
 }

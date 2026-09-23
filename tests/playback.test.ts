@@ -4,6 +4,8 @@ import {
   initialPlayback,
   transition,
   resumeAnchor,
+  resumePoint,
+  utteranceUnits,
   explicitResume,
   selectVoice,
 } from "@aside/engine/core";
@@ -148,4 +150,28 @@ test("voice is duration weighted, not speaker count", () => {
     ]).voice,
     "masculine",
   );
+});
+
+test("the resume point never rewinds further than twelve seconds", () => {
+  const long = { ...anchor, startMs: 0, endMs: 60000 };
+  const passages = [0, 20000, 36000, 44000].map((startMs, i) => ({
+    id: `p${i}`,
+    startMs,
+    endMs: startMs + 8000,
+    text: "",
+    speaker: "A",
+  }));
+  // Within the cap the semantic anchor stands.
+  assert.equal(resumePoint({ anchors: [long], passages }, 9000)?.startMs, 0);
+  // Beyond it, the earliest passage start within twelve seconds.
+  assert.equal(resumePoint({ anchors: [long], passages }, 47000)?.startMs, 36000);
+  assert.equal(resumePoint({ anchors: [long], passages }, 47000)?.id, "a");
+  // No passage starts within the cap: rewind exactly twelve seconds.
+  assert.equal(resumePoint({ anchors: [long], passages: [] }, 47000)?.startMs, 35000);
+});
+test("utterance length counts words and Han characters", () => {
+  assert.equal(utteranceUnits("yeah sure"), 2);
+  assert.equal(utteranceUnits("这是什么意思"), 6);
+  assert.equal(utteranceUnits("GPT 是什么"), 4);
+  assert.equal(utteranceUnits("  ,. "), 0);
 });

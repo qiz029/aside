@@ -66,6 +66,12 @@ const endpoint = "https://openrouter.ai/api/alpha/decisions";
  */
 export const jevActConfidence = 0.7;
 /**
+ * Longest utterance, in words (a Han character counts as one), whose "ignore"
+ * may be applied early. A longer one is more likely a real question: it stays
+ * stopped for the backend instead of resuming and being pulled back.
+ */
+export const jevIgnoreMaxUnits = 8;
+/**
  * Give up here. An answer is only useful before the backend's own, about a
  * second in; slower ones are kept with their real latency for the analysis.
  */

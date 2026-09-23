@@ -99,6 +99,37 @@ export function resumeAnchor(
     .sort((a, b) => b.startMs - a.startMs);
   return before.find((a) => positionMs < a.endMs) ?? before[0] ?? anchors[0];
 }
+/** Longest rewind when the podcast resumes after a conversation. */
+export const maxResumeRewindMs = 12000;
+/**
+ * Where the podcast picks up after a conversation that began at `atMs`: the
+ * start of the containing semantic anchor, unless that is further back than
+ * `maxResumeRewindMs`. Then the earliest transcript passage start within the
+ * cap, so the listener hears whole sentences without replaying a long stretch.
+ */
+export function resumePoint(
+  analysis: { anchors: Anchor[]; passages: Passage[] },
+  atMs: number,
+): { id?: string; startMs: number } | undefined {
+  const anchor = resumeAnchor(analysis.anchors, atMs);
+  if (!anchor || atMs - anchor.startMs <= maxResumeRewindMs) return anchor;
+  const floor = atMs - maxResumeRewindMs;
+  const passage = analysis.passages
+    .filter((p) => p.startMs >= floor && p.startMs <= atMs)
+    .sort((a, b) => a.startMs - b.startMs)[0];
+  return { id: anchor.id, startMs: passage?.startMs ?? floor };
+}
+/**
+ * A rough length of an utterance in words: each Han character counts as one,
+ * as does each run of other letters or digits.
+ */
+export function utteranceUnits(text: string) {
+  return (
+    (text.match(/\p{Script=Han}/gu)?.length ?? 0) +
+    (text.replace(/\p{Script=Han}/gu, " ").match(/[\p{L}\p{N}]+/gu)?.length ??
+      0)
+  );
+}
 export type Mode =
   | "paused"
   | "playing"
@@ -129,7 +160,11 @@ export type PlaybackEvent =
   | { type: "pause" }
   | { type: "tick"; atMs: number }
   | { type: "seek"; atMs: number }
-  | { type: "interrupt"; atMs: number; anchor?: Anchor }
+  | {
+      type: "interrupt";
+      atMs: number;
+      anchor?: { id?: string; startMs: number };
+    }
   | { type: "user_end" }
   | { type: "assistant_start"; revision: number }
   | { type: "assistant_end"; revision: number }

@@ -55,7 +55,7 @@ sequenceDiagram
 `GET /live-control?sessionId=…` 返回持续的 `application/x-ndjson`：
 
 - `ready`：会话通道就绪，之后才启用 Live 麦克风输入。
-- `observing`、`classifying`：后端已收到片段、已开始判断；仅 `debug:true` 带诊断原文。
+- `observing`、`classifying`：后端已收到片段、已开始判断。`observing` 总是带 `text`（听众自己这句话的末尾 500 字），用于界面上"在听你说"的临时字幕和被忽略后的"点这里问"；控制流只属于该听众本人。`classifying` 的原文和对话上下文仍只在 `debug:true` 时下发。
 - `decision`：`decisionId`、`version`、输入时的 `player` 快照、被接受的 `text` 和原有 `QuestionResult`。`ignore`、`wait` 不携带原文，不暂停播放；`classifying` 起播客轻微降音（软让位），`ignore` 后回升，`wait` 由保持超时回升，见[播放器让位](player-controls.md#让位软让位与硬让位)。
 - `engage`：后台开始回答（查节目或输出文本）。携带 `decisionId`、`version`、`revision`、输入时的 `player` 快照与被接受的 `text`。浏览器淡出暂停、打开回答音频窗口并回报；答案由 Live 自己说出，客户端不再 append commentary。
 - `answered`：`decisionId`、后台答案 `answer` 与 `sources`，用于引用与诊断；对话历史仍来自 Live 的实际输出字幕。
@@ -88,7 +88,7 @@ speaking/finished 从队列后的实际 PCM 计算。字幕前缀同样保留，
 
 有动作的决定等待执行回报，回报前不再发出下一动作。已经处理的文本通过 `handledText` 交给后端，防止追加礼貌用语或迟到委派重复执行相对调速。混合控制与问题先推送操作，收到回报后由后端继续回答 `followUpQuestion`。
 
-侧边连接或控制流断开即取消判断；没有自动重放指令。旧页、换集和停止收听会中止订阅。当前采用明确报错后重新连接，尚未实现断网后的自动恢复。浏览器不支持通道时显示错误，不退回关键词判断。
+侧边连接或控制流断开即取消判断；没有自动重放指令。旧页、换集和停止收听会中止订阅。浏览器 25 秒收不到任何事件（心跳 15 秒一次）即判定断开。断网、控制流中断或超时时，收听中的会话在 1、4、10 秒后自动重连，最多三次，期间只显示"正在重新连接"，都失败才报错；聊到一半断开时节目保持暂停。会话到时（`Voice session time limit reached`）：`/live` 返回 `renewable: true` 的账号会话同样自动换新，访客会话只显示一条不报错的提示和"再开一段语音"按钮，不自动重开，避免绕过试用时长。浏览器不支持通道时显示错误，不退回关键词判断。
 
 停止、换集和 `pagehide` 会立即通过带 `keepalive` 的 `usage{closed:true}` 请求关闭已知 Live 会话，不等待 WebRTC 的 `session.closed` 回调或客户端关闭超时；页面退出后这些回调可能永远不执行。请求保留原会话和节目 ID，由 supervisor 确认关闭后释放名额。`trial_busy` 表示同一账号仍有占用或并发池已满，区别于每日额度耗尽；浏览器目前短暂重试约 10 秒，不能保证覆盖异常关闭的全部等待时间。
 

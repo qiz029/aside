@@ -39,7 +39,15 @@ export function PlayerView({
     followupMs,
     resumeSeconds,
     resumeHeld,
+    answerStopped,
     holdResume,
+    hearing,
+    missed,
+    voiceNotice,
+    voiceReconnecting,
+    askMissed,
+    stopAnswer,
+    reconnectVoice,
     returnContext,
     latencies,
     episode,
@@ -93,10 +101,6 @@ export function PlayerView({
   const showCover = !!episode?.cover && brokenCover !== episode.id;
   const panelId = useId();
   const audioPlaying = state.mode === "playing";
-  // Aside is in the conversation from the interruption until playback is asked to resume.
-  const agentPresent = !!state.interruption && !state.resumeRequested;
-  const agentJoining =
-    agentPresent && ["connecting", "transcribing"].includes(liveStatus);
   const agentSpeaking = state.mode === "answering";
   const [mobileTab, setMobileTab] = useState<"transcript" | "chat" | null>(
     "transcript",
@@ -135,7 +139,7 @@ export function PlayerView({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (
-        event.code !== "Space" ||
+        !["Space", "Escape", "KeyR", "KeyH"].includes(event.code) ||
         event.isComposing ||
         event.altKey ||
         event.ctrlKey ||
@@ -154,6 +158,16 @@ export function PlayerView({
       )
         return;
       if (!episode) return;
+      // Conversation keys: Esc stops the reply, R continues the podcast, H holds it.
+      if (event.code !== "Space") {
+        if (!state.interruption) return;
+        event.preventDefault();
+        if (event.repeat) return;
+        if (event.code === "Escape") stopAnswer();
+        else if (event.code === "KeyR") requestResume();
+        else holdResume();
+        return;
+      }
       event.preventDefault();
       if (event.repeat) return;
       if (listeningActive) stopListening();
@@ -161,7 +175,16 @@ export function PlayerView({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [episode, listeningActive, startListening, stopListening]);
+  }, [
+    episode,
+    listeningActive,
+    startListening,
+    stopListening,
+    state.interruption,
+    stopAnswer,
+    requestResume,
+    holdResume,
+  ]);
 
   useEffect(() => {
     if (!manualHeld) return;
@@ -287,7 +310,9 @@ export function PlayerView({
             <span
               className={`dot ${state.mode === "playing" ? "green" : ""}`}
             />
-            {t(names[state.mode])}
+            {hearing && (state.mode === "playing" || !!state.interruption)
+              ? t(names.listening)
+              : t(names[state.mode])}
             {episode.analysis && (
               <span className="voice-label">
                 {episode.analysis.voice === "feminine" ? t("女声") : t("男声")}{" "}
@@ -341,7 +366,18 @@ export function PlayerView({
         onTimeUpdate={audioTick}
         onEnded={stopListening}
       />
-      <VoiceActivity status={liveStatus} readLevel={player.microphoneLevel} />
+      <VoiceActivity
+        status={liveStatus}
+        readLevel={player.microphoneLevel}
+        heard={hearing}
+        missed={missed}
+        reconnecting={voiceReconnecting}
+        notice={voiceNotice}
+        onAskMissed={() => {
+          if (askMissed()) setMobileTab("chat");
+        }}
+        onReconnect={reconnectVoice}
+      />
       <div className="lower" hidden={debugOpen}>
         <section
           className="transcript"
@@ -533,15 +569,29 @@ export function PlayerView({
                 <span>
                   {resumeSeconds !== null
                     ? resumeLabel(resumeSeconds)
-                    : resumeHeld || followupMs === 0
-                      ? t("准备好了，再继续听")
-                      : busy
-                        ? t("聊完再接着听")
-                        : t("可以追问，或继续听")}
+                    : answerStopped
+                      ? t("回答已停下，准备好了再继续听")
+                      : resumeHeld || followupMs === 0
+                        ? t("准备好了，再继续听")
+                        : busy
+                          ? t("聊完再接着听")
+                          : t("可以追问，或继续听")}
                 </span>
+                {agentSpeaking && (
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    aria-keyshortcuts="Escape"
+                    title={t("停下回答（Esc）")}
+                    onClick={stopAnswer}
+                  >
+                    {t("停下回答")}
+                  </button>
+                )}
                 {!resumeHeld && (
                   <button
                     className="btn btn-secondary btn-sm"
+                    aria-keyshortcuts="H"
+                    title={t("先别继续（H）")}
                     onClick={holdResume}
                   >
                     {t("先别继续")}
@@ -712,6 +762,8 @@ export function PlayerView({
             {state.interruption && (
               <button
                 className="resume btn btn-secondary btn-sm"
+                aria-keyshortcuts="R"
+                title={t("继续听（R）")}
                 onClick={requestResume}
               >
                 {t("继续听 ↗")}

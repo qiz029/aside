@@ -5,13 +5,33 @@ import "./voice-activity.css";
 
 const shape = [0.35, 0.65, 0.85, 1, 0.85, 0.65, 0.35];
 
-/** Local input feedback, independent of intent decisions or model latency. */
+/** The tail of a long caption, so the newest words stay in view. */
+const tail = (text: string, max = 120) =>
+  text.length > max ? `…${text.slice(-max).trimStart()}` : text;
+
+/**
+ * Local input feedback, independent of intent decisions or model latency,
+ * with what the app heard: the listener's words while it decides, a retry for
+ * words it set aside, and the state of the voice connection.
+ */
 export function VoiceActivity({
   status,
   readLevel,
+  heard,
+  missed,
+  reconnecting,
+  notice,
+  onAskMissed,
+  onReconnect,
 }: {
   status: VoiceStatus;
   readLevel: () => number;
+  heard?: { text: string } | null;
+  missed?: { text: string } | null;
+  reconnecting?: boolean;
+  notice?: "expired" | null;
+  onAskMissed?: () => void;
+  onReconnect?: () => void;
 }) {
   const meter = useRef<HTMLSpanElement>(null);
   const latest = useRef(readLevel);
@@ -60,22 +80,60 @@ export function VoiceActivity({
     return () => cancelAnimationFrame(frame);
   }, [enabled]);
 
-  if (!enabled) return null;
-  const connecting = status === "arming" || status === "connecting";
-  const label =
-    status === "arming"
+  const extras = (
+    <>
+      {heard?.text && (
+        <p className="heard-caption" aria-live="polite">
+          “{tail(heard.text)}”
+        </p>
+      )}
+      {missed && (
+        <button
+          type="button"
+          className="missed-offer btn btn-secondary btn-sm"
+          onClick={onAskMissed}
+        >
+          <span>{t("没当成提问")}</span>
+          <span className="missed-offer-text">“{tail(missed.text, 48)}”</span>
+          <strong>{t("点这里问")}</strong>
+        </button>
+      )}
+      {notice === "expired" && (
+        <div className="voice-notice" role="status">
+          <span>{t("这次免费语音对话到时间了，节目会继续播放。")}</span>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={onReconnect}
+          >
+            {t("再开一段语音")}
+          </button>
+        </div>
+      )}
+    </>
+  );
+  if (!enabled && !reconnecting)
+    return notice ? <div className="voice-activity-row">{extras}</div> : null;
+  const connecting =
+    reconnecting || status === "arming" || status === "connecting";
+  const listening = hearing || !!heard;
+  const label = reconnecting
+    ? t("语音断了，正在重新连接…")
+    : status === "arming"
       ? t("正在开启麦克风")
       : status === "connecting"
         ? t("正在连接语音")
-        : hearing
-          ? t("正在接收声音")
-          : t("麦克风已开启");
+        : heard
+          ? t("在听你说")
+          : hearing
+            ? t("正在接收声音")
+            : t("麦克风已开启");
 
   return (
     <div className="voice-activity-row">
       <div
         className="voice-activity"
-        data-hearing={hearing || undefined}
+        data-hearing={listening || undefined}
         data-connecting={connecting || undefined}
         aria-label={t("麦克风反馈")}
         role="group"
@@ -100,6 +158,7 @@ export function VoiceActivity({
           {label}
         </span>
       </div>
+      {extras}
     </div>
   );
 }

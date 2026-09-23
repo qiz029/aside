@@ -115,6 +115,8 @@ export class Conversation {
       answerPreview: this.answerPreview,
       busy: (!!this.pending && this.acceptedInput) || !!this.liveAnswerId,
       resumeHeld: this.held || this.bargedIn,
+      /** The listener stopped the reply (talking over it, or Esc); the podcast waits to be continued. */
+      answerStopped: this.bargedIn,
       resumeNeedsConfirmation:
         !!this.spokenCompletion && !this.spokenCompletion.complete,
       followupMs: this.waitMs,

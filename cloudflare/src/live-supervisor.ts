@@ -173,7 +173,12 @@ export class LiveSupervisor extends DurableObject<Env> {
       await this.attach(state);
       if (Date.now() >= state.deadline || !(await enabled(this.env)))
         throw Error("Trial stopped");
-      return { ...result, ...(control ? { control: true } : {}) };
+      return {
+        ...result,
+        ...(control ? { control: true } : {}),
+        // An account's session may be replaced when it runs out; a guest's may not.
+        renewable: !!accountId,
+      };
     } catch (error) {
       this.control?.close();
       if (error instanceof LiveCreationRejected && !state.session) {

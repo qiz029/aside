@@ -19,6 +19,7 @@ import { BrowserPodcastAudio } from "./podcast-audio";
 import { episodeLibrary, playerBackend } from "./player-api";
 import { prepareTrial } from "./trial-access";
 import { loadPlayerConfig, savePlayerConfig } from "./player-preferences";
+import { playHeardCue } from "./earcon";
 export const names = {
   paused: "已暂停",
   playing: "正在播放",
@@ -40,6 +41,7 @@ export function usePlayerController() {
     const session = new ListeningSession(audio, playerBackend, {
       playerConfig: loadPlayerConfig(),
       debugRecognition: new URLSearchParams(location.search).has("debug"),
+      cue: playHeardCue,
     });
     return { audio, session };
   });
@@ -307,6 +309,9 @@ export function usePlayerController() {
     beginManual: () => session.beginManual(),
     endManual: () => session.endManual(),
     holdResume: () => session.holdResume(),
+    askMissed: () => session.askMissed(),
+    stopAnswer: () => session.stopAnswer(),
+    reconnectVoice: () => session.reconnectVoice(),
     changeListeningMode: (mode: ListeningMode) => {
       savePreference("aside.listeningMode", mode);
       session.setListeningMode(mode);

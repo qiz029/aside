@@ -1,11 +1,12 @@
 import {
   backendAction,
   jevActConfidence,
+  jevIgnoreMaxUnits,
   type JevShadow,
   type ShadowAction,
   type ShadowHandle,
 } from "./jev-shadow.js";
-import type { Analysis } from "@aside/engine/core";
+import { utteranceUnits, type Analysis } from "@aside/engine/core";
 import { getPassage, searchPodcast } from "@aside/engine/server";
 import {
   playerCommandsSchema,
@@ -66,6 +67,11 @@ interface Delegation {
 const fastPause =
   /^[\s,，。.!！?？]*(等一下|等等|等一等|先等一下|先停一下|停一下|暂停|暂停一下|wait|wait wait|hold on|hang on|pause|pause it)[\s,，。.!！?？]*$/iu;
 
+/** Longest tail of the heard utterance sent back for the listener's caption. */
+const heardCaptionChars = 500;
+/** Speech this soon after an "ignore" is logged: a re-asked question is the cheapest sign of a wrong one. */
+const reaskWindowMs = 10000;
+
 /**
  * Server side of Responses delegation. GPT-Live normally hands speech to the
  * configured backend and speaks the result. Missing handoffs are requested over
@@ -97,6 +103,7 @@ export class LiveDelegation {
   private conversationKey = "";
   private answeredInput?: { turnId: string; text: string };
   private answerVariants?: SpokenAnswerVariants;
+  private ignoredAt = Number.NEGATIVE_INFINITY;
   constructor(
     private player: LivePlayerState,
     private analysis: Analysis,
@@ -193,6 +200,11 @@ export class LiveDelegation {
         gapMs: Math.round(gap),
         wasPlaying: this.player.wasPlaying,
       });
+      const sinceIgnore = this.ports.now() - this.ignoredAt;
+      if (sinceIgnore <= reaskWindowMs)
+        console.log("Aside voice spoke again after ignore", {
+          sinceIgnoreMs: Math.round(sinceIgnore),
+        });
       this.inputStartMs = start;
       this.input = {
         turnId: crypto.randomUUID(),
@@ -207,11 +219,13 @@ export class LiveDelegation {
     this.separators = "";
     if (this.delegation?.input.turnId === this.input.turnId)
       this.delegation.text = this.text;
+    // The listener's own words, for their provisional caption. The stream
+    // belongs to this listener alone; classification context stays debug-only.
     this.ports.emit({
       type: "observing",
       version: this.player.version,
       input: this.marker(),
-      ...(this.debug ? { text: this.text } : {}),
+      text: this.text.slice(-heardCaptionChars),
     });
     this.pauseEarly();
     if (this.input) this.responseTrigger.observe(this.input.turnId);
@@ -531,6 +545,7 @@ export class LiveDelegation {
     )
       return false;
     if (action === "ignore") {
+      if (utteranceUnits(seen) > jevIgnoreMaxUnits) return false;
       delegation.fastIgnore = true;
       this.emitPassive(delegation, "ignore", "ignore_input");
     } else if (action === "pause") {
@@ -571,6 +586,7 @@ export class LiveDelegation {
     action: "ignore" | "wait",
     tool: string,
   ) {
+    if (action === "ignore") this.ignoredAt = this.ports.now();
     this.ports.emit({
       type: "decision",
       version: this.player.version,

@@ -105,16 +105,20 @@ function setup(
   debugRecognition = false,
   server = false,
   spokenResume: "quiet" | "verified" = "quiet",
-  options: Pick<SessionOptions, "speechYield" | "followupMs"> = {},
+  options: Pick<SessionOptions, "speechYield" | "followupMs" | "cue"> & {
+    renewable?: boolean;
+  } = {},
 ) {
   const clock = new Clock();
   const audio = {
     positionMs: 31000,
     playing: false,
     plays: 0,
-    async play() {
+    fades: [] as number[],
+    async play(fadeInMs = 0) {
       this.playing = true;
       this.plays++;
+      this.fades.push(fadeInMs);
     },
     pause() {
       this.playing = false;
@@ -154,6 +158,7 @@ function setup(
   let receive!: (event: LiveControlEvent) => void;
   let failControl!: (error: Error) => void;
   let createLive: (() => Promise<unknown>) | undefined;
+  let liveFailure = "";
   const updates: LiveControlUpdate[] = [];
   const liveRequests: Parameters<PlayerBackend["live"]>[1][] = [];
   const usages: Parameters<PlayerBackend["usage"]>[1][] = [];
@@ -167,6 +172,7 @@ function setup(
     },
     async live(_id, request) {
       if (!server) throw Error("Unexpected live negotiation");
+      if (liveFailure) throw Error(liveFailure);
       liveRequests.push(request);
       await liveGate;
       serverState = request.control!.player;
@@ -174,6 +180,7 @@ function setup(
         session: { id: "test-session" },
         transport: { sdp: "mock" },
         control: true,
+        renewable: options.renewable,
       };
     },
     ...(server
@@ -271,7 +278,9 @@ function setup(
     playerConfig,
     clock,
     spokenResume,
-    ...options,
+    speechYield: options.speechYield,
+    followupMs: options.followupMs,
+    cue: options.cue,
     voiceFactory(_mic, _config, cb, remote) {
       createLive = () => remote.create("mock");
       voiceCount++;
@@ -335,6 +344,10 @@ function setup(
     },
     usages,
     usageEpisodes,
+    /** Every later session start fails with this message. */
+    failLive(message: string) {
+      liveFailure = message;
+    },
     /** Keeps the next session start pending until the returned release runs. */
     holdLive() {
       let release!: () => void;
@@ -1342,13 +1355,11 @@ test("given a late repeat command, replay uses the user's original speaking posi
   s.session.dispose();
 });
 
-test("manual settings, navigation and episode switches supersede pending remote commands", async () => {
-  for (const change of ["volume", "seek", "episode"] as const) {
+test("navigation and episode switches supersede pending remote commands", async () => {
+  for (const change of ["seek", "episode"] as const) {
     const s = setup("auto");
     await liveInput(s, "A little slower please");
-    if (change === "volume")
-      s.session.executePlayerCommand({ type: "set_volume", volume: 0.4 });
-    else if (change === "seek") s.session.seek(50000);
+    if (change === "seek") s.session.seek(50000);
     else s.session.load({ ...episode, id: "new" }, null);
     assert.equal(s.requests[0].signal.aborted, true);
     remoteResult(s, 0, [{ type: "adjust_rate", direction: "slower" }]);
@@ -1525,7 +1536,19 @@ test("server ignore and wait do not pause, duck or persist bystander speech", as
   s.session.dispose();
 });
 
-test("manual settings invalidate a queued server decision and report rejection", async () => {
+test("a manual volume change leaves a pending remote command in force", async () => {
+  const s = setup("auto");
+  await liveInput(s, "A little slower please");
+  s.session.executePlayerCommand({ type: "set_volume", volume: 0.4 });
+  assert.equal(s.requests[0].signal.aborted, false);
+  remoteResult(s, 0, [{ type: "adjust_rate", direction: "slower" }]);
+  await flush();
+  assert.equal(s.audio.config.playbackRate, 0.9);
+  assert.equal(s.audio.config.volume, 0.4);
+  s.session.dispose();
+});
+
+test("manual settings keep a queued server decision valid; an episode switch invalidates it", async () => {
   const s = setup("auto", undefined, undefined, false, true);
   s.session.start();
   await flush();
@@ -1533,9 +1556,9 @@ test("manual settings invalidate a queued server decision and report rejection",
   s.session.setPlaybackRate(1.2);
   s.push(old);
   await flush();
-  assert.equal(s.audio.playing, true);
+  assert.equal(s.audio.playing, false);
   assert.equal(s.audio.config.playbackRate, 1.2);
-  assert.equal(s.updates.at(-1)?.acknowledgement?.applied, false);
+  assert.equal(s.updates.at(-1)?.acknowledgement?.applied, true);
   const stale = s.decision("player_control");
   s.session.load({ ...episode, id: "another" }, null);
   s.push(stale);
@@ -2735,7 +2758,9 @@ test("given a control failure during a spoken answer, the microphone and answeri
   const diagnostics = await s.session.voiceDiagnostics();
   assert.equal(diagnostics.status, "off");
   assert.equal(diagnostics.spokenReply?.state, "interrupted");
-  assert.match(snapshot.error, /time limit reached/);
+  // A guest's session ran out: a calm notice, not an error.
+  assert.equal(snapshot.error, "");
+  assert.equal(snapshot.voiceNotice, "expired");
   assert.equal(s.usages.at(-1)?.closed, true);
   // A late callback from the old connection cannot resurrect the answer.
   s.callbacks.onOutput(true);
@@ -3616,4 +3641,237 @@ test("mobile screen updates on passage boundaries and semantic changes, not play
   s.session.setPlaybackRate(1.5);
   assert.notEqual(screen(), draft);
   s.session.dispose();
+});
+
+function serverSession(
+  t: { after(fn: () => void): void },
+  options: Parameters<typeof setup>[6] = {},
+) {
+  const s = setup("auto", undefined, undefined, false, true, "quiet", options);
+  t.after(() => s.session.dispose());
+  return s;
+}
+async function heard(s: ReturnType<typeof setup>, text: string) {
+  s.session.start();
+  await flush();
+  s.warm();
+  s.callbacks.onSpeech(true);
+  s.push({
+    type: "observing",
+    version: s.serverState.version,
+    input: { turnId: "heard-turn" },
+    text,
+  });
+}
+
+test("the listener's words show as a provisional caption from speech onset until a decision", async (t) => {
+  const cues: string[] = [];
+  const s = serverSession(t, { cue: (kind) => cues.push(kind) });
+  s.session.start();
+  await flush();
+  s.warm();
+  s.callbacks.onSpeech(true);
+  assert.deepEqual(s.session.getSnapshot().hearing, { text: "" });
+  s.push({
+    type: "observing",
+    version: s.serverState.version,
+    input: { turnId: "heard-turn" },
+    text: "What is a biography",
+  });
+  assert.equal(s.session.getSnapshot().hearing?.text, "What is a biography");
+  s.callbacks.onSpeech(false);
+  engaged(s);
+  await flush();
+  assert.equal(s.session.getSnapshot().hearing, null);
+  assert.deepEqual(cues, ["heard"]);
+});
+
+test("a caption without any decision clears once nobody is speaking", async (t) => {
+  const s = serverSession(t);
+  await heard(s, "hmm");
+  s.clock.advance(10000);
+  assert.ok(s.session.getSnapshot().hearing, "kept while still speaking");
+  s.callbacks.onSpeech(false);
+  s.clock.advance(4000);
+  assert.equal(s.session.getSnapshot().hearing, null);
+});
+
+test("a long ignored utterance is offered for a one-tap retry; a short one is not", async (t) => {
+  const s = serverSession(t);
+  await heard(s, "Who was the founder they just mentioned");
+  s.callbacks.onSpeech(false);
+  const ignore = s.decision("ignore");
+  ignore.input = { turnId: "heard-turn" };
+  s.push(ignore);
+  await flush();
+  assert.equal(
+    s.session.getSnapshot().missed?.text,
+    "Who was the founder they just mentioned",
+  );
+  assert.equal(s.session.getSnapshot().hearing, null);
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.session.askMissed(), true);
+  assert.equal(s.session.getSnapshot().missed, null);
+  assert.equal(s.audio.playing, false);
+  assert.equal(
+    s.requests.at(-1)?.data.history.at(-1)?.text,
+    "Who was the founder they just mentioned",
+  );
+
+  const short = serverSession(t);
+  await heard(short, "yeah sure");
+  short.callbacks.onSpeech(false);
+  short.push(short.decision("ignore"));
+  await flush();
+  assert.equal(short.session.getSnapshot().missed, null);
+});
+
+test("the retry offer expires, and new speech withdraws it", async (t) => {
+  const s = serverSession(t);
+  await heard(s, "Can you explain what an index fund is");
+  s.callbacks.onSpeech(false);
+  s.push(s.decision("ignore"));
+  await flush();
+  assert.ok(s.session.getSnapshot().missed);
+  s.clock.advance(8000);
+  assert.equal(s.session.getSnapshot().missed, null);
+
+  s.callbacks.onSpeech(true);
+  s.push({
+    type: "observing",
+    version: s.serverState.version,
+    input: { turnId: "second" },
+    text: "Can you explain what an index fund is",
+  });
+  s.callbacks.onSpeech(false);
+  s.push(s.decision("ignore"));
+  await flush();
+  assert.ok(s.session.getSnapshot().missed);
+  s.callbacks.onSpeech(true);
+  assert.equal(s.session.getSnapshot().missed, null);
+});
+
+test("the podcast fades back in after a conversation and after a stop for speech", async (t) => {
+  const s = serverSession(t);
+  await heard(s, "hmm");
+  s.callbacks.onSpeech(false);
+  s.push(s.decision("ignore"));
+  await flush();
+  assert.equal(s.audio.fades.at(-1), 400);
+  engaged(s);
+  await flush();
+  s.session.executePlayerCommand({ type: "play" });
+  s.clock.advance(0);
+  await flush();
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.audio.fades.at(-1), 400);
+});
+
+test("a manual rate change keeps the follow-up countdown running", async (t) => {
+  const s = serverSession(t);
+  s.session.start();
+  await flush();
+  const decisionId = engaged(s);
+  await flush();
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", "A life story.");
+  s.push({ type: "answered", decisionId, answer: "A life story.", sources: [] });
+  s.callbacks.onOutput(false);
+  await flush();
+  assert.equal(s.session.getSnapshot().resumeSeconds, 3);
+  s.session.setPlaybackRate(1.5);
+  assert.equal(s.session.getSnapshot().resumeSeconds, 3);
+  s.clock.advance(3000);
+  await flush();
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.audio.config.playbackRate, 1.5);
+});
+
+test("Esc stops the spoken reply and the podcast waits to be continued", async (t) => {
+  const s = serverSession(t);
+  s.session.start();
+  await flush();
+  engaged(s);
+  await flush();
+  s.callbacks.onOutput(true);
+  s.callbacks.onTranscript("assistant", "A biography is");
+  s.session.stopAnswer();
+  const snapshot = s.session.getSnapshot();
+  assert.equal(snapshot.state.assistantSpeaking, false);
+  assert.equal(snapshot.answerStopped, true);
+  assert.ok(s.commands.includes("interrupt"));
+  s.clock.advance(20000);
+  await flush();
+  assert.equal(s.audio.playing, false);
+  // Late audio from the stopped reply stays unheard.
+  s.callbacks.onOutput(true);
+  assert.equal(s.session.getSnapshot().state.assistantSpeaking, false);
+});
+
+test("a dropped control stream reconnects on its own while the podcast plays", async (t) => {
+  const s = serverSession(t);
+  s.session.start();
+  await flush();
+  assert.equal(s.voiceCount, 1);
+  s.failControl("Voice control heartbeat stopped. Please reconnect the microphone.");
+  await flush();
+  let snapshot = s.session.getSnapshot();
+  assert.equal(snapshot.error, "");
+  assert.equal(snapshot.voiceReconnecting, true);
+  assert.equal(s.audio.playing, true);
+  s.clock.advance(1000);
+  await flush();
+  await flush();
+  assert.equal(s.voiceCount, 2);
+  snapshot = s.session.getSnapshot();
+  assert.equal(snapshot.voiceReconnecting, false);
+  assert.equal(snapshot.error, "");
+});
+
+test("reconnection gives up after three attempts and reports the failure", async (t) => {
+  const s = serverSession(t);
+  s.session.start();
+  await flush();
+  const message = "Voice control disconnected. Please reconnect the microphone.";
+  s.failLive("Failed to fetch");
+  s.failControl(message);
+  await flush();
+  for (const delay of [1000, 4000, 10000]) {
+    assert.equal(s.session.getSnapshot().error, "");
+    s.clock.advance(delay);
+    await flush();
+    await flush();
+  }
+  assert.match(s.session.getSnapshot().error, /Failed to fetch/);
+  assert.equal(s.session.getSnapshot().voiceReconnecting, false);
+});
+
+test("an account's expired session is replaced; a guest's shows a notice until reconnected", async (t) => {
+  const account = serverSession(t, { renewable: true });
+  account.session.start();
+  await flush();
+  account.failControl();
+  await flush();
+  assert.equal(account.session.getSnapshot().voiceNotice, null);
+  account.clock.advance(1000);
+  await flush();
+  await flush();
+  assert.equal(account.voiceCount, 2);
+
+  const guest = serverSession(t);
+  guest.session.start();
+  await flush();
+  guest.failControl();
+  await flush();
+  assert.equal(guest.session.getSnapshot().voiceNotice, "expired");
+  assert.equal(guest.session.getSnapshot().error, "");
+  guest.clock.advance(20000);
+  await flush();
+  assert.equal(guest.voiceCount, 1);
+  assert.equal(guest.audio.playing, true);
+  guest.session.reconnectVoice();
+  await flush();
+  await flush();
+  assert.equal(guest.voiceCount, 2);
+  assert.equal(guest.session.getSnapshot().voiceNotice, null);
 });

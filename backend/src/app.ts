@@ -410,7 +410,12 @@ export function createApp(store: Store, services?: BackendServices) {
           throw error;
         }
       }
-      return { ...result, ...(q.control ? { control: true } : {}) };
+      // The local server is single-user: its sessions renew like an account's.
+      return {
+        ...result,
+        ...(q.control ? { control: true } : {}),
+        renewable: true,
+      };
     },
   );
   app.route<{ Params: { id: string }; Querystring: { sessionId?: string } }>({

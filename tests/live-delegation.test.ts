@@ -839,6 +839,25 @@ test(`${mobile ? "mobile" : "Web"}: a confident fast ignore continues the podcas
   s.delegation.close();
 });
 
+test("a long utterance stays with the backend even when the fast classifier is sure it is not for the app", async () => {
+  const s = setup();
+  s.speak("So what do you think the company should have done differently back then?");
+  s.delegate();
+  s.backend({ type: "response.created" });
+  assert.equal(s.shadowed[0].answer("ignore", 0.95), false);
+  assert.equal(s.decisions().length, 0);
+  s.delegation.close();
+});
+
+test("the listener's own words come back for their caption without debug mode", () => {
+  const s = setup();
+  s.speak("What is a biography?");
+  const observing = s.events.at(-1);
+  assert.equal(observing?.type, "observing");
+  assert.equal(observing?.type === "observing" && observing.text, "What is a biography?");
+  s.delegation.close();
+});
+
 for (const mobile of [false, true])
 test(`${mobile ? "mobile" : "Web"}: the backend overrules a fast ignore by answering`, async () => {
   const s = setup(false, 30, mobile);

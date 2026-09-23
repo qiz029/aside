@@ -1,7 +1,58 @@
 .voice-activity-row {
   display: flex;
   flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
   padding: 4px 0 10px;
+}
+/* The listener's words while the app decides: provisional, so quieter than a chat turn. */
+.heard-caption {
+  flex: 1 1 220px;
+  min-width: 0;
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 14px;
+  font-style: italic;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.missed-offer {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+  animation: voice-offer-in 180ms ease-out;
+}
+.missed-offer > span {
+  color: var(--ink-3);
+}
+.missed-offer .missed-offer-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-2);
+}
+.missed-offer strong {
+  flex: none;
+  color: var(--olive);
+  font-weight: 600;
+}
+.voice-notice {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+@keyframes voice-offer-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
 }
 .voice-activity {
   display: inline-flex;
@@ -56,5 +107,8 @@
 @media (prefers-reduced-motion: reduce) {
   .voice-activity {
     transition: none;
+  }
+  .missed-offer {
+    animation: none;
   }
 }

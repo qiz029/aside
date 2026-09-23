@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useSyncExternalStore } from "react";
-import { AppState, Text, View } from "react-native";
+import { AppState, Linking, Pressable, Text, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import type { ListeningSession } from "@aside/player-runtime/listening-session";
 import type { SessionSnapshot } from "./session-selection";
 import { Scrubber } from "./Scrubber";
@@ -15,6 +16,7 @@ type Shared = {
     fill: string;
     text: string;
     timestamp: string;
+    surface: string;
   };
   tr(zh: string, en: string): string;
 };
@@ -133,17 +135,25 @@ export function CaptureStatus({
     </Text>
   );
 }
+/** Only the tail of long provisional speech fits the bar. */
+export const hearingTail = (text: string, max = 120) =>
+  text.length > max ? `…${text.slice(-max).trimStart()}` : text;
 export function ListeningIndicator({
   session,
   status,
+  hearing,
+  reconnecting,
   colors,
   tr,
   children,
 }: Shared & {
   session: ListeningSession;
   status: SessionSnapshot["liveStatus"];
+  hearing: SessionSnapshot["hearing"];
+  reconnecting: boolean;
   children: React.ReactNode;
 }) {
+  const caption = hearing ? hearingTail(hearing.text.trim()) : "";
   const [inputLevel, setInputLevel] = useState(0);
   useEffect(() => {
     if (status !== "on") {
@@ -201,22 +211,45 @@ export function ListeningIndicator({
           },
         ]}
       />
-      <Text
-        testID="voice-connection-status"
-        maxFontSizeMultiplier={1.6}
-        style={{
-          flex: 1,
-          color: colors.text,
-          fontSize: 14,
-          fontWeight: "600",
-        }}
+      <View
+        accessibilityLiveRegion="polite"
+        style={{ flex: 1, paddingVertical: caption ? 6 : 0, gap: 2 }}
       >
-        {status === "on"
-          ? tr("正在聆听 · 直接开口就好", "Listening · just speak")
-          : status === "connecting"
-            ? tr("正在连接…", "Connecting…")
-            : tr("麦克风已关闭", "Microphone is off")}
-      </Text>
+        <Text
+          testID="voice-connection-status"
+          maxFontSizeMultiplier={1.6}
+          style={{
+            color: colors.text,
+            fontSize: 14,
+            fontWeight: "600",
+          }}
+        >
+          {reconnecting
+            ? tr("语音断了，正在重新连接…", "Voice dropped. Reconnecting…")
+            : status === "on"
+              ? hearing
+                ? tr("在听你说", "Listening to you")
+                : tr("正在聆听 · 直接开口就好", "Listening · just speak")
+              : status === "connecting"
+                ? tr("正在连接…", "Connecting…")
+                : tr("麦克风已关闭", "Microphone is off")}
+        </Text>
+        {!reconnecting && status === "on" && caption ? (
+          <Text
+            testID="hearing-caption"
+            maxFontSizeMultiplier={1.4}
+            numberOfLines={3}
+            style={{
+              color: colors.muted,
+              fontSize: 13,
+              lineHeight: 18,
+              fontStyle: "italic",
+            }}
+          >
+            {caption}
+          </Text>
+        ) : null}
+      </View>
       {status === "on" && (
         <View
           testID="microphone-level"
@@ -243,6 +276,243 @@ export function ListeningIndicator({
         </View>
       )}
       {children}
+    </View>
+  );
+}
+
+/** A short quote of what the listener said, for chips and labels. */
+const excerpt = (text: string, max = 40) => {
+  const clean = text.trim().replace(/\s+/g, " ");
+  return clean.length > max ? `${clean.slice(0, max).trimEnd()}…` : clean;
+};
+/** One tap turns speech the backend set aside into a question. */
+export function MissedChip({
+  missed,
+  onAsk,
+  colors,
+  tr,
+}: Shared & { missed: { text: string }; onAsk(): void }) {
+  const quote = excerpt(missed.text);
+  const label = tr("没当成提问 · 点这里问", "Not taken as a question · Ask it");
+  return (
+    <Pressable
+      testID="ask-missed"
+      accessibilityRole="button"
+      accessibilityLabel={`${label}: ${quote}`}
+      onPress={onAsk}
+      style={({ pressed }) => ({
+        alignSelf: "flex-start",
+        maxWidth: "100%",
+        minHeight: 44,
+        justifyContent: "center",
+        borderRadius: 18,
+        paddingHorizontal: 16,
+        paddingVertical: 7,
+        marginTop: 6,
+        backgroundColor: colors.fill,
+        opacity: pressed ? 0.65 : 1,
+        transform: [{ scale: pressed ? 0.97 : 1 }],
+      })}
+    >
+      <Text
+        maxFontSizeMultiplier={1.5}
+        numberOfLines={1}
+        style={{ color: colors.text, fontSize: 13, fontWeight: "600" }}
+      >
+        {label}
+      </Text>
+      <Text
+        maxFontSizeMultiplier={1.4}
+        numberOfLines={1}
+        style={{ color: colors.muted, fontSize: 12, fontStyle: "italic" }}
+      >
+        {tr(`「${quote}」`, `“${quote}”`)}
+      </Text>
+    </Pressable>
+  );
+}
+/** A guest's free voice session ran out: calm, not an error. */
+export function VoiceExpiredNotice({
+  onReconnect,
+  colors,
+  tr,
+}: Shared & { onReconnect(): void }) {
+  const action = tr("再开一段语音", "Start voice again");
+  return (
+    <View
+      testID="voice-expired"
+      accessibilityLiveRegion="polite"
+      style={{
+        flexDirection: "row",
+        flexWrap: "wrap",
+        alignItems: "center",
+        gap: 8,
+        marginTop: 6,
+        borderRadius: 18,
+        paddingLeft: 14,
+        paddingRight: 8,
+        paddingVertical: 8,
+        backgroundColor: colors.fill,
+      }}
+    >
+      <Text
+        maxFontSizeMultiplier={1.5}
+        style={{
+          color: colors.text,
+          fontSize: 14,
+          lineHeight: 20,
+          flexGrow: 1,
+          flexShrink: 1,
+          flexBasis: 160,
+        }}
+      >
+        {tr(
+          "这次免费语音对话到时间了，节目会继续播放。",
+          "This free voice session has ended. The podcast keeps playing.",
+        )}
+      </Text>
+      <Pressable
+        testID="reconnect-voice"
+        accessibilityRole="button"
+        accessibilityLabel={action}
+        onPress={onReconnect}
+        style={({ pressed }) => ({
+          minHeight: 44,
+          borderRadius: 22,
+          paddingHorizontal: 16,
+          paddingVertical: 11,
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: colors.surface,
+          opacity: pressed ? 0.65 : 1,
+          transform: [{ scale: pressed ? 0.97 : 1 }],
+        })}
+      >
+        <Text
+          maxFontSizeMultiplier={1.5}
+          style={{ color: colors.text, fontWeight: "600", fontSize: 14 }}
+        >
+          {action}
+        </Text>
+      </Pressable>
+    </View>
+  );
+}
+/** The latest answer's references, collapsed until the listener asks. */
+export function AnswerSources({
+  sources,
+  onSeek,
+  onError,
+  colors,
+  tr,
+}: Shared & {
+  sources: SessionSnapshot["sources"];
+  onSeek(atMs: number): void;
+  onError(error: unknown): void;
+}) {
+  const [open, setOpen] = useState(false);
+  if (!sources.length) return null;
+  const heading = tr(
+    `参考材料 · ${sources.length}`,
+    `Sources · ${sources.length}`,
+  );
+  return (
+    <View testID="answer-sources" style={{ gap: 2 }}>
+      <Pressable
+        testID="toggle-sources"
+        accessibilityRole="button"
+        accessibilityLabel={heading}
+        accessibilityState={{ expanded: open }}
+        onPress={() => setOpen((value) => !value)}
+        style={({ pressed }) => ({
+          alignSelf: "flex-start",
+          minHeight: 44,
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 6,
+          opacity: pressed ? 0.65 : 1,
+        })}
+      >
+        <Text
+          maxFontSizeMultiplier={1.5}
+          style={{ color: colors.muted, fontSize: 13, fontWeight: "600" }}
+        >
+          {heading}
+        </Text>
+        <Ionicons
+          name={open ? "chevron-up" : "chevron-down"}
+          size={14}
+          color={colors.muted}
+        />
+      </Pressable>
+      {open &&
+        sources.map((source, i) => {
+          const url = source.url;
+          const atMs = source.startMs;
+          const where = url
+            ? url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "")
+            : atMs !== undefined
+              ? formatTime(atMs)
+              : "";
+          const action = url
+            ? () => void Linking.openURL(url).catch(onError)
+            : atMs !== undefined
+              ? () => onSeek(atMs)
+              : undefined;
+          return (
+            <Pressable
+              key={i}
+              testID={`source-${i}`}
+              accessibilityRole={url ? "link" : action ? "button" : "text"}
+              accessibilityLabel={
+                url
+                  ? source.text
+                  : atMs !== undefined
+                    ? tr(
+                        `从 ${where} 播放：${source.text}`,
+                        `Play from ${where}: ${source.text}`,
+                      )
+                    : source.text
+              }
+              disabled={!action}
+              onPress={action}
+              style={({ pressed }) => ({
+                minHeight: 44,
+                justifyContent: "center",
+                paddingVertical: 6,
+                gap: 2,
+                opacity: pressed ? 0.65 : 1,
+              })}
+            >
+              {where ? (
+                <Text
+                  maxFontSizeMultiplier={1.4}
+                  numberOfLines={1}
+                  style={{
+                    color: colors.timestamp,
+                    fontSize: 12,
+                    fontWeight: "600",
+                    fontVariant: ["tabular-nums"],
+                  }}
+                >
+                  {where}
+                </Text>
+              ) : null}
+              <Text
+                maxFontSizeMultiplier={1.5}
+                numberOfLines={3}
+                style={{
+                  color: url ? colors.accent : colors.text,
+                  fontSize: 14,
+                  lineHeight: 20,
+                  textDecorationLine: url ? "underline" : "none",
+                }}
+              >
+                {source.text}
+              </Text>
+            </Pressable>
+          );
+        })}
     </View>
   );
 }

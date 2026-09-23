@@ -2,7 +2,8 @@ import { withKeepListeningHint } from "./recovery-message";
 import {
   initialPlayback,
   transition,
-  resumeAnchor,
+  resumePoint,
+  utteranceUnits,
   type Episode,
   type PlaybackEvent,
   type PlaybackState,
@@ -51,7 +52,31 @@ export interface SessionOptions {
   speechYield?: "duck" | "pause";
   clock?: RuntimeClock;
   voiceFactory: VoiceFactory;
+  /** A short sound or haptic: "heard" when the app takes up the listener's spoken question. */
+  cue?: (kind: "heard") => void;
 }
+/** An ignored utterance at least this long, in words, offers the listener a one-tap retry. */
+export const missedMinUnits = 4;
+/** How long that retry stays offered. */
+export const missedOfferMs = 8000;
+/** The provisional caption of heard speech clears this long after the last word without a decision. */
+export const hearingClearMs = 4000;
+/** Automatic voice reconnection after a dropped connection: the wait before each attempt. */
+export const reconnectDelaysMs = [1000, 4000, 10000] as const;
+/** The client treats the control stream as lost after this long without an event (heartbeats come every 15 s). */
+export const controlStallMs = 25000;
+/** The podcast fades back in when it continues after a conversation or a stop for speech. */
+export const resumeFadeMs = 400;
+const expiredVoice = /time limit reached|request limit/i;
+const transientVoice =
+  /heartbeat stopped|disconnected|session ended|timed out|failed to fetch|networkerror|network|load failed/i;
+/** Manual changes that only reconfigure playback; they do not interrupt a conversation. */
+const configurationCommands = new Set<PlayerCommand["type"]>([
+  "set_rate",
+  "adjust_rate",
+  "set_volume",
+  "set_muted",
+]);
 /** Owns complete listening actions. React and DOM code never coordinate device order. */
 /**
  * How the podcast yields to the listener. A soft yield is a reversible cue
@@ -145,6 +170,19 @@ export class ListeningSession {
   private playAfterRestore?: () => void;
   private loadingTimeout?: () => void;
   private view: ReturnType<ListeningSession["snapshot"]>;
+  /** The listener's words while the app is still deciding what they are; `text` is empty before the first word. */
+  private hearing: { text: string } | null = null;
+  private hearingTimer?: () => void;
+  private heardTexts = new Map<string, string>();
+  /** An utterance the app set aside as not addressed to it, offered for a one-tap retry. */
+  private missed: { text: string } | null = null;
+  private missedTimer?: () => void;
+  private reconnect?: { attempts: number; cancel?: () => void };
+  /** The current voice session may be replaced when its time runs out. */
+  private renewable = false;
+  /** A calm, non-error notice about the voice: its trial session ran out. */
+  private voiceNotice: "expired" | null = null;
+  private cue?: (kind: "heard") => void;
   constructor(
     private audio: PodcastAudio,
     private backend: PlayerBackend,
@@ -155,6 +193,7 @@ export class ListeningSession {
     this.audio.configure(this.playerConfig);
     this.clock = options.clock ?? systemClock;
     this.makeVoice = options.voiceFactory;
+    this.cue = options.cue;
     this.mode = options.mode ?? "auto";
     this.customWait = options.followupMs !== undefined;
     this.spokenResume = options.spokenResume ?? "quiet";
@@ -218,6 +257,10 @@ export class ListeningSession {
       error: this.error,
       events: this.events,
       returnContext,
+      hearing: this.hearing,
+      missed: this.missed,
+      voiceNotice: this.voiceNotice,
+      voiceReconnecting: !!this.reconnect,
     };
   }
   getSnapshot = () => this.view;
@@ -488,6 +531,13 @@ export class ListeningSession {
       durationMs: this.episode?.durationMs ?? 0,
       anchors: this.episode?.analysis?.anchors ?? [],
     });
+    // Rate, volume and mute only reconfigure playback: a countdown, an
+    // answer in flight or a pending decision carries on.
+    if (configurationCommands.has(command.type)) {
+      this.applyPlayerCommand(command);
+      this.syncControl();
+      return;
+    }
     this.controlVersion++;
     this.cancelWork();
     this.input = undefined;
@@ -596,7 +646,7 @@ export class ListeningSession {
       this.dispatch({
         type: "interrupt",
         atMs,
-        anchor: resumeAnchor(this.episode.analysis.anchors, atMs),
+        anchor: resumePoint(this.episode.analysis, atMs),
       });
     }
     if (!this.inputSpeaking) this.dispatch({ type: "user_end" });
@@ -769,9 +819,10 @@ export class ListeningSession {
     const stopped = this.attendLevel <= 0;
     this.attending = false;
     this.attendLevel = 1;
+    if (!this.inputSpeaking) this.setHearing(null);
     if (!stopped) this.audio.duck(1, attention.releaseMs);
     else if (this.playback.mode === "playing")
-      void this.audio.play().catch((error) => {
+      void this.audio.play(resumeFadeMs).catch((error) => {
         this.stop();
         this.setError(String(error));
       });
@@ -795,7 +846,7 @@ export class ListeningSession {
     this.dispatch({
       type: "interrupt",
       atMs,
-      anchor: resumeAnchor(this.episode.analysis.anchors, atMs),
+      anchor: resumePoint(this.episode.analysis, atMs),
     });
     this.startHeartbeat();
     this.sendContext(true);
@@ -881,6 +932,8 @@ export class ListeningSession {
     }
   }
   stop() {
+    this.cancelReconnect();
+    this.setMissed(null);
     this.playAfterRestore = undefined;
     this.loadingTimeout?.();
     this.loadingTimeout = undefined;
@@ -920,9 +973,10 @@ export class ListeningSession {
       void (
         positioning
           ? positioning.then(() => {
-              if (this.playback.revision === revision) return this.audio.play();
+              if (this.playback.revision === revision)
+                return this.audio.play(resumeFadeMs);
             })
-          : this.audio.play()
+          : this.audio.play(resumeFadeMs)
       )
         .then(() => {
           if (
@@ -1005,6 +1059,7 @@ export class ListeningSession {
         .catch(() => {});
     void voice?.close();
     this.status = "off";
+    this.setHearing(null);
     this.publish();
   }
   async beginManual() {
@@ -1056,6 +1111,7 @@ export class ListeningSession {
     this.publish();
   }
   setListeningMode(mode: ListeningMode) {
+    this.cancelReconnect();
     this.cancelWork();
     this.closeVoice();
     this.mode = mode;
@@ -1148,7 +1204,7 @@ export class ListeningSession {
       this.conversation.hold();
     }
     this.controlStatus = "failed";
-    this.setError(withKeepListeningHint(message));
+    this.voiceLost(message);
   }
   private async openControl(
     episodeId: string,
@@ -1192,7 +1248,7 @@ export class ListeningSession {
               this.controlFailed(
                 "Voice control heartbeat stopped. Please reconnect the microphone.",
               ),
-            35000,
+            controlStallMs,
           );
           if (event.type === "ready") {
             if (event.sessionId !== sessionId)
@@ -1201,6 +1257,10 @@ export class ListeningSession {
             clearTimeout(timer);
             this.controlStatus = "connected";
             this.log("Server voice control NDJSON connected");
+            if (this.reconnect) {
+              this.cancelReconnect();
+              this.log("Voice reconnected");
+            }
             resolve();
             this.syncControl();
           } else this.receiveControl(event);
@@ -1263,6 +1323,14 @@ export class ListeningSession {
       if (event.input) {
         this.liveTranscript.observe(event.input);
         this.reconcileLiveTranscript();
+      }
+      if (event.type === "observing" && event.text?.trim()) {
+        if (event.input) {
+          this.heardTexts.set(event.input.turnId, event.text);
+          if (this.heardTexts.size > 20)
+            this.heardTexts.delete(this.heardTexts.keys().next().value!);
+        }
+        this.setHearing({ text: event.text });
       }
       // A queued answer may deliver text before audio starts. Recognition alone
       // cannot revoke it; only a new accepted decision can replace that answer.
@@ -1335,6 +1403,9 @@ export class ListeningSession {
           event.decisionId,
         );
         this.conversation.engageLive(event.text, event.decisionId);
+        this.setHearing(null);
+        this.setMissed(null);
+        this.cue?.("heard");
         this.reconcileLiveTranscript();
         if (this.spokenReply?.text) {
           // These captions already passed the audio gate before the backend
@@ -1375,8 +1446,15 @@ export class ListeningSession {
     this.reconcileLiveTranscript();
     if (event.result.action === "ignore") {
       this.voice?.discardPendingOutput?.();
+      const heard =
+        (event.input && this.heardTexts.get(event.input.turnId)) ??
+        this.hearing?.text ??
+        "";
+      if (utteranceUnits(heard) >= missedMinUnits)
+        this.setMissed({ text: heard.trim() });
       this.release();
     }
+    if (event.result.action !== "wait") this.setHearing(null);
     if (event.result.action === "ignore" || event.result.action === "wait")
       return;
     if (event.result.action !== "answer") this.voice?.discardPendingOutput?.();
@@ -1428,6 +1506,7 @@ export class ListeningSession {
       return;
     this.status = "connecting";
     this.spokenReply = undefined;
+    this.voiceNotice = null;
     this.resetRecognitionDiagnostics();
     this.setError("");
     const generation = ++this.voiceGeneration,
@@ -1506,7 +1585,11 @@ export class ListeningSession {
           this.inputSpeaking = active;
           this.log(active ? "Local speech started" : "Local speech ended");
           if (this.serverVoice && voice.isWarm && !voice.isCold) {
-            if (active) this.interruptLiveOutput();
+            if (active) {
+              this.interruptLiveOutput();
+              this.setMissed(null);
+              this.setHearing(this.hearing ?? { text: "" });
+            } else if (this.hearing) this.setHearing(this.hearing);
             this.prepareLiveOutput();
             // Local speech stops an audible assistant immediately. The
             // sideband still owns admission, intent and podcast commands.
@@ -1662,8 +1745,12 @@ export class ListeningSession {
             this.answerEnded();
             this.conversation.hold();
           }
-          this.setError(withKeepListeningHint(message));
           this.log(message);
+          // A failed reconnection attempt tries again before it is reported.
+          if (this.reconnect && !this.reconnect.cancel) {
+            this.closeVoice();
+            this.voiceLost(message);
+          } else this.setError(withKeepListeningHint(message));
         },
         onUsage: (seconds, sessionId) => usage(seconds, sessionId, false),
         onClose: (finalized, seconds, sessionId, intentional) => {
@@ -1705,7 +1792,10 @@ export class ListeningSession {
           // only voice slot. Its own close can take half a minute to reach the
           // server, so ask now; otherwise the replacement is refused as busy.
           if (!valid()) usage(0, result.session.id, false, true);
-          else this.liveSession = { id: result.session.id, episodeId };
+          else {
+            this.liveSession = { id: result.session.id, episodeId };
+            this.renewable = result.renewable === true;
+          }
           if (this.serverVoice && valid()) {
             if (!result.control)
               throw Error(
@@ -1723,6 +1813,112 @@ export class ListeningSession {
     this.voice = voice;
     await voice.enable();
     return voice;
+  }
+  private setHearing(value: { text: string } | null) {
+    this.hearingTimer?.();
+    this.hearingTimer = undefined;
+    this.hearing = value;
+    // A caption with no decision fades once nobody is speaking: a cough or an
+    // unanswered fragment must not stay on screen.
+    if (value && !this.inputSpeaking)
+      this.hearingTimer = this.clock.after(hearingClearMs, () =>
+        this.setHearing(null),
+      );
+    this.publish();
+  }
+  private setMissed(value: { text: string } | null) {
+    this.missedTimer?.();
+    this.missedTimer = undefined;
+    this.missed = value;
+    if (value) {
+      this.log("Ignored utterance offered for a retry");
+      this.missedTimer = this.clock.after(missedOfferMs, () =>
+        this.setMissed(null),
+      );
+    }
+    this.publish();
+  }
+  /** The listener says the utterance the app set aside was a question for it. */
+  askMissed() {
+    const missed = this.missed;
+    if (!missed) return false;
+    this.setMissed(null);
+    this.log("Ignored utterance asked again by tap");
+    return this.submitQuestion(missed.text, true);
+  }
+  /** Stop the reply being spoken (Esc). Like talking over it, the podcast then waits to be continued. */
+  stopAnswer() {
+    if (!this.playback.interruption || this.playback.resumeRequested) return;
+    const speaking = this.playback.assistantSpeaking;
+    const busy = this.conversation.snapshot.busy;
+    if (!speaking && !busy) return;
+    this.voice?.interrupt();
+    this.silenceVoice();
+    this.discardInterruptedOutput = true;
+    this.dispatch({ type: "assistant_end", revision: this.playback.revision });
+    this.conversation.cancel();
+    this.conversation.bargeIn();
+    this.log("Answer stopped by the listener");
+  }
+  /** Reconnect the voice after its trial session ran out; this starts a new session. */
+  reconnectVoice() {
+    this.voiceNotice = null;
+    this.publish();
+    if (this.mode !== "auto") return;
+    this.active = true;
+    void this.connect()?.catch((error) =>
+      this.setError(withKeepListeningHint(String(error))),
+    );
+  }
+  private cancelReconnect() {
+    this.reconnect?.cancel?.();
+    this.reconnect = undefined;
+  }
+  /**
+   * The voice connection was lost. A dropped network or an account session
+   * that ran out reconnects on its own, a few times, while listening goes on;
+   * a guest's expired session gets a calm notice instead of an error.
+   */
+  private voiceLost(message: string) {
+    const expired = expiredVoice.test(message);
+    const eligible =
+      this.mode === "auto" &&
+      this.active &&
+      this.serverVoice &&
+      (expired || transientVoice.test(message));
+    if (eligible && expired && !this.renewable) {
+      this.cancelReconnect();
+      this.voiceNotice = "expired";
+      this.log("Voice trial session ended");
+      this.publish();
+      return;
+    }
+    const attempts = (this.reconnect?.attempts ?? 0) + 1;
+    if (!eligible || attempts > reconnectDelaysMs.length) {
+      // A failed last attempt must not leave a half-open microphone behind.
+      if (this.reconnect) this.closeVoice();
+      this.cancelReconnect();
+      this.setError(withKeepListeningHint(message));
+      return;
+    }
+    this.reconnect?.cancel?.();
+    const reconnect: { attempts: number; cancel?: () => void } = { attempts };
+    this.reconnect = reconnect;
+    reconnect.cancel = this.clock.after(reconnectDelaysMs[attempts - 1], () => {
+      if (this.reconnect !== reconnect) return;
+      reconnect.cancel = undefined;
+      if (!this.active || this.mode !== "auto") {
+        this.cancelReconnect();
+        this.publish();
+        return;
+      }
+      this.closeVoice();
+      void this.connect()?.catch((error) => {
+        if (this.reconnect === reconnect) this.voiceLost(String(error));
+      });
+    });
+    this.log(`Voice reconnecting (attempt ${attempts}): ${message}`);
+    this.publish();
   }
   dispose() {
     this.stop();
