@@ -17,6 +17,7 @@ type MobileApi = Required<
   request<T>(path: string, init?: RequestInit): Promise<T>;
   onExpired?: () => void;
   restore(): Promise<void>;
+  browserSignIn(provider: "google" | "apple"): Promise<{ id: string } | null>;
 };
 import type { LiveControlUpdate } from "@aside/engine/contracts";
 import { liveSchema } from "@aside/engine/contracts";
