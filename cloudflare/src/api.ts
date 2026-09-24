@@ -536,8 +536,16 @@ export default {
         /^\/api\/auth\/mobile\/(?:(?:email|apple)\/(?:start|verify)|exchange)$/.test(
           path,
         );
-      const googleCallback =
-        path === "/api/auth/google/callback" && request.method === "GET";
+      // Provider starts and Google's return are top-level navigations that a
+      // browser may label cross-site (an app's browser session, another
+      // site's link). A start only issues single-use state; the Strict
+      // session cookie is not sent cross-site, so it never enters linking.
+      const providerNavigation =
+        [
+          "/api/auth/google",
+          "/api/auth/apple",
+          "/api/auth/google/callback",
+        ].includes(path) && request.method === "GET";
       // Apple returns with a cross-site form POST; its state cookie and the
       // single-use state row authenticate it instead of the Origin.
       const appleCallback =
@@ -547,7 +555,7 @@ export default {
       if (origin && origin !== env.APP_ORIGIN && !appleCallback)
         throw new HttpError(403, "Unexpected origin");
       if (
-        !googleCallback &&
+        !providerNavigation &&
         !appleCallback &&
         request.headers.get("sec-fetch-site") === "cross-site"
       )

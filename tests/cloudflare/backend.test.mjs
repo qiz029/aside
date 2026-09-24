@@ -558,9 +558,10 @@ function pkce() {
   return { verifier, challenge };
 }
 async function appGoogleCode(challenge, scheme = "aside") {
+  // An app's browser session may be labelled cross-site.
   const start = await mf.dispatchFetch(
     `${origin}/api/auth/google?mobile=${challenge}&scheme=${scheme}`,
-    { redirect: "manual" },
+    { headers: { "sec-fetch-site": "cross-site" }, redirect: "manual" },
   );
   if (start.status !== 302) return { start };
   const state = new URL(start.headers.get("location")).searchParams.get(
@@ -624,7 +625,7 @@ test("apps sign in through the browser with a one-time code bound to their PKCE 
 async function appleWebAttempt({ query = "", claims = {}, user, error } = {}) {
   const guest = await visitor(false);
   const start = await mf.dispatchFetch(`${origin}/api/auth/apple${query}`, {
-    headers: { cookie: guest.cookie },
+    headers: { cookie: guest.cookie, "sec-fetch-site": "cross-site" },
     redirect: "manual",
   });
   assert.equal(start.status, 302, await start.clone().text());
