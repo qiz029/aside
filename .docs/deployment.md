@@ -585,3 +585,11 @@ npx wrangler d1 execute asidefm --remote --config wrangler.production.jsonc --co
 发布与核对：`npm run check`、Cloudflare 集成 57 项通过；单元测试 481 项中 474 项通过，失败的 7 项全在 Java 原生测试（本机没有 `javac`），在未改动的 main 上同样失败；浏览器测试 84 项中 i18n 默认语言与公共示例数量 2 项在未改动的 main 上同样失败，其余通过，含新增的"点这里问"2 项。部署前由本人执行迁移 `0011_mobile_accounts.sql`（`281a3ff` 需要，只增列与表）。发布前线上是本人 09-20 22:50Z 的 `b3f5f8d7`，origin/main 无他人新提交。从 main（`9154e59`）部署生产 Worker `1f8fc683-2282-439a-bc93-0ff357631675`（`--containers-rollout=none`），首页引用 `index-Ci7rbntW.js`，其中包含 `missed-offer`。`/`、`/space`、`/api/health` 均 200，`npm run test:mobile-service` 4 项通过。
 
 未验证：真人麦克风下的字幕、提示音、淡入和自动重连听感；访客与账号会话到时的线上表现；移动端新界面只通过了类型检查，未上真机或模拟器；误判率要等线上日志 `Aside voice spoke again after ignore` 积累后再看。
+
+## Apple / Google 登录取代邮件验证码（2026-09-24）
+
+内容（`f8927ea`、`8e1727f`）：网站登录只保留 Apple 与 Google，新增网站 Apple 登录（Services ID `com.asidefm.web`，form_post 回调）；App 端 iOS 用原生 Apple，Google 与 Android 上的 Apple 走系统浏览器，PKCE 一次性码经 `/api/auth/mobile/exchange` 换 Bearer 会话。提供方验证过的邮箱直接登录已有账号。邮件验证码接口保留给已安装的旧版 App 与测试构建。
+
+发布与核对：`npm run check` 通过，Cloudflare 集成 60 项通过；单元测试中失败的 7 项仍全是本机缺 Java 的原生测试。由本人设置 secret `APPLE_PRIVATE_KEY`（Key `PTLFX795BU`）并执行迁移 `0012_app_browser_sign_in.sql`（只增列与表）；`APPLE_TEAM_ID`、`APPLE_KEY_ID`、`APPLE_CLIENT_IDS`、`APPLE_WEB_CLIENT_ID` 在 `wrangler.production.jsonc` vars。发布前线上为本人 09-23 的 `1f8fc683`（其后 `4f90c274` 仅为 secret 变更），origin/main 无他人新提交。由本人从 main 部署 `817a3ce9`，随后修复跨站标记的登录入口，部署 `c2c24f84-1266-48a5-a6d9-cc52dc6705bb`（`--containers-rollout=none`），两次 `npm run test:mobile-service` 均 4 项通过。线上 `/api/auth/session` 返回 `appleWebEnabled: true`；在本人 Chrome 中，已登录状态下的 Apple 授权成功绑定到原账号并回到资料页，新登录弹窗只显示 Apple 与 Google。
+
+未验证：未登录状态下直接用 Apple 登录（已跳到 Apple 页，未完成）；线上 Google 登录在本次改动后的完整往返；App 端浏览器登录与原生 Apple 登录（需要 TestFlight 构建 2，尚未打包）。
