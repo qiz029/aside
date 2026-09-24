@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-test("email sign-in lands in My Space, where the profile is editable, and sign-out returns to guest", async ({
+test("Apple sign-in lands in My Space, where the profile is editable, and sign-out returns to guest", async ({
   page,
 }) => {
   let user: {
@@ -44,19 +44,17 @@ test("email sign-in lands in My Space, where the profile is editable, and sign-o
         nextCursor: null,
       });
     if (path === "/api/auth/session")
-      return send({ user, emailEnabled: true, googleEnabled: true });
-    if (path === "/api/auth/email/start") return send({ ok: true });
-    if (path === "/api/auth/email/verify") {
-      if (body.email !== "listener@example.com" || body.code !== "12345678")
-        return route.fulfill({ status: 400, json: { error: "Invalid code" } });
+      return send({ user, googleEnabled: true, appleWebEnabled: true });
+    // The provider round trip ends in the server's redirect to My Space.
+    if (path === "/api/auth/apple") {
       user = {
         id: "user-1",
-        email: body.email,
+        email: "listener@example.com",
         alias: "listener",
         description: "",
         avatarUrl: null,
       };
-      return send({ user });
+      return route.fulfill({ status: 302, headers: { location: "/space" } });
     }
     if (path === "/api/profile" && route.request().method() === "PATCH") {
       user = { ...user!, alias: body.alias, description: body.description };
@@ -70,10 +68,11 @@ test("email sign-in lands in My Space, where the profile is editable, and sign-o
   });
   await page.goto("/");
   await page.getByRole("button", { name: "登录 / 注册" }).click();
-  await page.getByLabel("邮箱").fill("listener@example.com");
-  await page.getByRole("button", { name: "发送验证码" }).click();
-  await page.getByLabel("邮件验证码").fill("12345678");
-  await page.getByRole("button", { name: "验证并登录" }).click();
+  await expect(page.getByLabel("邮箱")).toHaveCount(0);
+  await expect(
+    page.getByRole("link", { name: "使用 Google 登录" }),
+  ).toHaveAttribute("href", "/api/auth/google");
+  await page.getByRole("link", { name: "使用 Apple 登录" }).click();
   // Signing in leads to My Space, not to a profile form.
   await expect(page).toHaveURL(/\/space$/);
   await expect(page.getByRole("dialog", { name: "个人资料" })).toHaveCount(0);

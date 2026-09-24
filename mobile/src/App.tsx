@@ -79,6 +79,7 @@ import {
 import { nativeVoiceFactory } from "./voice";
 import { restoreAccount } from "./account-session";
 import { LoginForm } from "./LoginForm";
+import { ProviderSignIn } from "./ProviderSignIn";
 import { errorMessage } from "./error-message";
 import { observeAcceptance } from "./acceptance-observer";
 const formatTime = (ms: number) => {
@@ -1348,18 +1349,22 @@ function Main() {
               </View>
             ) : (
               <>
-                <AppleSignIn api={api} onSignedIn={signedIn} locale={locale} />
-                <Text style={{ color: colors.muted }}>
-                  {tr(
-                    "已有账号？先用原邮箱登录，再绑定 Apple，保留已有内容。",
-                    "Already have an account? Sign in with your original email, then link Apple to keep your library.",
-                  )}
-                </Text>
-                <LoginForm
+                {/* Email codes remain only for fixture acceptance builds. */}
+                {Constants.expoConfig?.extra?.testApi === true && (
+                  <LoginForm
+                    locale={locale}
+                    colors={colors}
+                    sendCode={(email) => api.startLogin(email)}
+                    signIn={login}
+                  />
+                )}
+                <ProviderSignIn
+                  api={api}
                   locale={locale}
                   colors={colors}
-                  sendCode={(email) => api.startLogin(email)}
-                  signIn={login}
+                  dark={dark}
+                  header={Constants.expoConfig?.extra?.testApi !== true}
+                  onSignedIn={signedIn}
                 />
               </>
             )}

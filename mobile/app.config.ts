@@ -41,7 +41,7 @@ const config: ExpoConfig = {
   newArchEnabled: true,
   ios: {
     supportsTablet: true,
-    usesAppleSignIn: process.env.ASIDE_APPLE_SIGN_IN === "1",
+    usesAppleSignIn: process.env.ASIDE_APPLE_SIGN_IN !== "0",
     bundleIdentifier: local ? "com.asidefm.app.dev" : "com.asidefm.app",
     buildNumber: process.env.BUILD_NUMBER ?? "1",
     infoPlist: {
@@ -83,7 +83,7 @@ const config: ExpoConfig = {
       { enableBackgroundPlayback: true, enableBackgroundRecording: false },
     ],
     "expo-secure-store",
-    ...(process.env.ASIDE_APPLE_SIGN_IN === "1"
+    ...(process.env.ASIDE_APPLE_SIGN_IN !== "0"
       ? ["expo-apple-authentication"]
       : []),
     "expo-localization",
@@ -93,7 +93,7 @@ const config: ExpoConfig = {
   extra: {
     apiUrl,
     testApi,
-    appleSignInEnabled: process.env.ASIDE_APPLE_SIGN_IN === "1",
+    appleSignInEnabled: process.env.ASIDE_APPLE_SIGN_IN !== "0",
     eas: {
       projectId:
         process.env.EAS_PROJECT_ID ?? "91adc426-36cf-4264-a618-63e33b112cda",

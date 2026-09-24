@@ -23,6 +23,8 @@ export interface Env {
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   APPLE_CLIENT_IDS?: string;
+  /** Services ID for website Sign in with Apple; must also be in APPLE_CLIENT_IDS. */
+  APPLE_WEB_CLIENT_ID?: string;
   APPLE_TEAM_ID?: string;
   APPLE_KEY_ID?: string;
   APPLE_PRIVATE_KEY?: string;

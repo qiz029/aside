@@ -117,6 +117,30 @@
   line-height: 1.6;
   margin: 0;
 }
+.btn.account-apple {
+  gap: 8px;
+  color: #fff;
+  background: #000;
+  border: 1px solid #000;
+}
+.btn.account-apple:not(:disabled):hover {
+  background: #1d1d1f;
+}
+.btn.account-apple .account-apple-logo {
+  width: 16px;
+  height: 16px;
+  margin-top: -2px;
+}
+@media (prefers-color-scheme: dark) {
+  .btn.account-apple {
+    color: #000;
+    background: #fff;
+    border-color: #fff;
+  }
+  .btn.account-apple:not(:disabled):hover {
+    background: #e8e8ed;
+  }
+}
 .account-g {
   display: grid;
   place-items: center;

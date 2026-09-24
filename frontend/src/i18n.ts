@@ -319,6 +319,7 @@ export const english: Record<string, string> = {
   "登录后保存你的节目和收听进度。":
     "Sign in to keep your episodes and listening progress.",
   "使用 Google 登录": "Continue with Google",
+  "使用 Apple 登录": "Continue with Apple",
   邮箱: "Email",
   或用邮箱: "Or use email",
   "慢一点，适合外语": "Slower, easier in a second language",

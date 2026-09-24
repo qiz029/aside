@@ -3,6 +3,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { type UploadJournal } from "./upload-journal";
 import Constants from "expo-constants";
 import * as SecureStore from "expo-secure-store";
+import * as Crypto from "expo-crypto";
+import * as WebBrowser from "expo-web-browser";
 import { File } from "expo-file-system";
 import { fetch as fetchStream } from "expo/fetch";
 import { readQuestion } from "@aside/player-runtime/question-stream";
@@ -59,6 +61,8 @@ export class MobileApi implements PlayerBackend {
   token: string | null = null;
   accountId: string | null = null;
   appleEnabled = false;
+  appleWebEnabled = false;
+  googleEnabled = false;
   onExpired?: () => void;
   private readonly liveJournal = new LiveSessionJournal({
     read: () => SecureStore.getItemAsync("aside.live"),
@@ -182,10 +186,51 @@ export class MobileApi implements PlayerBackend {
     const result = await this.request<{
       user: User | null;
       appleEnabled?: boolean;
+      appleWebEnabled?: boolean;
+      googleEnabled?: boolean;
     }>("/auth/session");
     this.accountId = result.user?.id ?? null;
     this.appleEnabled = result.appleEnabled ?? false;
+    this.appleWebEnabled = result.appleWebEnabled ?? false;
+    this.googleEnabled = result.googleEnabled ?? false;
     return result;
+  }
+  // Signs in through the website's provider flow in a system browser session.
+  // The server returns a one-time code to this app's scheme; only the holder
+  // of the PKCE verifier can exchange it for a session.
+  async browserSignIn(provider: "google" | "apple"): Promise<User | null> {
+    const base64url = (value: string) =>
+      value.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const verifier = base64url(
+      btoa(String.fromCharCode(...Crypto.getRandomBytes(32))),
+    );
+    const challenge = base64url(
+      await Crypto.digestStringAsync(
+        Crypto.CryptoDigestAlgorithm.SHA256,
+        verifier,
+        { encoding: Crypto.CryptoEncoding.BASE64 },
+      ),
+    );
+    const scheme = Constants.expoConfig?.scheme;
+    if (typeof scheme !== "string") throw Error("Missing app scheme");
+    const result = await WebBrowser.openAuthSessionAsync(
+      `${this.base}/api/auth/${provider}?mobile=${challenge}&scheme=${scheme}`,
+      `${scheme}://auth`,
+    );
+    if (result.type !== "success") return null;
+    const params = new URL(result.url).searchParams;
+    const error = params.get("error");
+    if (error === "cancelled") return null;
+    if (error) throw Error(error);
+    const signedIn = await this.json<{ user: User; token: string }>(
+      "/auth/mobile/exchange",
+      { code: params.get("code"), verifier },
+    );
+    this.accountId = signedIn.user.id;
+    this.token = signedIn.token;
+    this.recovery = undefined;
+    await SecureStore.setItemAsync("aside.token", signedIn.token);
+    return signedIn.user;
   }
   appleStart(clientId: string) {
     return this.json<{ nonce: string }>("/auth/mobile/apple/start", {

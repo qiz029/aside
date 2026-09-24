@@ -109,6 +109,7 @@ export async function cleanupAccount(env: Env, id: string) {
     env.DB.prepare("DELETE FROM auth_identities WHERE user_id=?").bind(id),
     env.DB.prepare("DELETE FROM account_consents WHERE user_id=?").bind(id),
     env.DB.prepare("DELETE FROM apple_challenges WHERE user_id=?").bind(id),
+    env.DB.prepare("DELETE FROM auth_mobile_grants WHERE user_id=?").bind(id),
     env.DB.prepare("DELETE FROM auth_oauth_states WHERE link_user_id=?").bind(
       id,
     ),

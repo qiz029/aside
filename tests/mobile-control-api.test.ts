@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { build } from "esbuild";
+import { createHash } from "node:crypto";
 import type { PlayerBackend } from "@aside/player-runtime/ports";
 type MobileApi = Required<
   Pick<PlayerBackend, "control" | "updateControl" | "live" | "usage">
@@ -29,20 +30,32 @@ async function fixture(
     start: async (..._args: unknown[]) => {},
     status: async (_id: string) => ({ state: "missing", progress: 0 }),
   },
+  browser: (
+    url: string,
+    redirect: string,
+  ) => Promise<{ type: string; url?: string }> = async () => ({
+    type: "cancel",
+  }),
 ) {
   const key = `mobileApi_${crypto.randomUUID()}`;
   const global = globalThis as unknown as Record<string, unknown>;
-  global[key] = { fetcher, storage, native };
+  global[key] = { fetcher, storage, native, browser };
   const modules: Record<string, string> = {
     "react-native": `export const Platform={OS:"android",Version:33}, PermissionsAndroid={PERMISSIONS:{POST_NOTIFICATIONS:"notifications"},request:async()=>"denied"}, NativeModules={AsideUpload:globalThis[${JSON.stringify(key)}].native};`,
     "@react-native-async-storage/async-storage": `const store = globalThis[${JSON.stringify(key)}].storage; export default {getItem:async(key)=>store.get(key)??null,setItem:async(key,value)=>{store.set(key,value)},removeItem:async(key)=>{store.delete(key)}};`,
     "expo-constants":
-      'export default {expoConfig:{extra:{apiUrl:"https://api.example.com"}}};',
+      'export default {expoConfig:{scheme:"aside",extra:{apiUrl:"https://api.example.com"}}};',
     "expo-secure-store": `const store = globalThis[${JSON.stringify(key)}].storage;
        export const getItemAsync=async(key)=>store.get(key)??null,
          setItemAsync=async(key,value)=>{store.set(key,value)},
          deleteItemAsync=async(key)=>{store.delete(key)};`,
     "expo-file-system": "export class File { exists=false; }",
+    "expo-crypto": `import { createHash, randomBytes } from "node:crypto";
+       export const CryptoDigestAlgorithm={SHA256:"SHA-256"}, CryptoEncoding={BASE64:"base64"};
+       export const getRandomBytes=(n)=>new Uint8Array(randomBytes(n));
+       export const digestStringAsync=async(_a,value)=>createHash("sha256").update(value).digest("base64");`,
+    "expo-web-browser": `const state = globalThis[${JSON.stringify(key)}];
+       export const openAuthSessionAsync=(url,redirect)=>state.browser(url,redirect);`,
     "expo/fetch": `export const fetch = globalThis[${JSON.stringify(key)}].fetcher;`,
   };
   const bundle = await build({
@@ -504,4 +517,56 @@ test("cancelling during native handoff stops the transfer and removes only its j
   );
   assert.deepEqual(cancelled, ["cancel-me"]);
   assert.equal(storage.size, 0);
+});
+
+test("browser sign-in exchanges the returned code with the verifier behind its challenge", async () => {
+  const storage = new Map<string, string>();
+  let challenge = "";
+  let exchanged: { code: string; verifier: string } | undefined;
+  const api = await fixture(
+    async () => assert.fail("the exchange uses the ordinary request path"),
+    storage,
+    undefined,
+    async (url, redirect) => {
+      const start = new URL(url);
+      assert.equal(start.origin + start.pathname, "https://api.example.com/api/auth/google");
+      assert.equal(start.searchParams.get("scheme"), "aside");
+      assert.equal(redirect, "aside://auth");
+      challenge = start.searchParams.get("mobile")!;
+      return { type: "success", url: `aside://auth?code=${"c".repeat(64)}` };
+    },
+  );
+  api.token = null;
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
+    assert.equal(String(url), "https://api.example.com/api/auth/mobile/exchange");
+    exchanged = JSON.parse(String(init?.body));
+    return Response.json({
+      user: { id: "user-1", email: "a@example.com", alias: "a", description: "", avatarUrl: null },
+      token: "b".repeat(64),
+    });
+  }) as typeof fetch;
+  const user = await api.browserSignIn("google").finally(() => {
+    globalThis.fetch = original;
+  });
+  assert.equal(user?.id, "user-1");
+  assert.equal(exchanged?.code, "c".repeat(64));
+  assert.equal(
+    createHash("sha256").update(exchanged!.verifier).digest("base64url"),
+    challenge,
+  );
+  assert.equal(api.token, "b".repeat(64));
+  assert.equal(storage.get("aside.token"), "b".repeat(64));
+});
+
+test("browser sign-in treats a cancelled provider page as no sign-in", async () => {
+  const api = await fixture(
+    async () => assert.fail("no exchange after cancellation"),
+    new Map(),
+    undefined,
+    async () => ({ type: "success", url: "aside://auth?error=cancelled" }),
+  );
+  api.token = null;
+  assert.equal(await api.browserSignIn("apple"), null);
+  assert.equal(api.token, null);
 });

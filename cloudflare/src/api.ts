@@ -533,13 +533,22 @@ export default {
       if (bearer && !account)
         throw new HttpError(401, "登录已过期，请重新登录");
       const mobileLogin =
-        /^\/api\/auth\/mobile\/(?:email|apple)\/(start|verify)$/.test(path);
+        /^\/api\/auth\/mobile\/(?:(?:email|apple)\/(?:start|verify)|exchange)$/.test(
+          path,
+        );
       const googleCallback =
         path === "/api/auth/google/callback" && request.method === "GET";
-      if (origin && origin !== env.APP_ORIGIN)
+      // Apple returns with a cross-site form POST; its state cookie and the
+      // single-use state row authenticate it instead of the Origin.
+      const appleCallback =
+        path === "/api/auth/apple/callback" &&
+        request.method === "POST" &&
+        origin === "https://appleid.apple.com";
+      if (origin && origin !== env.APP_ORIGIN && !appleCallback)
         throw new HttpError(403, "Unexpected origin");
       if (
         !googleCallback &&
+        !appleCallback &&
         request.headers.get("sec-fetch-site") === "cross-site"
       )
         throw new HttpError(403, "Cross-site request rejected");
@@ -548,7 +557,8 @@ export default {
         !["GET", "HEAD"].includes(request.method) &&
         origin !== env.APP_ORIGIN &&
         !(bearer && account) &&
-        !mobileLogin
+        !mobileLogin &&
+        !appleCallback
       )
         throw new HttpError(403, "Origin required");
       const identity = await session(request, env.SESSION_SECRET);
@@ -625,6 +635,9 @@ export default {
       ).bind(cutoff),
     ]);
     await env.DB.prepare("DELETE FROM apple_challenges WHERE expires<?")
+      .bind(Date.now())
+      .run();
+    await env.DB.prepare("DELETE FROM auth_mobile_grants WHERE expires<?")
       .bind(Date.now())
       .run();
     const accounts = await env.DB.prepare(

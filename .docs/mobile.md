@@ -101,33 +101,34 @@ provider failure must not be treated as completed deletion. Apple refresh tokens
 are encrypted under a key derived from `SESSION_SECRET`; retain this secret until
 all such tokens are migrated or revoked when rotating it.
 
-### Enabling Apple sign-in
+### Sign-in providers
 
-Apple sign-in is intentionally disabled by default, including Personal Team
-builds. No Apple credentials are included in this repository. Until configured,
-the app keeps email sign-in and hides the Apple button.
+Production builds offer only Apple and Google, the same as the website. Email
+codes stay on the server for older installed builds and appear in the app only
+in `ASIDE_TEST_API=1` fixture builds, which the device acceptance flows use.
 
-1. In a paid Apple Developer team, enable Sign in with Apple for each intended
-   bundle identifier (`com.asidefm.app` and optionally `com.asidefm.app.dev`).
-2. Create a Sign in with Apple key. Configure Worker secrets `APPLE_TEAM_ID`,
-   `APPLE_KEY_ID`, and `APPLE_PRIVATE_KEY` (the complete PKCS#8 `.p8` content).
-   Configure `APPLE_CLIENT_IDS` as a comma-separated allowlist of those bundle IDs.
-   Use `wrangler secret put --config wrangler.production.jsonc` with stdin or the
-   interactive prompt; never put private keys in shell arguments or source files.
-3. Set `ASIDE_APPLE_SIGN_IN=1` for the EAS/local build, regenerate the native project
-   and provisioning profile, install pods, and build a new binary. This flag adds
-   the native capability and enables the button only if the backend is configured.
-4. On a real device, test first sign-in, returning sign-in, cancellation, hidden
-   email, linking to an email account, signing out/in, and deleting the account
-   with authorization revocation. Server tests use generated synthetic Apple keys
-   and are not evidence of a real Apple login.
+- **Apple on iOS** uses the native sheet (`expo-apple-authentication`). It is on
+  by default; `ASIDE_APPLE_SIGN_IN=0` builds without the capability.
+- **Google, and Apple on Android**, open the website's provider flow in a system
+  browser session (`expo-web-browser`). The app sends a PKCE challenge and its
+  scheme (`aside` or `aside-dev`); the server redirects to `<scheme>://auth?code=`
+  with a two-minute single-use code, and only `/api/auth/mobile/exchange` with the
+  matching verifier turns it into a Bearer session. The browser's own website
+  session is never linked or reused.
 
-An existing email account is never silently merged using an Apple email claim.
-Existing listeners sign in with their original email and use the Apple button
-in Account to link the identity. The Apple subject is the stable identity;
-hidden relay email does not change the linked library. Logging in after trying
-to upload or ask restores that intended action and the current question draft.
-Manual recording still requires a new press after sign-in.
+A provider-verified email signs in to the account that already owns it, so a
+listener who used email codes before keeps their library. Apple's hidden relay
+addresses match no existing account; such listeners link Apple from Account.
+The provider subject is the stable identity afterwards.
+
+Apple configuration (paid team `FL45AV5T74`): Sign in with Apple on the App IDs,
+a Services ID `com.asidefm.web` with domain `asidefm.com` and return URL
+`https://asidefm.com/api/auth/apple/callback`, and a Sign in with Apple key.
+Worker secrets `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY` (full `.p8`
+content, entered through `wrangler secret put` stdin, never as an argument), and
+`APPLE_CLIENT_IDS=com.asidefm.app,com.asidefm.app.dev,com.asidefm.web`; the var
+`APPLE_WEB_CLIENT_ID=com.asidefm.web` turns on the website button. Server tests
+use synthetic Apple keys and are not evidence of a real Apple login.
 
 ### Background upload behavior
 

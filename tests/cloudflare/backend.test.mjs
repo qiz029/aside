@@ -99,7 +99,8 @@ before(async () => {
         ASIDE_LIVE_ACCOUNT_SESSION_SECONDS: "1800",
         ALLOW_UPLOADS: "true",
         AUTH_EMAIL_FROM: "login@auth.asidefm.com",
-        APPLE_CLIENT_IDS: "com.asidefm.app.dev",
+        APPLE_CLIENT_IDS: "com.asidefm.app.dev,com.asidefm.web",
+        APPLE_WEB_CLIENT_ID: "com.asidefm.web",
         APPLE_TEAM_ID: "TESTTEAM",
         APPLE_KEY_ID: "TESTKEY",
         APPLE_PRIVATE_KEY: applePrivate,
@@ -509,66 +510,210 @@ test("Google callback validates state and links a verified email to one account"
   assert.equal(replay.status, 400);
 });
 
-test("third-party Google email requires current email proof before linking", async () => {
+test("a verified Google email signs in to the account that already owns it", async () => {
+  const email = `external-${crypto.randomUUID()}@example.com`;
+  const guest = await visitor(false);
+  await guest.request("/api/auth/email/start", "POST", { email });
+  const verified = await guest.request("/api/auth/email/verify", "POST", {
+    email,
+    code: await setTestLoginCode(email),
+  });
+  assert.equal(verified.status, 200);
+  const existing = (await verified.json()).user;
   googleIdentity = {
-    sub: "external-google-sub",
-    email: "external@example.com",
+    sub: "external-google-" + crypto.randomUUID(),
+    email,
     email_verified: true,
     name: "External Listener",
   };
-  const guest = await visitor(false);
+  const other = await visitor(false);
   const start = await mf.dispatchFetch(origin + "/api/auth/google", {
-    headers: { cookie: guest.cookie },
+    headers: { cookie: other.cookie },
     redirect: "manual",
   });
   const state = new URL(start.headers.get("location")).searchParams.get(
     "state",
   );
   const stateCookie = start.headers.get("set-cookie").split(";")[0];
-  const rejected = await mf.dispatchFetch(
+  const signedIn = await mf.dispatchFetch(
     `${origin}/api/auth/google/callback?state=${state}&code=test`,
     {
-      headers: { cookie: `${guest.cookie}; ${stateCookie}` },
+      headers: { cookie: `${other.cookie}; ${stateCookie}` },
       redirect: "manual",
     },
   );
-  assert.equal(
-    rejected.headers.get("location"),
-    origin + "/?authError=email-verify",
-  );
-  const email = "external@example.com";
-  await guest.request("/api/auth/email/start", "POST", { email });
-  const loginCode = await setTestLoginCode(email);
-  const verified = await guest.request("/api/auth/email/verify", "POST", {
-    email,
-    code: loginCode,
-  });
-  assert.equal(verified.status, 200);
-  const verifiedAccount = await verified.json();
-  const auth = verified.headers.get("set-cookie").split(";")[0];
-  const linking = await mf.dispatchFetch(origin + "/api/auth/google", {
-    headers: { cookie: `${guest.cookie}; ${auth}` },
-    redirect: "manual",
-  });
-  const linkState = new URL(linking.headers.get("location")).searchParams.get(
-    "state",
-  );
-  const linkCookie = linking.headers.get("set-cookie").split(";")[0];
-  const linked = await mf.dispatchFetch(
-    `${origin}/api/auth/google/callback?state=${linkState}&code=test`,
-    {
-      headers: { cookie: `${guest.cookie}; ${linkCookie}` },
-      redirect: "manual",
-    },
-  );
-  assert.equal(linked.status, 302);
+  assert.equal(signedIn.headers.get("location"), origin + "/space");
   const identity = await db
     .prepare(
-      "SELECT user_id FROM auth_identities WHERE provider='google' AND subject='external-google-sub'",
+      "SELECT user_id FROM auth_identities WHERE provider='google' AND subject=?",
     )
+    .bind(googleIdentity.sub)
     .first();
-  assert.equal(identity.user_id, verifiedAccount.user.id);
+  assert.equal(identity.user_id, existing.id);
 });
+
+function pkce() {
+  const verifier = crypto.randomUUID() + crypto.randomUUID();
+  const challenge = createHash("sha256").update(verifier).digest("base64url");
+  return { verifier, challenge };
+}
+async function appGoogleCode(challenge, scheme = "aside") {
+  const start = await mf.dispatchFetch(
+    `${origin}/api/auth/google?mobile=${challenge}&scheme=${scheme}`,
+    { redirect: "manual" },
+  );
+  if (start.status !== 302) return { start };
+  const state = new URL(start.headers.get("location")).searchParams.get(
+    "state",
+  );
+  const stateCookie = start.headers.get("set-cookie").split(";")[0];
+  const callback = await mf.dispatchFetch(
+    `${origin}/api/auth/google/callback?state=${state}&code=test`,
+    { headers: { cookie: stateCookie }, redirect: "manual" },
+  );
+  return { start, callback };
+}
+const exchange = (code, verifier) =>
+  mf.dispatchFetch(origin + "/api/auth/mobile/exchange", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code, verifier }),
+  });
+test("apps sign in through the browser with a one-time code bound to their PKCE verifier", async () => {
+  googleIdentity = {
+    sub: "app-google-" + crypto.randomUUID(),
+    email: `app-${crypto.randomUUID()}@gmail.com`,
+    email_verified: true,
+    name: "App Listener",
+  };
+  assert.equal(
+    (await appGoogleCode(pkce().challenge, "https")).start.status,
+    400,
+    "only the app schemes receive codes",
+  );
+  const stolen = pkce();
+  const intercepted = await appGoogleCode(stolen.challenge);
+  const stolenCode = new URL(
+    intercepted.callback.headers.get("location"),
+  ).searchParams.get("code");
+  assert.equal((await exchange(stolenCode, pkce().verifier)).status, 400);
+  assert.equal(
+    (await exchange(stolenCode, stolen.verifier)).status,
+    400,
+    "a failed exchange consumes the code",
+  );
+  const { verifier, challenge } = pkce();
+  const { callback } = await appGoogleCode(challenge);
+  const location = new URL(callback.headers.get("location"));
+  assert.equal(location.protocol, "aside:");
+  assert.equal(callback.headers.get("set-cookie").includes("aside_auth="), false);
+  const response = await exchange(location.searchParams.get("code"), verifier);
+  assert.equal(response.status, 200, await response.clone().text());
+  const { token, user } = await response.json();
+  assert.equal(user.email, googleIdentity.email);
+  const me = await mf.dispatchFetch(origin + "/api/auth/session", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert.equal((await me.json()).user.id, user.id);
+  assert.equal(
+    (await exchange(location.searchParams.get("code"), verifier)).status,
+    400,
+  );
+});
+
+async function appleWebAttempt({ query = "", claims = {}, user, error } = {}) {
+  const guest = await visitor(false);
+  const start = await mf.dispatchFetch(`${origin}/api/auth/apple${query}`, {
+    headers: { cookie: guest.cookie },
+    redirect: "manual",
+  });
+  assert.equal(start.status, 302, await start.clone().text());
+  const appleUrl = new URL(start.headers.get("location"));
+  assert.equal(appleUrl.searchParams.get("response_mode"), "form_post");
+  assert.equal(
+    appleUrl.searchParams.get("redirect_uri"),
+    origin + "/api/auth/apple/callback",
+  );
+  const state = appleUrl.searchParams.get("state");
+  const stateCookie = start.headers.get("set-cookie").split(";")[0];
+  assert.match(start.headers.get("set-cookie"), /SameSite=None/);
+  const code = crypto.randomUUID();
+  appleCodes.set(code, {
+    sub: "web-apple-" + crypto.randomUUID(),
+    email: `web-${crypto.randomUUID()}@privaterelay.appleid.com`,
+    email_verified: "true",
+    nonce: appleUrl.searchParams.get("nonce"),
+    aud: "com.asidefm.web",
+    ...claims,
+  });
+  const form = new URLSearchParams(
+    error ? { state, error } : { state, code, ...(user ? { user } : {}) },
+  );
+  const callback = await mf.dispatchFetch(origin + "/api/auth/apple/callback", {
+    method: "POST",
+    headers: {
+      cookie: stateCookie,
+      origin: "https://appleid.apple.com",
+      "sec-fetch-site": "cross-site",
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    body: form.toString(),
+    redirect: "manual",
+  });
+  return { callback, state, stateCookie, form };
+}
+test("website Apple sign-in accepts Apple's form POST once and merges a verified email", async () => {
+  const account = await mobileAccountForTest();
+  const { callback, stateCookie, form } = await appleWebAttempt({
+    claims: { email: account.user.email },
+    user: JSON.stringify({ name: { firstName: "Web", lastName: "Apple" } }),
+  });
+  assert.equal(callback.status, 200, await callback.clone().text());
+  assert.match(await callback.text(), /url=http[^"]*\/space/);
+  const auth = callback.headers.get("set-cookie").match(/aside_auth=[a-f0-9]{64}/)?.[0];
+  assert.ok(auth);
+  const me = await mf.dispatchFetch(origin + "/api/auth/session", {
+    headers: { cookie: auth },
+  });
+  assert.equal((await me.json()).user.id, account.user.id);
+  const replay = await mf.dispatchFetch(origin + "/api/auth/apple/callback", {
+    method: "POST",
+    headers: {
+      cookie: stateCookie,
+      origin: "https://appleid.apple.com",
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    body: form.toString(),
+  });
+  assert.equal(replay.status, 400);
+  const forged = await mf.dispatchFetch(origin + "/api/auth/apple/callback", {
+    method: "POST",
+    headers: {
+      origin: "https://evil.example",
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    body: form.toString(),
+  });
+  assert.equal(forged.status, 403);
+});
+test("website Apple sign-in rejects a mismatched nonce and returns app cancellations to the app", async () => {
+  const wrong = await appleWebAttempt({ claims: { nonce: "wrong" } });
+  assert.equal(wrong.callback.status, 400);
+  const cancelled = await appleWebAttempt({
+    query: `?mobile=${pkce().challenge}&scheme=aside`,
+    error: "user_cancelled_authorize",
+  });
+  assert.equal(
+    cancelled.callback.headers.get("location"),
+    "aside://auth?error=cancelled",
+  );
+  const { verifier, challenge } = pkce();
+  const app = await appleWebAttempt({ query: `?mobile=${challenge}&scheme=aside` });
+  const location = new URL(app.callback.headers.get("location"));
+  const response = await exchange(location.searchParams.get("code"), verifier);
+  assert.equal(response.status, 200, await response.clone().text());
+});
+
 test("real Worker + D1/R2 isolate private episodes, public checkpoints and byte ranges", async () => {
   const a = await visitor(),
     b = await visitor();
@@ -2979,7 +3124,7 @@ test("Apple verifies issuer/audience/nonce and consumes the challenge only once"
   const row = await db.prepare("SELECT refresh_token FROM auth_identities WHERE user_id=?").bind(user.id).first();
   assert.ok(row.refresh_token && !row.refresh_token.includes("test-refresh"));
 });
-test("Apple linking preserves the existing account across hidden email and rejects cross-account linking", async () => {
+test("Apple linking preserves the existing account across hidden email, rejects cross-account linking and merges a verified email", async () => {
   const account = await mobileAccountForTest();
   const sub = "link-" + crypto.randomUUID();
   const first = await appleAttempt({token: account.token, sub});
@@ -2989,7 +3134,8 @@ test("Apple linking preserves the existing account across hidden email and rejec
   assert.equal((await login.response.json()).user.id, account.user.id);
   const other = await mobileAccountForTest();
   assert.equal((await appleAttempt({token: other.token, sub})).response.status, 409);
-  assert.equal((await appleAttempt({email: other.user.email})).response.status, 409, "email claims cannot silently merge accounts");
+  const merged = await appleAttempt({email: other.user.email});
+  assert.equal((await merged.response.json()).user.id, other.user.id, "Apple's verified email signs in to the account that owns it");
 });
 
 test("deleting an Apple-linked account revokes the provider token before removing the identity", async () => {

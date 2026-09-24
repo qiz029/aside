@@ -12,8 +12,8 @@ export interface User {
 }
 interface Session {
   user: User | null;
-  emailEnabled: boolean;
   googleEnabled: boolean;
+  appleWebEnabled?: boolean;
 }
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);
@@ -25,12 +25,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   return response.json();
 }
-const json = (body: unknown): RequestInit => ({
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify(body),
-});
-
 export function AccountControl({
   onAuthChanged,
   onUserChanged,
@@ -43,9 +37,6 @@ export function AccountControl({
   const [session, setSession] = useState<Session>();
   const [sessionFailed, setSessionFailed] = useState(false);
   const [view, setView] = useState<"closed" | "login" | "profile">("closed");
-  const [email, setEmail] = useState("");
-  const [code, setCode] = useState("");
-  const [sent, setSent] = useState(false);
   const [alias, setAlias] = useState("");
   const [description, setDescription] = useState("");
   const [avatarVersion, setAvatarVersion] = useState(0);
@@ -60,11 +51,7 @@ export function AccountControl({
         setAlias(next.user?.alias ?? "");
         setDescription(next.user?.description ?? "");
         const params = new URL(location.href).searchParams;
-        if (params.has("authError")) {
-          setView("login");
-          setError(t("请先用邮件验证码验证邮箱，再从个人资料关联 Google。"));
-          history.replaceState(null, "", location.pathname);
-        } else if (next.user && params.has("profile")) {
+        if (next.user && params.has("profile")) {
           setView("profile");
           history.replaceState(null, "", location.pathname);
           void onAuthChanged();
@@ -100,38 +87,6 @@ export function AccountControl({
     } finally {
       setBusy(false);
     }
-  }
-  async function send(event: FormEvent) {
-    event.preventDefault();
-    await run(async () => {
-      await request("/api/auth/email/start", json({ email }));
-      setSent(true);
-    });
-  }
-  async function verify(event: FormEvent) {
-    event.preventDefault();
-    await run(async () => {
-      const next = await request<{ user: User }>(
-        "/api/auth/email/verify",
-        json({ email, code }),
-      );
-      setSession((previous) => ({
-        emailEnabled: previous?.emailEnabled ?? true,
-        googleEnabled: previous?.googleEnabled ?? false,
-        user: next.user,
-      }));
-      setAlias(next.user.alias);
-      setDescription(next.user.description);
-      setView("closed");
-      await onAuthChanged();
-      // Signing in leads to the listener's own space, not to a profile form.
-      // Someone who signs in beside an open episode stays with it.
-      const listening =
-        location.pathname.startsWith("/episodes/") ||
-        new URLSearchParams(location.search).has("episode");
-      if (location.pathname !== "/space" && !listening)
-        location.assign("/space");
-    });
   }
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -176,8 +131,6 @@ export function AccountControl({
         previous ? { ...previous, user: null } : previous,
       );
       setView("closed");
-      setSent(false);
-      setCode("");
       await onAuthChanged();
     });
   }
@@ -269,6 +222,24 @@ export function AccountControl({
                     <h2 id="account-title">{t("从这里继续听")}</h2>
                     <p>{t("登录后保存你的音频和收听进度。")}</p>
                   </div>
+                  {session?.appleWebEnabled && (
+                    <a
+                      className="account-apple btn btn-lg btn-block"
+                      href="/api/auth/apple"
+                    >
+                      <svg
+                        className="account-apple-logo"
+                        viewBox="0 0 814 1000"
+                        aria-hidden="true"
+                      >
+                        <path
+                          fill="currentColor"
+                          d="M788 341c-6 4-108 62-108 190 0 149 131 201 135 203-1 3-21 72-69 142-43 62-88 124-156 124s-86-40-164-40c-77 0-104 41-167 41s-106-58-156-129C45 789 0 664 0 546 0 356 124 255 246 255c65 0 119 43 160 43 39 0 100-45 174-45 28 0 129 2 196 88ZM559 164c31-37 53-88 53-139 0-7-1-14-2-20-50 2-110 34-146 76-28 32-55 83-55 135 0 8 1 15 2 18 3 1 8 1 13 1 45 0 102-30 135-71Z"
+                        />
+                      </svg>
+                      {t("使用 Apple 登录")}
+                    </a>
+                  )}
                   {session?.googleEnabled && (
                     <a
                       className="account-google btn btn-secondary btn-lg btn-block"
@@ -280,78 +251,6 @@ export function AccountControl({
                       {t("使用 Google 登录")}
                     </a>
                   )}
-                  {session?.googleEnabled && session.emailEnabled && (
-                    <div className="account-divider">{t("或用邮箱")}</div>
-                  )}
-                  {session?.emailEnabled && (
-                    <form onSubmit={sent ? verify : send}>
-                      <label htmlFor="account-email">{t("邮箱")}</label>
-                      <div className="input-wrap">
-                        <svg
-                          className="input-icon"
-                          viewBox="0 0 16 16"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.5"
-                          strokeLinejoin="round"
-                          aria-hidden="true"
-                        >
-                          <rect x="2" y="3.5" width="12" height="9" rx="2" />
-                          <path d="m2.5 4.5 5.5 4 5.5-4" />
-                        </svg>
-                        <input
-                          id="account-email"
-                          className="input has-icon"
-                          type="email"
-                          autoComplete="email"
-                          placeholder="name@example.com"
-                          value={email}
-                          onChange={(event) => setEmail(event.target.value)}
-                          required
-                          disabled={sent || busy}
-                        />
-                      </div>
-                      {sent && (
-                        <>
-                          <label htmlFor="account-code">
-                            {t("邮件验证码")}
-                          </label>
-                          <input
-                            id="account-code"
-                            className="input"
-                            inputMode="numeric"
-                            autoComplete="one-time-code"
-                            pattern="[0-9]{8}"
-                            maxLength={8}
-                            value={code}
-                            onChange={(event) => setCode(event.target.value)}
-                            required
-                            disabled={busy}
-                          />
-                          <button
-                            type="button"
-                            className="account-text btn btn-quiet btn-sm"
-                            onClick={() => {
-                              setSent(false);
-                              setCode("");
-                            }}
-                          >
-                            {t("更换邮箱或重发")}
-                          </button>
-                        </>
-                      )}
-                      <button
-                        className="account-primary btn btn-primary btn-lg btn-block"
-                        disabled={busy}
-                      >
-                        {busy
-                          ? t("请稍候…")
-                          : sent
-                            ? t("验证并登录")
-                            : t("发送验证码")}
-                      </button>
-                    </form>
-                  )}
                   {!session && (
                     <p role="status">
                       {sessionFailed
@@ -360,7 +259,7 @@ export function AccountControl({
                     </p>
                   )}
                   {session &&
-                    !session.emailEnabled &&
+                    !session.appleWebEnabled &&
                     !session.googleEnabled && <p>{t("登录服务尚未配置")}</p>}
                 </>
               ) : (

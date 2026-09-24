@@ -12,6 +12,7 @@ import { AI_CONSENT_VERSION } from "./account-data.js";
 
 const authCookie = "aside_auth";
 const stateCookie = "aside_google_state";
+const appleStateCookie = "aside_apple_state";
 const sessionLifetime = 30 * 86400000;
 const emailSchema = z
   .string()
@@ -297,6 +298,162 @@ async function verifyCode(request: Request, env: Env, visitor: string) {
 function googleCallbackUrl(env: Env) {
   return `${env.APP_ORIGIN}/api/auth/google/callback`;
 }
+function appleCallbackUrl(env: Env) {
+  return `${env.APP_ORIGIN}/api/auth/apple/callback`;
+}
+export function appleWebEnabled(env: Env) {
+  return (
+    appleEnabled(env) &&
+    !!env.APPLE_WEB_CLIENT_ID &&
+    env
+      .APPLE_CLIENT_IDS!.split(",")
+      .map((x) => x.trim())
+      .includes(env.APPLE_WEB_CLIENT_ID)
+  );
+}
+const mobileSchemes = ["aside", "aside-dev"];
+const base64url = /^[A-Za-z0-9_-]{43}$/;
+async function challengeOf(verifier: string) {
+  return btoa(
+    String.fromCharCode(
+      ...new Uint8Array(
+        await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)),
+      ),
+    ),
+  )
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+interface OAuthState {
+  visitor_id: string;
+  link_user_id: string | null;
+  mobile_challenge: string | null;
+  mobile_scheme: string | null;
+}
+// Browser sign-in shared by the website and the apps. An app opens this flow in
+// a system browser session with a PKCE challenge; it never links the browser's
+// own website account, and it receives a one-time code instead of a cookie.
+async function oauthStart(
+  request: Request,
+  env: Env,
+  visitor: string,
+  user: UserRow | null,
+  cookieName: string,
+  sameSite: string,
+) {
+  const params = new URL(request.url).searchParams;
+  const mobile = params.get("mobile");
+  const scheme = params.get("scheme");
+  if (mobile !== null && (!base64url.test(mobile) || !mobileSchemes.includes(scheme ?? "")))
+    throw new HttpError(400, "Invalid app sign-in request");
+  const state = randomHex(32);
+  await env.DB.prepare(
+    "INSERT INTO auth_oauth_states(state_hash,visitor_id,link_user_id,expires,mobile_challenge,mobile_scheme) VALUES(?,?,?,?,?,?)",
+  )
+    .bind(
+      await hash(state),
+      visitor,
+      mobile ? null : (user?.id ?? null),
+      Date.now() + 600000,
+      mobile,
+      mobile ? scheme : null,
+    )
+    .run();
+  return {
+    state,
+    cookie: cookie(request, cookieName, state, 600, sameSite),
+  };
+}
+async function oauthState(
+  request: Request,
+  env: Env,
+  state: string | null,
+  cookieName: string,
+) {
+  if (
+    !state ||
+    !/^[a-f0-9]{64}$/.test(state) ||
+    state !== cookieValue(request, cookieName)
+  )
+    throw new HttpError(400, "登录验证失败，请重试 / Sign-in could not be verified");
+  const used = await env.DB.prepare(
+    "DELETE FROM auth_oauth_states WHERE state_hash=? AND expires>? RETURNING visitor_id,link_user_id,mobile_challenge,mobile_scheme",
+  )
+    .bind(await hash(state), Date.now())
+    .first<OAuthState>();
+  if (!used) throw new HttpError(400, "登录已过期，请重试 / Sign-in expired");
+  return used;
+}
+function redirect(location: string, cookies: string[]) {
+  const response = new Response(null, {
+    status: 302,
+    headers: { Location: location },
+  });
+  for (const value of cookies) response.headers.append("Set-Cookie", value);
+  return response;
+}
+async function finishOAuth(
+  request: Request,
+  env: Env,
+  used: OAuthState,
+  user: UserRow,
+  clearCookie: string,
+  crossSitePost = false,
+) {
+  if (used.mobile_challenge) {
+    const code = randomHex(32);
+    await env.DB.prepare(
+      "INSERT INTO auth_mobile_grants(code_hash,user_id,challenge,expires) VALUES(?,?,?,?)",
+    )
+      .bind(await hash(code), user.id, used.mobile_challenge, Date.now() + 120000)
+      .run();
+    return redirect(`${used.mobile_scheme}://auth?code=${code}`, [clearCookie]);
+  }
+  await claimVisitor(env, used.visitor_id, user.id);
+  // Linking started in the profile and returns there; signing in lands in the
+  // listener's space.
+  const location = `${env.APP_ORIGIN}${used.link_user_id ? "/?profile=1" : "/space"}`;
+  const cookies = [await issueSession(request, env, user.id), clearCookie];
+  if (!crossSitePost) return redirect(location, cookies);
+  // A navigation continuing a cross-site POST would not carry the new
+  // SameSite=Strict session, so the page moves on from our own origin.
+  const response = new Response(
+    `<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=${location}"><title>Aside</title>`,
+    { headers: { "Content-Type": "text/html; charset=utf-8" } },
+  );
+  for (const value of cookies) response.headers.append("Set-Cookie", value);
+  return response;
+}
+function oauthFailure(used: OAuthState | null, cause: unknown, clearCookie: string) {
+  if (!used?.mobile_scheme) throw cause;
+  const message = cause instanceof Error ? cause.message : "Sign-in failed";
+  return redirect(
+    `${used.mobile_scheme}://auth?error=${encodeURIComponent(message)}`,
+    [clearCookie],
+  );
+}
+async function mobileExchange(request: Request, env: Env) {
+  const data = z
+    .object({
+      code: z.string().regex(/^[a-f0-9]{64}$/),
+      verifier: z.string().regex(/^[A-Za-z0-9._~-]{43,128}$/),
+    })
+    .parse(await readJson(request));
+  const grant = await env.DB.prepare(
+    "DELETE FROM auth_mobile_grants WHERE code_hash=? AND expires>? RETURNING user_id,challenge",
+  )
+    .bind(await hash(data.code), Date.now())
+    .first<{ user_id: string; challenge: string }>();
+  if (!grant || grant.challenge !== (await challengeOf(data.verifier)))
+    throw new HttpError(400, "登录已过期，请重试 / Sign-in expired");
+  const user = requireUser(await userById(env, grant.user_id));
+  return json({
+    user: publicUser(user),
+    token: await issueSession(request, env, user.id, true),
+    expiresAt: Date.now() + sessionLifetime,
+  });
+}
 async function googleStart(
   request: Request,
   env: Env,
@@ -305,155 +462,175 @@ async function googleStart(
 ) {
   if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET)
     throw new HttpError(503, "Google 登录尚未配置");
-  const state = randomHex(32);
-  await env.DB.prepare(
-    "INSERT INTO auth_oauth_states(state_hash,visitor_id,link_user_id,expires) VALUES(?,?,?,?)",
-  )
-    .bind(await hash(state), visitor, user?.id ?? null, Date.now() + 600000)
-    .run();
+  const { state, cookie: stateValue } = await oauthStart(
+    request,
+    env,
+    visitor,
+    user,
+    stateCookie,
+    "Lax",
+  );
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   url.searchParams.set("client_id", env.GOOGLE_CLIENT_ID);
   url.searchParams.set("redirect_uri", googleCallbackUrl(env));
   url.searchParams.set("response_type", "code");
   url.searchParams.set("scope", "openid email profile");
   url.searchParams.set("state", state);
-  const response = new Response(null, {
-    status: 302,
-    headers: { Location: url.toString() },
-  });
-  response.headers.append(
-    "Set-Cookie",
-    cookie(request, stateCookie, state, 600, "Lax"),
-  );
-  return response;
+  url.searchParams.set("prompt", "select_account");
+  return redirect(url.toString(), [stateValue]);
 }
 async function googleCallback(request: Request, env: Env) {
   if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET)
     throw new HttpError(503, "Google 登录尚未配置");
   const url = new URL(request.url);
-  const state = url.searchParams.get("state");
-  const code = url.searchParams.get("code");
-  if (
-    !state ||
-    !/^[a-f0-9]{64}$/.test(state) ||
-    state !== cookieValue(request, stateCookie) ||
-    !code
-  )
-    throw new HttpError(400, "Google 登录验证失败");
-  const used = await env.DB.prepare(
-    "DELETE FROM auth_oauth_states WHERE state_hash=? AND expires>? RETURNING visitor_id,link_user_id",
-  )
-    .bind(await hash(state), Date.now())
-    .first<{ visitor_id: string; link_user_id: string | null }>();
-  if (!used) throw new HttpError(400, "Google 登录已过期");
-  const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      code,
-      client_id: env.GOOGLE_CLIENT_ID,
-      client_secret: env.GOOGLE_CLIENT_SECRET,
-      redirect_uri: googleCallbackUrl(env),
-      grant_type: "authorization_code",
-    }),
-    signal: AbortSignal.timeout(10000),
-  });
-  if (!tokenResponse.ok) throw new HttpError(400, "Google 登录未完成");
-  const token = (await tokenResponse.json()) as { access_token?: string };
-  if (!token.access_token) throw new HttpError(400, "Google 登录未完成");
-  const infoResponse = await fetch(
-    "https://openidconnect.googleapis.com/v1/userinfo",
-    {
-      headers: { Authorization: `Bearer ${token.access_token}` },
-      signal: AbortSignal.timeout(10000),
-    },
+  const clear = cookie(request, stateCookie, "", 0, "Lax");
+  const used = await oauthState(
+    request,
+    env,
+    url.searchParams.get("state"),
+    stateCookie,
   );
-  if (!infoResponse.ok) throw new HttpError(400, "无法读取 Google 账号");
-  const info = (await infoResponse.json()) as {
-    sub?: string;
-    email?: string;
-    email_verified?: boolean;
-    name?: string;
-    picture?: string;
-    hd?: string;
-  };
-  if (!info.sub || !info.email || !info.email_verified)
-    throw new HttpError(400, "Google 邮箱尚未验证");
-  const email = emailSchema.parse(info.email);
-  const picture =
-    info.picture &&
-    /^https:\/\/lh3\.googleusercontent\.com\//.test(info.picture)
-      ? info.picture
-      : undefined;
-  const existing = await env.DB.prepare(
-    "SELECT user_id FROM auth_identities WHERE provider='google' AND subject=?",
-  )
-    .bind(info.sub)
-    .first<{ user_id: string }>();
-  let user: UserRow;
-  if (existing) {
-    if (used.link_user_id && existing.user_id !== used.link_user_id)
-      throw new HttpError(409, "Google 账号已关联其他用户");
-    user = requireUser(await userById(env, existing.user_id));
-  } else if (used.link_user_id) {
-    user = requireUser(await userById(env, used.link_user_id));
-    if (user.email !== email)
-      throw new HttpError(409, "Google 邮箱与当前账号不一致");
-    await env.DB.prepare(
-      "INSERT OR IGNORE INTO auth_identities(provider,subject,user_id) VALUES('google',?,?)",
-    )
-      .bind(info.sub, user.id)
-      .run();
-    const linked = await env.DB.prepare(
+  try {
+    const code = url.searchParams.get("code");
+    if (!code) throw new HttpError(400, "Google 登录未完成");
+    const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        code,
+        client_id: env.GOOGLE_CLIENT_ID,
+        client_secret: env.GOOGLE_CLIENT_SECRET,
+        redirect_uri: googleCallbackUrl(env),
+        grant_type: "authorization_code",
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!tokenResponse.ok) throw new HttpError(400, "Google 登录未完成");
+    const token = (await tokenResponse.json()) as { access_token?: string };
+    if (!token.access_token) throw new HttpError(400, "Google 登录未完成");
+    const infoResponse = await fetch(
+      "https://openidconnect.googleapis.com/v1/userinfo",
+      {
+        headers: { Authorization: `Bearer ${token.access_token}` },
+        signal: AbortSignal.timeout(10000),
+      },
+    );
+    if (!infoResponse.ok) throw new HttpError(400, "无法读取 Google 账号");
+    const info = (await infoResponse.json()) as {
+      sub?: string;
+      email?: string;
+      email_verified?: boolean;
+      name?: string;
+      picture?: string;
+    };
+    if (!info.sub || !info.email || !info.email_verified)
+      throw new HttpError(400, "Google 邮箱尚未验证");
+    const email = emailSchema.parse(info.email);
+    const picture =
+      info.picture &&
+      /^https:\/\/lh3\.googleusercontent\.com\//.test(info.picture)
+        ? info.picture
+        : undefined;
+    const existing = await env.DB.prepare(
       "SELECT user_id FROM auth_identities WHERE provider='google' AND subject=?",
     )
       .bind(info.sub)
       .first<{ user_id: string }>();
-    if (linked?.user_id !== user.id)
-      throw new HttpError(409, "Google 账号已关联其他用户");
-  } else if (email.endsWith("@gmail.com") || (info.hd && info.email_verified)) {
-    user = await findOrCreateUser(
-      env,
-      email,
-      info.name ?? email.split("@")[0],
-      { sub: info.sub, picture },
-    );
-  } else {
-    const response = new Response(null, {
-      status: 302,
-      headers: { Location: `${env.APP_ORIGIN}/?authError=email-verify` },
-    });
-    response.headers.append(
-      "Set-Cookie",
-      cookie(request, stateCookie, "", 0, "Lax"),
-    );
-    return response;
+    let user: UserRow;
+    if (existing) {
+      if (used.link_user_id && existing.user_id !== used.link_user_id)
+        throw new HttpError(409, "Google 账号已关联其他用户");
+      user = requireUser(await userById(env, existing.user_id));
+    } else if (used.link_user_id) {
+      user = requireUser(await userById(env, used.link_user_id));
+      if (user.email !== email)
+        throw new HttpError(409, "Google 邮箱与当前账号不一致");
+      await linkIdentity(env, "google", info.sub, user.id);
+    } else {
+      // Google has verified this address, so it signs in to the account that
+      // already owns it.
+      user = await findOrCreateUser(
+        env,
+        email,
+        info.name ?? email.split("@")[0],
+        { sub: info.sub, picture },
+      );
+    }
+    if (picture) {
+      await env.DB.prepare(
+        "UPDATE users SET google_picture=?,updated_at=? WHERE id=?",
+      )
+        .bind(picture, Date.now(), user.id)
+        .run();
+    }
+    return await finishOAuth(request, env, used, user, clear);
+  } catch (cause) {
+    return oauthFailure(used, cause, clear);
   }
-  if (picture) {
-    await env.DB.prepare(
-      "UPDATE users SET google_picture=?,updated_at=? WHERE id=?",
-    )
-      .bind(picture, Date.now(), user.id)
-      .run();
-  }
-  await claimVisitor(env, used.visitor_id, user.id);
-  const response = new Response(null, {
-    status: 302,
-    // Linking Google started in the profile and returns there; signing in
-    // lands in the listener's space.
-    headers: {
-      Location: `${env.APP_ORIGIN}${used.link_user_id ? "/?profile=1" : "/space"}`,
-    },
-  });
-  response.headers.append(
-    "Set-Cookie",
-    await issueSession(request, env, user.id),
+}
+async function linkIdentity(
+  env: Env,
+  provider: "google" | "apple",
+  subject: string,
+  userId: string,
+  refresh: string | null = null,
+  clientId: string | null = null,
+) {
+  await env.DB.prepare(
+    "INSERT INTO auth_identities(provider,subject,user_id,refresh_token,client_id) VALUES(?,?,?,?,?) ON CONFLICT(provider,subject) DO UPDATE SET refresh_token=COALESCE(excluded.refresh_token,auth_identities.refresh_token),client_id=COALESCE(excluded.client_id,auth_identities.client_id) WHERE auth_identities.user_id=excluded.user_id",
+  )
+    .bind(provider, subject, userId, refresh, clientId)
+    .run();
+  const linked = await env.DB.prepare(
+    "SELECT user_id FROM auth_identities WHERE provider=? AND subject=?",
+  )
+    .bind(provider, subject)
+    .first<{ user_id: string }>();
+  if (linked?.user_id !== userId)
+    throw new HttpError(
+      409,
+      provider === "google"
+        ? "Google 账号已关联其他用户"
+        : "此 Apple 账号已绑定其他账号 / Apple account already linked",
+    );
+}
+// Resolves an Apple identity to an account: an existing link, the account being
+// linked, or the account that owns the verified email. Apple has verified the
+// address (a hidden relay address never matches another account).
+async function appleAccount(
+  env: Env,
+  identity: { subject: string; email: string; refresh: string },
+  clientId: string,
+  current: UserRow | null,
+  name?: string,
+) {
+  const existing = await env.DB.prepare(
+    "SELECT user_id FROM auth_identities WHERE provider='apple' AND subject=?",
+  )
+    .bind(identity.subject)
+    .first<{ user_id: string }>();
+  if (existing && current && existing.user_id !== current.id)
+    throw new HttpError(
+      409,
+      "此 Apple 账号已绑定其他账号 / Apple account already linked",
+    );
+  const user = existing
+    ? requireUser(await userById(env, existing.user_id))
+    : (current ??
+      (await findOrCreateUser(
+        env,
+        identity.email,
+        name?.trim().slice(0, 40) || "Listener",
+      )));
+  await linkIdentity(
+    env,
+    "apple",
+    identity.subject,
+    user.id,
+    await protectAppleToken(env, identity.refresh),
+    clientId,
   );
-  response.headers.append(
-    "Set-Cookie",
-    cookie(request, stateCookie, "", 0, "Lax"),
-  );
-  return response;
+  return user;
 }
 async function appleStart(request: Request, env: Env, user: UserRow | null) {
   const { clientId } = z
@@ -498,60 +675,13 @@ async function appleVerify(
     data.code,
     data.nonce,
   );
-  const existing = await env.DB.prepare(
-    "SELECT user_id FROM auth_identities WHERE provider='apple' AND subject=?",
-  )
-    .bind(identity.subject)
-    .first<{ user_id: string }>();
-  if (existing && current && existing.user_id !== current.id)
-    throw new HttpError(
-      409,
-      "此 Apple 账号已绑定其他账号 / Apple account already linked",
-    );
-  let user = existing
-    ? requireUser(await userById(env, existing.user_id))
-    : current;
-  if (!user) {
-    const collision = await env.DB.prepare("SELECT id FROM users WHERE email=?")
-      .bind(identity.email)
-      .first();
-    // Never merge by an email claim. Prove ownership through the existing login first.
-    if (collision)
-      throw new HttpError(
-        409,
-        "请先用邮箱登录，再在账号设置中绑定 Apple / Sign in by email first, then link Apple in Account",
-      );
-    const id = crypto.randomUUID();
-    await env.DB.prepare(
-      "INSERT INTO users(id,email,alias,created_at,updated_at) VALUES(?,?,?,?,?)",
-    )
-      .bind(
-        id,
-        identity.email,
-        data.name?.trim().slice(0, 40) || "Listener",
-        Date.now(),
-        Date.now(),
-      )
-      .run();
-    user = requireUser(await userById(env, id));
-  }
-  await env.DB.prepare(
-    "INSERT INTO auth_identities(provider,subject,user_id,refresh_token,client_id) VALUES('apple',?,?,?,?) ON CONFLICT(provider,subject) DO UPDATE SET refresh_token=excluded.refresh_token,client_id=excluded.client_id WHERE auth_identities.user_id=excluded.user_id",
-  )
-    .bind(
-      identity.subject,
-      user.id,
-      await protectAppleToken(env, identity.refresh),
-      challenge.client_id,
-    )
-    .run();
-  const linked = await env.DB.prepare(
-    "SELECT user_id FROM auth_identities WHERE provider='apple' AND subject=?",
-  )
-    .bind(identity.subject)
-    .first<{ user_id: string }>();
-  if (linked?.user_id !== user.id)
-    throw new HttpError(409, "Apple account already linked");
+  const user = await appleAccount(
+    env,
+    identity,
+    challenge.client_id,
+    current,
+    data.name,
+  );
   return json({
     user: publicUser(user),
     ...(current
@@ -561,6 +691,92 @@ async function appleVerify(
           expiresAt: Date.now() + sessionLifetime,
         }),
   });
+}
+async function appleWebStart(
+  request: Request,
+  env: Env,
+  visitor: string,
+  user: UserRow | null,
+) {
+  if (!appleWebEnabled(env))
+    throw new HttpError(503, "Apple 登录尚未配置 / Apple sign-in is not configured");
+  // Apple returns with a cross-site form POST, which only carries SameSite=None.
+  const { state, cookie: stateValue } = await oauthStart(
+    request,
+    env,
+    visitor,
+    user,
+    appleStateCookie,
+    "None",
+  );
+  const url = new URL("https://appleid.apple.com/auth/authorize");
+  url.searchParams.set("client_id", env.APPLE_WEB_CLIENT_ID!);
+  url.searchParams.set("redirect_uri", appleCallbackUrl(env));
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("response_mode", "form_post");
+  url.searchParams.set("scope", "name email");
+  url.searchParams.set("state", state);
+  url.searchParams.set("nonce", await hash(state));
+  return redirect(url.toString(), [stateValue]);
+}
+async function appleWebCallback(request: Request, env: Env) {
+  if (!appleWebEnabled(env))
+    throw new HttpError(503, "Apple 登录尚未配置 / Apple sign-in is not configured");
+  const form = await request.formData();
+  const field = (name: string) => {
+    const value = form.get(name);
+    return typeof value === "string" ? value : null;
+  };
+  const state = field("state");
+  const clear = cookie(request, appleStateCookie, "", 0, "None");
+  // Cancelling on Apple's page returns an error without a code.
+  if (field("error") === "user_cancelled_authorize") {
+    const used = await oauthState(request, env, state, appleStateCookie);
+    return used.mobile_scheme
+      ? redirect(`${used.mobile_scheme}://auth?error=cancelled`, [clear])
+      : redirect(`${env.APP_ORIGIN}/`, [clear]);
+  }
+  const used = await oauthState(request, env, state, appleStateCookie);
+  try {
+    const code = field("code");
+    if (!code || code.length > 4096)
+      throw new HttpError(400, "Apple 登录未完成 / Apple sign-in did not complete");
+    const identity = await validateApple(
+      env,
+      env.APPLE_WEB_CLIENT_ID!,
+      code,
+      await hash(state!),
+    );
+    // Apple sends the name only on the first authorization.
+    const profile = z
+      .object({
+        name: z
+          .object({
+            firstName: z.string().max(50).optional(),
+            lastName: z.string().max(50).optional(),
+          })
+          .optional(),
+      })
+      .safeParse(JSON.parse(field("user") ?? "{}"));
+    const name = profile.success
+      ? [profile.data.name?.firstName, profile.data.name?.lastName]
+          .filter(Boolean)
+          .join(" ")
+      : undefined;
+    const current = used.link_user_id
+      ? requireUser(await userById(env, used.link_user_id))
+      : null;
+    const user = await appleAccount(
+      env,
+      identity,
+      env.APPLE_WEB_CLIENT_ID!,
+      current,
+      name,
+    );
+    return await finishOAuth(request, env, used, user, clear, true);
+  } catch (cause) {
+    return oauthFailure(used, cause, clear);
+  }
 }
 async function uploadAvatar(request: Request, env: Env, user: UserRow) {
   const type = request.headers.get("content-type")?.split(";")[0];
@@ -600,6 +816,7 @@ export async function authRoute(
       emailEnabled: !!env.EMAIL && !!env.AUTH_EMAIL_FROM,
       googleEnabled: !!env.GOOGLE_CLIENT_ID && !!env.GOOGLE_CLIENT_SECRET,
       appleEnabled: appleEnabled(env),
+      appleWebEnabled: appleWebEnabled(env),
     });
   if (
     ["/api/auth/email/start", "/api/auth/mobile/email/start"].includes(path) &&
@@ -682,6 +899,12 @@ export async function authRoute(
     return googleStart(request, env, visitor, user);
   if (path === "/api/auth/google/callback" && method === "GET")
     return googleCallback(request, env);
+  if (path === "/api/auth/apple" && method === "GET")
+    return appleWebStart(request, env, visitor, user);
+  if (path === "/api/auth/apple/callback" && method === "POST")
+    return appleWebCallback(request, env);
+  if (path === "/api/auth/mobile/exchange" && method === "POST")
+    return mobileExchange(request, env);
   if (path === "/api/auth/logout" && method === "POST") {
     const token =
       /^Bearer ([a-f0-9]{64})$/.exec(
