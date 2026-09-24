@@ -3,6 +3,7 @@ const {
   withAppDelegate,
   withEntitlementsPlist,
   withAppBuildGradle,
+  withDangerousMod,
   withXcodeProject,
   withMainApplication,
   IOSConfig,
@@ -44,6 +45,34 @@ module.exports = function (config) {
     }
     return config;
   });
+  config = withDangerousMod(config, [
+    "ios",
+    (config) => {
+      const podfile = path.join(
+        config.modRequest.platformProjectRoot,
+        "Podfile",
+      );
+      const marker = "# Aside pod deployment target";
+      let source = fs.readFileSync(podfile, "utf8");
+      // Xcode 27 rejects pod targets below iOS 15; RNCAsyncStorage's resource
+      // bundle still declares 13.4.
+      if (!source.includes(marker))
+        source = source.replace(
+          /(  post_install do \|installer\|\n)/,
+          `$1    ${marker}
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |build_configuration|
+        if build_configuration.build_settings['IPHONEOS_DEPLOYMENT_TARGET'].to_f < 15.1
+          build_configuration.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.1'
+        end
+      end
+    end
+`,
+        );
+      fs.writeFileSync(podfile, source);
+      return config;
+    },
+  ]);
   config = withAppDelegate(config, (config) => {
     let source = config.modResults.contents;
     if (!source.includes("var asideLaunchOptions:")) {
