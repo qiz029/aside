@@ -175,7 +175,12 @@
   }
   AVAudioInputNode *input = self.engine.inputNode;
   // Echo cancellation uses the hardware output reference, including the podcast.
-  if (![input setVoiceProcessingEnabled:YES error:error]) return NO;
+  // Voice processing cannot drive an A2DP output: iOS moves playback off the car
+  // or headset onto the iPhone. Keep that route and capture without it.
+  BOOL a2dp = NO;
+  for (AVAudioSessionPortDescription *port in AVAudioSession.sharedInstance.currentRoute.outputs)
+    if ([port.portType isEqualToString:AVAudioSessionPortBluetoothA2DP]) a2dp = YES;
+  if (![input setVoiceProcessingEnabled:!a2dp error:error]) return NO;
   AVAudioFormat *format = [input outputFormatForBus:0];
   if (format.sampleRate <= 0 || format.channelCount < 1) {
     if (error) *error = [NSError errorWithDomain:@"AsideAudio" code:1
