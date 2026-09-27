@@ -151,6 +151,9 @@ function Main() {
   const [consentBusy, setConsentBusy] = useState(false);
   const consentRequest = useRef<((allowed: boolean) => void) | null>(null);
   const consentApproved = useRef(false);
+  // Playing is listening unless the listener chose hold-to-talk.
+  const [handsfree, setHandsfree] = useState(true);
+  const handsfreeAsked = useRef<string | null>(null);
   const [profileEditing, setProfileEditing] = useState(false);
   const [profileAlias, setProfileAlias] = useState("");
   const [profileDescription, setProfileDescription] = useState("");
@@ -424,6 +427,8 @@ function Main() {
       const wait = await AsyncStorage.getItem("aside.followupMs");
       if (wait !== null && [0, 3000, 8000].includes(Number(wait)))
         session.setFollowupMs(Number(wait));
+      if ((await AsyncStorage.getItem("aside.listeningMode")) === "manual")
+        setHandsfree(false);
       if (disposed) return;
       await refreshApplication();
     })()
@@ -594,17 +599,43 @@ function Main() {
   async function startHandsfree() {
     const id = current.current?.id;
     if (!(await ensureConsent()) || id !== current.current?.id) return;
-    if (!(await microphonePermission())) {
-      setError(
-        tr(
-          "允许麦克风后，点「开启随时聊」",
-          "After allowing microphone access, tap Talk hands-free",
-        ),
-      );
+    // A first request resolves false even when granted; read the answer back.
+    if (!(await microphonePermission()) && !(await microphonePermission()))
       return;
-    }
+    if (id !== current.current?.id) return;
     await session.enableContinuous();
   }
+  /**
+   * Playing is listening: the first play of an episode turns on hands-free
+   * conversation. A refusal keeps the episode playing and is not asked again
+   * until another episode loads.
+   */
+  async function listenWhilePlaying() {
+    const id = current.current?.id;
+    if (!id || !api.token || handsfreeAsked.current === id) return;
+    handsfreeAsked.current = id;
+    try {
+      await startHandsfree();
+    } catch (cause) {
+      if ((cause as Error).message !== "Microphone permission denied")
+        throw cause;
+      setError(
+        tr(
+          "未获得麦克风权限，仍可继续收听或打字提问",
+          "No microphone access. Keep listening or type a question.",
+        ),
+      );
+    }
+  }
+  useEffect(() => {
+    if (
+      handsfree &&
+      snapshot.state.mode === "playing" &&
+      snapshot.listeningMode !== "auto" &&
+      appState.current === "active"
+    )
+      void listenWhilePlaying().catch(failure);
+  }, [snapshot.state.mode]);
   async function signedIn(next: User) {
     const intent = pendingAction.current;
     pendingAction.current = null;
@@ -711,6 +742,8 @@ function Main() {
   }
   const toggleConversation = () => {
     if (snapshot.listeningMode === "auto" && snapshot.liveStatus !== "off") {
+      // Stop lasts until the next play, which listens again.
+      handsfreeAsked.current = null;
       session.setListeningMode("manual");
       return;
     }
@@ -2001,15 +2034,24 @@ function Main() {
                           )}
                         </ListeningIndicator>
                       ) : !composerOpen ? (
-                        <View style={{ flex: 1 }}>
-                          {button(
-                            tr("开启随时聊", "Talk hands-free"),
-                            toggleConversation,
-                            "toggle-conversation",
-                            false,
-                            snapshot.manualHeld,
-                          )}
-                        </View>
+                        <Text
+                          testID="voice-hint"
+                          numberOfLines={2}
+                          maxFontSizeMultiplier={1.4}
+                          style={{ flex: 1, color: colors.muted, fontSize: 13 }}
+                        >
+                          {handsfree &&
+                          user &&
+                          snapshot.state.mode !== "playing"
+                            ? tr(
+                                "播放后直接开口提问",
+                                "Press play, then just speak",
+                              )
+                            : tr(
+                                "按住说话，或打字提问",
+                                "Hold to talk, or type",
+                              )}
+                        </Text>
                       ) : null}
                       {!composerOpen && (
                         <>
@@ -2648,16 +2690,35 @@ function Main() {
                   ))}
                 </View>
               </View>
-              {snapshot.listeningMode === "auto" &&
-                button(
-                  tr("切换为按住说话", "Switch to hold-to-talk"),
-                  () => {
-                    session.setListeningMode("manual");
-                    setPlayerOptions(false);
-                  },
-                  "manual-mode",
-                  true,
-                )}
+              {handsfree
+                ? button(
+                    tr("切换为按住说话", "Switch to hold-to-talk"),
+                    () => {
+                      setHandsfree(false);
+                      void AsyncStorage.setItem(
+                        "aside.listeningMode",
+                        "manual",
+                      ).catch(failure);
+                      session.setListeningMode("manual");
+                      setPlayerOptions(false);
+                    },
+                    "manual-mode",
+                    true,
+                  )
+                : button(
+                    tr("切换为随时聊", "Switch to hands-free"),
+                    () => {
+                      setHandsfree(true);
+                      void AsyncStorage.setItem(
+                        "aside.listeningMode",
+                        "auto",
+                      ).catch(failure);
+                      setPlayerOptions(false);
+                      toggleConversation();
+                    },
+                    "handsfree-mode",
+                    true,
+                  )}
               {button(
                 tr("开始新对话", "New conversation"),
                 () => {
