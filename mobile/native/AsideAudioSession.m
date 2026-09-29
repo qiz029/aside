@@ -39,6 +39,26 @@ RCT_EXPORT_METHOD(questionHeard) {
   });
 }
 
+RCT_EXPORT_METHOD(configureVoiceChat:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject) {
+  // Called with the engine stopped and session inactive, after Expo's defaults.
+  // A2DP + the phone mic has no echo cancellation. Permit the car/headset's HFP
+  // input/output instead; never force the built-in speaker over an accessory.
+  AVAudioSessionCategoryOptions options = AVAudioSessionCategoryOptionDefaultToSpeaker;
+#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 260000
+  options |= AVAudioSessionCategoryOptionAllowBluetoothHFP;
+#else
+  options |= AVAudioSessionCategoryOptionAllowBluetooth;
+#endif
+  NSError *error;
+  if (![[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayAndRecord
+      mode:AVAudioSessionModeVoiceChat options:options error:&error]) {
+    reject(@"voice_route", @"Couldn't configure hands-free audio", error);
+    return;
+  }
+  resolve(nil);
+}
+
 RCT_EXPORT_METHOD(setAnswerEnabled:(BOOL)enabled
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject) {

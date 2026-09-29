@@ -37,9 +37,9 @@ else if (!moduleSource.includes(modeAfter))
     "Review the expo-audio recording mode reset after upgrading the SDK.",
   );
 
-// HFP moves the podcast and the answer onto the call-quality link for the whole
-// listening lease, and cars present it as a phone call. A2DP alone keeps the
-// output route and leaves the built-in microphone as the only Bluetooth-era input.
+// Preserve A2DP for manual recording. Continuous listening explicitly overrides
+// these defaults with voiceChat + HFP in AsideAudioSession before activation, so
+// the car/headset supplies duplex audio with voice processing enabled.
 const routeBefore = `#if compiler(>=6.2) // Xcode 26
         categoryOptions.insert(.allowBluetoothHFP)
 #else

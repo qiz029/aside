@@ -26,6 +26,10 @@ export class AudioCoordinator extends AudioSessionCoordinator {
             Platform.OS === "android" && voice ? "mixWithOthers" : "doNotMix",
           shouldRouteThroughEarpiece: false,
         });
+        // Expo owns media/manual recording defaults. A continuous conversation
+        // needs duplex Bluetooth (HFP) before activation and microphone startup.
+        if (Platform.OS === "ios" && continuous)
+          await NativeModules.AsideAudioSession.configureVoiceChat();
       },
       activate: setIsAudioActiveAsync,
       enableAnswer: async (enabled) => {
