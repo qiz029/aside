@@ -19,10 +19,18 @@ appId: com.asidefm.app.dev
 - extendedWaitUntil:
     visible: "A short"
     timeout: 8000
-- assertVisible: "Ask about what you heard…"
+- assertVisible:
+    id: inline-answer
+- assertVisible:
+    id: show-transcript
+    selected: true
 - extendedWaitUntil:
     visible: "A short answer"
     timeout: 45000
 - assertVisible: "What did I hear?"
-- assertVisible: "Ask about what you heard…"
+- tapOn:
+    id: expand-inline-answer
+- assertVisible: "A short answer"
+- assertNotVisible:
+    id: send-question
 - takeScreenshot: streamed-answer

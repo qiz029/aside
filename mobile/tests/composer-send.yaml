@@ -18,12 +18,18 @@ appId: com.asidefm.app.dev
 - extendedWaitUntil:
     visible: A short answer
     timeout: 20000
-- assertVisible: "Ask about what you heard…"
+- assertVisible:
+    id: inline-answer
+- assertVisible:
+    id: show-transcript
+    selected: true
+- assertNotVisible:
+    id: send-question
 - takeScreenshot: compact-composer-sent
 - tapOn:
-    id: close-question
-- assertVisible:
-    id: hold-to-talk
+    id: expand-inline-answer
+- assertVisible: ${QUESTION}
+- assertVisible: A short answer
 - tapOn:
     id: question
 - assertVisible: "Ask about what you heard…"

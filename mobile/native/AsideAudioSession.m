@@ -3,6 +3,8 @@
 #import <React/RCTEventEmitter.h>
 #import <WebRTCModule.h>
 #import "AsideSilentAudioDevice.h"
+#import <UIKit/UIKit.h>
+#import <AVFAudio/AVFAudio.h>
 
 // Expo owns podcast playback/recording. WebRTC may run its audio unit only
 // while the serialized JS audio coordinator has granted answer playback.
@@ -21,6 +23,20 @@ RCT_EXPORT_MODULE();
 - (void)stopObserving { [[NSNotificationCenter defaultCenter] removeObserver:self]; }
 - (void)interrupted:(NSNotification *)notification {
   [self sendEventWithName:@"AsideAnswerInterrupted" body:nil];
+}
+
+RCT_EXPORT_METHOD(questionHeard) {
+  if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
+  // Recording otherwise suppresses feedback. Restore the session's preference
+  // afterwards so subsequent keyboard/system sounds remain suppressed.
+  AVAudioSession *session = [AVAudioSession sharedInstance];
+  BOOL allowed = session.allowHapticsAndSystemSoundsDuringRecording;
+  [session setAllowHapticsAndSystemSoundsDuringRecording:YES error:nil];
+  UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+  [feedback impactOccurred];
+  if (!allowed) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    [session setAllowHapticsAndSystemSoundsDuringRecording:NO error:nil];
+  });
 }
 
 RCT_EXPORT_METHOD(setAnswerEnabled:(BOOL)enabled

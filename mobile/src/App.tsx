@@ -82,6 +82,15 @@ import { LoginForm } from "./LoginForm";
 import { ProviderSignIn } from "./ProviderSignIn";
 import { errorMessage } from "./error-message";
 import { observeAcceptance } from "./acceptance-observer";
+import { RecentListening } from "./recent-listening";
+import {
+  FirstQuestionHint,
+  InlineAnswer,
+  RecentListeningCards,
+} from "./ListeningCards";
+import { questionHeard } from "./listening-feedback";
+import { PlaybackRatePicker } from "./PlaybackRatePicker";
+import type { Checkpoint } from "@aside/engine/contracts";
 const formatTime = (ms: number) => {
   const seconds = Math.floor(ms / 1000);
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
@@ -161,6 +170,19 @@ function Main() {
 
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [playerOptions, setPlayerOptions] = useState(false);
+  const [speedOptions, setSpeedOptions] = useState(false);
+  const [showQuestionTip, setShowQuestionTip] = useState(false);
+  const [inlineHidden, setInlineHidden] = useState(false);
+  const [inlineQuestion, setInlineQuestion] = useState<{
+    id: string;
+    text: string;
+    atMs: number;
+  } | null>(null);
+  const [recents] = useState(() => new RecentListening(AsyncStorage));
+  const recentEpisodes = useSyncExternalStore(
+    recents.subscribe,
+    recents.getSnapshot,
+  );
   const [composerOpen, setComposerOpen] = useState(false);
   useEffect(() => setComposerOpen(false), [episode?.id]);
   useEffect(() => {
@@ -183,8 +205,7 @@ function Main() {
     progress: number;
     phase: string;
   } | null>(null);
-  const [lastId, setLastId] = useState<string | null>(null),
-    [rate, setRate] = useState(1);
+  const [lastId, setLastId] = useState<string | null>(null);
   const [, updateSync] = useState(0);
   const [runtime] = useState(() => {
     const api = new MobileApi(),
@@ -196,6 +217,7 @@ function Main() {
       followupMs: 3000,
       speechYield: "duck",
       voiceFactory: nativeVoiceFactory(coordinator),
+      cue: questionHeard,
     });
     const sync = new CheckpointSync(
       {
@@ -232,6 +254,7 @@ function Main() {
     [session, episode?.analysis?.passages],
   );
   const snapshot = useSyncExternalStore(session.subscribe, screenSnapshot);
+  const rate = snapshot.playerConfig.playbackRate;
   const [followTranscript, setFollowTranscript] = useState(true);
 
   const transcriptRef = useRef<FlatList>(null),
@@ -244,18 +267,35 @@ function Main() {
   const followConversation = useRef(true);
   const lastAcceptedQuestion = useRef<string | undefined>(undefined);
   useEffect(() => {
-    const last = snapshot.history.findLast((turn) => turn.role === "user");
-    const id = last?.id ?? last?.text;
+    const index = snapshot.history.findLastIndex(
+      (turn) => turn.role === "user",
+    );
+    const last = snapshot.history[index];
+    const id = last ? (last.id ?? `${index}:${last.text}`) : undefined;
     if (
       id &&
       id !== lastAcceptedQuestion.current &&
-      snapshot.listeningMode === "auto" &&
       snapshot.state.interruption
     ) {
       followConversation.current = true;
-      setPane("conversation");
+      const atMs = snapshot.state.interruption.atMs;
+      const passage = current.current?.analysis?.passages.findLast(
+        (p) => p.startMs <= atMs,
+      );
+      setInlineQuestion({
+        id,
+        text: last.text,
+        atMs: passage?.startMs ?? atMs,
+      });
+      setInlineHidden(false);
+      setShowQuestionTip(false);
+      void AsyncStorage.setItem("aside.questionTipSeen", "1").catch(failure);
+      if (snapshot.listeningMode !== "auto") questionHeard();
+      lastAcceptedQuestion.current = id;
+    } else if (!id) {
+      lastAcceptedQuestion.current = undefined;
+      setInlineQuestion(null);
     }
-    lastAcceptedQuestion.current = id;
   }, [snapshot.history, snapshot.listeningMode, snapshot.state.interruption]);
   useEffect(() => {
     const subscription = BackHandler.addEventListener(
@@ -293,7 +333,15 @@ function Main() {
     void action().catch(failure);
   };
   const save = async () => {
-    if (current.current && api.token) await sync.save(session.checkpoint());
+    if (!current.current) return;
+    const checkpoint = session.checkpoint();
+    await Promise.all([
+      recents.remember(
+        current.current,
+        checkpoint.resumeMs ?? checkpoint.positionMs,
+      ),
+      api.token ? sync.save(checkpoint) : Promise.resolve(),
+    ]);
   };
   function clearUploadFile() {
     const previous = lastUpload.current;
@@ -316,6 +364,8 @@ function Main() {
     session.stop();
     audio.clear();
     current.current = null;
+    setInlineQuestion(null);
+    await recents.clear();
     setEpisode(null);
     setUser(null);
     setProfileEditing(false);
@@ -331,6 +381,7 @@ function Main() {
       keys.filter((k) => k.startsWith("aside.checkpoint.")),
     );
     await api.forget();
+    await recents.restore("guest");
   }
   async function refreshApplication() {
     const revision = ++startup.current.revision;
@@ -348,6 +399,28 @@ function Main() {
     if (health.status === "fulfilled") session.configure(health.value);
     if (library.status === "fulfilled") setEpisodes(library.value);
     if (account.status === "fulfilled") {
+      await recents.restore(account.value?.id ?? "guest");
+      // Upgrade the old single-ID shortcut using authorized episode metadata.
+      if (!recents.getSnapshot().length) {
+        const previousId = await AsyncStorage.getItem("aside.lastEpisode");
+        if (previousId) {
+          const token = api.token;
+          try {
+            const [previous, checkpoint] = await Promise.all([
+              api.episode(previousId),
+              token ? api.checkpoint(previousId) : Promise.resolve(null),
+            ]);
+            if (revision === startup.current.revision && token === api.token)
+              await recents.remember(
+                previous,
+                checkpoint?.resumeMs ?? checkpoint?.positionMs ?? 0,
+              );
+          } catch {
+            /* A removed episode or an offline server does not block the library. */
+          }
+        }
+      }
+      if (revision !== startup.current.revision) return;
       setUser(account.value);
       setAccountState("ready");
       if (account.value) {
@@ -382,7 +455,13 @@ function Main() {
     );
     setCursor(page.nextCursor);
   }
-  async function load(id: string) {
+  async function load(id: string, play = false) {
+    if (play && current.current?.id === id) {
+      setEpisode(current.current);
+      setTab("library");
+      session.start();
+      return;
+    }
     await save();
     const revision = ++generation.current;
     session.stop();
@@ -391,12 +470,28 @@ function Main() {
     try {
       const [next, cp] = await Promise.all([
         api.episode(id),
-        api.token ? sync.load(id) : Promise.resolve(null),
+        api.token
+          ? sync.load(id)
+          : Promise.resolve<Checkpoint>({
+              positionMs:
+                recents.getSnapshot().find((item) => item.id === id)
+                  ?.positionMs ?? 0,
+              history: [],
+            }),
       ]);
       if (revision !== generation.current) return;
       current.current = next;
       setEpisode(next);
       session.load(next, cp);
+      const history = session.getSnapshot().history;
+      const lastQuestionIndex = history.findLastIndex(
+        (turn) => turn.role === "user",
+      );
+      const lastQuestion = history[lastQuestionIndex];
+      lastAcceptedQuestion.current = lastQuestion
+        ? (lastQuestion.id ?? `${lastQuestionIndex}:${lastQuestion.text}`)
+        : undefined;
+      setInlineQuestion(null);
       initialSeek.current = null;
       audio.load(
         api.base + `/api/episodes/${id}/audio`,
@@ -408,6 +503,8 @@ function Main() {
       setPane("transcript");
       setFollowTranscript(true);
       setTab("library");
+      await recents.remember(next, cp?.resumeMs ?? cp?.positionMs ?? 0);
+      if (play) session.start();
     } finally {
       if (revision === generation.current) setLoading(false);
     }
@@ -424,6 +521,14 @@ function Main() {
       const savedLocale = await AsyncStorage.getItem("aside.locale");
       if (savedLocale) setLocale(savedLocale);
       setLastId(await AsyncStorage.getItem("aside.lastEpisode"));
+      setShowQuestionTip(
+        (await AsyncStorage.getItem("aside.questionTipSeen")) !== "1",
+      );
+      const savedRate = Number(
+        await AsyncStorage.getItem("aside.playbackRate"),
+      );
+      if ([0.75, 1, 1.25, 1.5, 1.75, 2].includes(savedRate))
+        session.setPlaybackRate(savedRate);
       const wait = await AsyncStorage.getItem("aside.followupMs");
       if (wait !== null && [0, 3000, 8000].includes(Number(wait)))
         session.setFollowupMs(Number(wait));
@@ -517,7 +622,12 @@ function Main() {
   }, []);
   const passageIndex = snapshot.passageIndex;
   const scrollToCurrentPassage = () => {
-    if (followTranscript && passageIndex >= 0 && pane === "transcript")
+    if (
+      !showQuestionTip &&
+      followTranscript &&
+      passageIndex >= 0 &&
+      pane === "transcript"
+    )
       transcriptRef.current?.scrollToIndex({
         index: passageIndex,
         animated: true,
@@ -526,7 +636,7 @@ function Main() {
   };
   useEffect(() => {
     scrollToCurrentPassage();
-  }, [passageIndex, pane, followTranscript]);
+  }, [passageIndex, pane, followTranscript, showQuestionTip]);
   function needLogin(
     kind: "upload" | "text" | "handsfree" | "manual" | "library",
   ) {
@@ -593,7 +703,7 @@ function Main() {
       questionInput.current?.clear();
       followConversation.current = true;
       Keyboard.dismiss();
-      setPane("conversation");
+      setComposerOpen(false);
     }
   }
   async function startHandsfree() {
@@ -646,6 +756,7 @@ function Main() {
     setCollection("private");
     setTab(intent?.kind === "upload" ? "upload" : "library");
     try {
+      await recents.restore(next.id);
       await refreshPrivate();
       if (current.current) {
         const cp = await sync.load(current.current.id);
@@ -888,6 +999,22 @@ function Main() {
   const latestAnswer = snapshot.history.findLast(
     (turn) => turn.role === "assistant",
   );
+  const latestQuestionIndex = snapshot.history.findLastIndex(
+    (turn) => turn.role === "user",
+  );
+  const inlineAnswer = snapshot.history
+    .slice(latestQuestionIndex + 1)
+    .findLast((turn) => turn.role === "assistant");
+  const replayQuestion = () => {
+    if (!inlineQuestion) return;
+    session.executePlayerCommand({
+      type: "seek",
+      atMs: inlineQuestion.atMs,
+      playback: "play",
+    });
+    setPane("transcript");
+    setFollowTranscript(true);
+  };
   const rawError = error || snapshot.error;
   const microphoneDenied =
     /Microphone permission denied|Recording permission has not been granted/i.test(
@@ -897,6 +1024,7 @@ function Main() {
   const textStyle = { color: colors.text };
   // Playback continues behind the library; the mini player brings it back.
   const closePlayer = (axis: "x" | "y") => {
+    void save().catch(failure);
     (axis === "y" ? pullY : pullX).value = withTiming(
       axis === "y" ? screen.height : screen.width,
       { duration: 220 },
@@ -1509,6 +1637,7 @@ function Main() {
                   {button(
                     tr("返回音频库", "Library"),
                     () => {
+                      void save().catch(failure);
                       setEpisode(null);
                     },
                     "back-library",
@@ -1581,6 +1710,33 @@ function Main() {
               <>
                 <GestureDetector gesture={paneSwipe}>
                   <View style={{ flex: 1 }}>
+                    {pane === "transcript" &&
+                    inlineQuestion &&
+                    !inlineHidden ? (
+                      <InlineAnswer
+                        question={inlineQuestion.text}
+                        answer={
+                          snapshot.answerPreview ||
+                          inlineAnswer?.text ||
+                          (rawError
+                            ? tr(
+                                "暂时没能回答，请再试一次。",
+                                "Couldn't answer this time. Please try again.",
+                              )
+                            : "")
+                        }
+                        busy={snapshot.busy}
+                        atMs={inlineQuestion.atMs}
+                        onReplay={replayQuestion}
+                        onExpand={() => {
+                          followConversation.current = true;
+                          setPane("conversation");
+                        }}
+                        onDismiss={() => setInlineHidden(true)}
+                        colors={colors}
+                        tr={tr}
+                      />
+                    ) : null}
                     {pane === "transcript" && !followTranscript
                       ? button(
                           tr("回到正在播放的段落", "Back to current passage"),
@@ -1605,6 +1761,24 @@ function Main() {
                         data={episode.analysis?.passages ?? []}
                         keyExtractor={(p) => p.id}
                         contentContainerStyle={styles.reading}
+                        ListHeaderComponent={
+                          showQuestionTip ? (
+                            <FirstQuestionHint
+                              listening={snapshot.liveStatus === "on"}
+                              handsfree={handsfree}
+                              signedIn={!!user}
+                              onDismiss={() => {
+                                setShowQuestionTip(false);
+                                void AsyncStorage.setItem(
+                                  "aside.questionTipSeen",
+                                  "1",
+                                ).catch(failure);
+                              }}
+                              colors={colors}
+                              tr={tr}
+                            />
+                          ) : null
+                        }
                         renderItem={({ item }) => {
                           const current =
                             episode.analysis?.passages[passageIndex]?.id ===
@@ -1810,17 +1984,30 @@ function Main() {
                                 {item.text}
                               </Text>
                               {item === latestAnswer && (
-                                <AnswerSources
-                                  key={item.id}
-                                  sources={snapshot.sources}
-                                  onSeek={(atMs) => {
-                                    session.seek(atMs);
-                                    session.start();
-                                  }}
-                                  onError={failure}
-                                  colors={colors}
-                                  tr={tr}
-                                />
+                                <>
+                                  {inlineQuestion
+                                    ? button(
+                                        tr(
+                                          `回听提问处 ${formatTime(inlineQuestion.atMs)}`,
+                                          `Replay from ${formatTime(inlineQuestion.atMs)}`,
+                                        ),
+                                        replayQuestion,
+                                        "conversation-replay-passage",
+                                        true,
+                                      )
+                                    : null}
+                                  <AnswerSources
+                                    key={item.id}
+                                    sources={snapshot.sources}
+                                    onSeek={(atMs) => {
+                                      session.seek(atMs);
+                                      session.start();
+                                    }}
+                                    onError={failure}
+                                    colors={colors}
+                                    tr={tr}
+                                  />
+                                </>
                               )}
                             </View>
                           )
@@ -1851,19 +2038,18 @@ function Main() {
                     <View style={styles.transportRow}>
                       {button(
                         `${rate}×`,
-                        () => {
-                          const next = rate >= 2 ? 0.75 : rate + 0.25;
-                          setRate(next);
-                          session.setPlaybackRate(next);
-                        },
+                        () => setSpeedOptions(true),
                         "speed",
                         true,
                       )}
                       {button(
                         "−15",
                         () => {
-                          session.seek(Math.max(0, audio.positionMs - 15000));
-                          session.start();
+                          session.executePlayerCommand({
+                            type: "seek",
+                            atMs: Math.max(0, audio.positionMs - 15000),
+                            playback: "preserve",
+                          });
                         },
                         "seek-back",
                         true,
@@ -1881,13 +2067,14 @@ function Main() {
                       {button(
                         "+15",
                         () => {
-                          session.seek(
-                            Math.min(
+                          session.executePlayerCommand({
+                            type: "seek",
+                            atMs: Math.min(
                               episode.durationMs,
                               audio.positionMs + 15000,
                             ),
-                          );
-                          session.start();
+                            playback: "preserve",
+                          });
                         },
                         "seek-forward",
                         true,
@@ -2006,7 +2193,6 @@ function Main() {
                       onAsk={() => {
                         if (session.askMissed()) {
                           followConversation.current = true;
-                          setPane("conversation");
                         }
                       }}
                       colors={colors}
@@ -2021,6 +2207,8 @@ function Main() {
                           status={snapshot.liveStatus}
                           hearing={snapshot.hearing}
                           reconnecting={snapshot.voiceReconnecting}
+                          busy={snapshot.busy}
+                          answering={snapshot.state.assistantSpeaking}
                           colors={colors}
                           tr={tr}
                         >
@@ -2108,7 +2296,6 @@ function Main() {
                                 if (send) {
                                   session.endManual();
                                   followConversation.current = true;
-                                  setPane("conversation");
                                   Keyboard.dismiss();
                                 }
                                 setCaptureCancelled(false);
@@ -2280,14 +2467,25 @@ function Main() {
                       collection !== "public",
                     )}
                   </View>
-                  {lastId
-                    ? button(
-                        tr("继续上次收听", "Continue listening"),
-                        () => run(() => load(lastId)),
-                        "continue-last",
-                        true,
-                      )
-                    : null}
+                  {recentEpisodes.length ? (
+                    <View style={{ marginHorizontal: 20 }}>
+                      <RecentListeningCards
+                        items={recentEpisodes}
+                        base={api.base}
+                        headers={api.headers()}
+                        onPlay={(id) => run(() => load(id, true))}
+                        colors={colors}
+                        tr={tr}
+                      />
+                    </View>
+                  ) : lastId ? (
+                    button(
+                      tr("继续上次收听", "Continue listening"),
+                      () => run(() => load(lastId, true)),
+                      "continue-last",
+                      true,
+                    )
+                  ) : null}
                   {loading ? <ActivityIndicator /> : null}
                   <View style={{ height: 20 }} />
                 </>
@@ -2781,6 +2979,20 @@ function Main() {
           </View>
         </InputAccessoryView>
       ) : null}
+      <PlaybackRatePicker
+        visible={speedOptions}
+        rate={rate}
+        onSelect={(value) => {
+          session.setPlaybackRate(value);
+          setSpeedOptions(false);
+          void AsyncStorage.setItem("aside.playbackRate", String(value)).catch(
+            failure,
+          );
+        }}
+        onClose={() => setSpeedOptions(false)}
+        colors={colors}
+        tr={tr}
+      />
       <PrivacyPanel
         visible={privacyVisible}
         consent={!!consentRequest.current}

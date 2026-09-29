@@ -16,6 +16,8 @@ appId: com.asidefm.app.dev
 - longPressOn:
     id: hold-to-talk
     waitToSettleTimeoutMs: 100
+- tapOn:
+    id: show-conversation
 - extendedWaitUntil:
     visible: "^You$"
     timeout: 15000

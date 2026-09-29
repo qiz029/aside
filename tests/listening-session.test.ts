@@ -2143,6 +2143,27 @@ test("a question after the speech stop becomes an interruption at the position w
   s.session.dispose();
 });
 
+test("native timeline and skip commands retain paused or playing intent", async () => {
+  const s = setup();
+  s.session.executePlayerCommand({ type: "seek", atMs: 15000, playback: "preserve" });
+  await flush();
+  assert.equal(s.audio.positionMs, 15000);
+  assert.equal(s.audio.playing, false);
+  assert.equal(s.session.getSnapshot().state.mode, "paused");
+  s.session.start();
+  await flush();
+  s.session.executePlayerCommand({ type: "seek", atMs: 45000, playback: "preserve" });
+  await flush();
+  assert.equal(s.audio.positionMs, 45000);
+  assert.equal(s.audio.playing, true);
+  assert.equal(s.session.getSnapshot().state.mode, "playing");
+  s.session.stop();
+  s.session.executePlayerCommand({ type: "seek", atMs: 30000, playback: "preserve" });
+  await flush();
+  assert.equal(s.audio.playing, false);
+  s.session.dispose();
+});
+
 test("under server voice control only a backend answer is heard or recorded", async () => {
   const s = setup("auto", undefined, undefined, false, true);
   s.session.start();

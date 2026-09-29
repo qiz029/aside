@@ -5,7 +5,7 @@ import type { ListeningSession } from "@aside/player-runtime/listening-session";
 import type { SessionSnapshot } from "./session-selection";
 import { Scrubber } from "./Scrubber";
 
-type Shared = {
+export type Shared = {
   colors: {
     accent: string;
     line: string;
@@ -51,8 +51,11 @@ export function PlaybackTimeline({
         }
         formatTime={formatTime}
         onSeek={(value) => {
-          session.seek(value);
-          session.start();
+          session.executePlayerCommand({
+            type: "seek",
+            atMs: value,
+            playback: "preserve",
+          });
         }}
       />
       <View
@@ -143,6 +146,8 @@ export function ListeningIndicator({
   status,
   hearing,
   reconnecting,
+  busy,
+  answering,
   colors,
   tr,
   children,
@@ -151,6 +156,8 @@ export function ListeningIndicator({
   status: SessionSnapshot["liveStatus"];
   hearing: SessionSnapshot["hearing"];
   reconnecting: boolean;
+  busy: boolean;
+  answering: boolean;
   children: React.ReactNode;
 }) {
   const caption = hearing ? hearingTail(hearing.text.trim()) : "";
@@ -229,7 +236,17 @@ export function ListeningIndicator({
             : status === "on"
               ? hearing
                 ? tr("在听你说", "Listening to you")
-                : tr("正在聆听 · 直接开口就好", "Listening · just speak")
+                : answering
+                  ? tr(
+                      "正在回答 · 可以继续追问",
+                      "Answering · you can ask more",
+                    )
+                  : busy
+                    ? tr(
+                        "问题已收到 · 正在想一想",
+                        "Question received · thinking",
+                      )
+                    : tr("正在聆听 · 直接开口就好", "Listening · just speak")
               : status === "connecting"
                 ? tr("正在连接…", "Connecting…")
                 : tr("麦克风已关闭", "Microphone is off")}

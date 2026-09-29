@@ -1,5 +1,62 @@
 # Mobile design and interaction acceptance
 
+## Listening polish — 2026-09-27
+
+Released to internal TestFlight as **0.1.0 (3)** on 2026-09-27. Apple reports
+`VALID` and `IN_BETA_TESTING`, and membership in the existing `team` group was
+verified. The signed archive uses `com.asidefm.app`, `https://asidefm.com`, and
+`testApi: false`. See [release evidence](mobile-evidence/testflight-0.1.0-3.json)
+for the build ID, source fingerprints, validation limits, and symbol warnings.
+
+- The first-question tip explains how to ask and the actual microphone state;
+  dismissal or an accepted question hides it on later launches.
+- iOS confirms an admitted spoken question with a light native haptic. The
+  listening pill distinguishes hearing speech, receiving a question and speaking
+  an answer. Simulator checks cannot establish the physical haptic sensation.
+- Questions leave the transcript selected. A compact, height-bounded answer
+  preview offers explicit expansion into conversation and replay from the passage
+  at the interruption point. This is the question's listening context, not a claim
+  that the model cited that passage. Existing answer-source links remain available.
+  The new replay marker is scoped to the current question in the loaded session;
+  it is not added to historical server checkpoints.
+- The library shows artwork/title, elapsed/remaining time and a progress bar for
+  Continue listening, plus up to five other recently opened ready episodes. Local
+  summaries are account-scoped and cleared at sign-out. Signed-in playback still
+  uses the server checkpoint; guest progress restores from the local summary.
+- Timeline adjustments and 15-second skips preserve playing/paused intent.
+  Explicit passage replay starts playback. The speed sheet shows the selected
+  rate and saves a direct choice across launches.
+
+Validation: `npm run check` and the 141 focused runtime/recent-listening/scrubber
+tests pass. The iOS Release simulator build passes. Simulator UI inspection
+confirmed first-question guidance, paused skip/seek, direct 1.5x selection and a
+Continue listening card with 0:24 elapsed / 2:36 remaining. After checking the
+installed local API origin and the fixture's fail-closed synthetic outbound
+handler, automatic approval review allowed consent for the temporary test
+account. The typed question produced both partial and completed text while the
+transcript stayed selected; the first-question tip disappeared. Physical
+microphone permission was denied. A clipped preview footer was then corrected by
+keeping its actions outside the bounded scrolling body. The corrected layout
+was visually rechecked: both actions remain visible, expansion shows the complete
+conversation, and replay returns to the question passage at 2:10. Restart also
+preserves 1.5x speed and recent progress without repeating onboarding.
+
+The user asked about Mac audio output during validation. The simulator app was
+immediately terminated. After the user authorized continuing, validation resumed
+with the simulator-specific Sound control verified at zero, microphone permission
+denied, and manual listening/resume selected. No microphone recording was
+performed. Dark mode and maximum Dynamic Type retain visible inline answer
+actions. The speed sheet now has an explicit viewport-bounded height; at maximum
+text size its list scrolls to 2x, selecting it updates the player, and Done stays
+visible. Normal text/light mode also passes. The final build and mobile typecheck
+pass, and the simulator app was terminated after validation.
+Physical haptic feel and a separate small-screen device check remain
+open; these local synthetic fixtures do not validate production providers.
+
+The full suite passed 481/488 tests; seven native Android/PCM cases could not run
+because this environment has no usable Java runtime. This is separate from the
+passing iOS build and the targeted feature regressions.
+
 Aside uses the existing cream and forest-green identity. The interface follows the platform's familiar navigation, typography and control hierarchy; decorative branding must not compete with the audio or transcript.
 
 ## References

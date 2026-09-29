@@ -1,5 +1,12 @@
 # Native acceptance harness
 
+The September 27 listening UI keeps new answers in a compact transcript preview.
+`composer-send.yaml` and `interaction.yaml` now assert that the transcript remains
+selected, then explicitly expand the answer. The composer closes on successful
+submission; reopen it to assert that the draft is empty. `conversation-follow.yaml`
+explicitly expands before checking history-follow behavior. A real or fixture
+account must already have authorized AI consent before these question flows run.
+
 Run from the repository root with Node 24 and FFmpeg/ffprobe on PATH. Start `node --import tsx mobile/tests/server.mjs` and, in a separate process, a Python environment containing `requirements.txt` running `rtc.py`. Both bind only localhost. The fixed email code is `12345678`; production never includes the test Worker wrapper.
 
 Build Release apps with `EXPO_PUBLIC_API_URL=http://127.0.0.1:4311` and `ASIDE_TEST_API=1`. On Android run `adb reverse tcp:4311 tcp:4311`. Use a fresh `example.com` test account for `voice.yaml`, so a restored answer cannot satisfy its assertion. Run one Maestro flow at a time per device. iOS system dialogs may expose a combined label (including the timestamp), so select the whole accessible control.
