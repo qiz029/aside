@@ -260,6 +260,25 @@ export const english: Record<string, string> = {
   "把想听的音频放在这里，听到疑问时随时聊两句。":
     "Bring your audio here. Ask whenever curiosity strikes.",
   上传音频: "Upload audio",
+  正在上传: "Uploading",
+  上传进度: "Upload progress",
+  音频已上传: "Audio uploaded",
+  开始收听: "Start listening",
+  "最长 5 小时 · 最大 1 GiB": "Up to 5 hours · Max 1 GiB",
+  请选择音频文件: "Please choose an audio file.",
+  "文件为空或不完整，请重新选择":
+    "This file is empty or incomplete. Choose another file.",
+  请一次上传一个音频文件: "Please upload one audio file at a time.",
+  "本月上传额度已用完，下个月可继续上传。":
+    "You have used this month's uploads. You can upload again next month.",
+  "存储空间已满，删除不需要的音频后可继续上传。":
+    "Your storage is full. Delete audio you no longer need to upload more.",
+  "分析完成，可以开始收听和对话了。":
+    "Your audio is ready. Start listening and asking questions.",
+  "音频已保存，正在自动分析。你可以离开，稍后回来收听。":
+    "Audio saved. Analysis is running automatically. You can leave and come back to listen.",
+  "音频已保存，暂时无法刷新分析进度。":
+    "Audio saved. Analysis progress could not be refreshed yet.",
   篇本月已用: "used this month",
   "拖入音频，或选择文件": "Drop audio here, or choose a file",
   "单个音频最长 5 小时 · 文件最大 1 GiB · 每月最多 100 篇":

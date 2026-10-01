@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { mockPlayer } from "./remote-fixture";
+import { episodes, mockPlayer } from "./remote-fixture";
 test.use({ viewport: { width: 390, height: 844 } });
 function wav() {
   const data = Buffer.alloc(4844);
@@ -24,7 +24,10 @@ async function setup(page: import("@playwright/test").Page) {
     starts = 0,
     deletes = 0,
     offline = true,
-    partFailures = Infinity;
+    partFailures = Infinity,
+    ready = false,
+    held = false;
+  let releasePart: (() => void) | undefined;
   const parts: number[] = [];
   await page.route("**/api/health", (route) =>
     route.fulfill({
@@ -50,10 +53,11 @@ async function setup(page: import("@playwright/test").Page) {
         episodes: completed
           ? [
               {
+                ...(ready ? episodes[0] : {}),
                 id: "upload-1",
                 title: "recording",
-                durationMs: 0,
-                status: "queued",
+                durationMs: ready ? 60000 : 0,
+                status: ready ? "ready" : "queued",
                 stage: "等待分析",
                 progress: 0,
               },
@@ -87,6 +91,10 @@ async function setup(page: import("@playwright/test").Page) {
     if (url.pathname.endsWith("/part")) {
       const part = Number(url.searchParams.get("number"));
       parts.push(part);
+      if (held)
+        await new Promise<void>((resolve) => {
+          releasePart = resolve;
+        });
       if (part === 2 && offline && partFailures-- > 0)
         return route.fulfill({ status: 503, json: { error: "上传连接中断" } });
       return route.fulfill({
@@ -117,7 +125,6 @@ async function setup(page: import("@playwright/test").Page) {
   const begin = async () => {
     await page.goto("/space");
     await open();
-    await page.locator(".space-upload-options > summary").click();
     await page.locator(".space-sidebar-file").setInputFiles({
       name: "recording.wav",
       mimeType: "audio/wav",
@@ -135,6 +142,16 @@ async function setup(page: import("@playwright/test").Page) {
       partFailures = 1;
     },
     counts: () => ({ starts, deletes }),
+    ready: () => {
+      ready = true;
+    },
+    hold: () => {
+      held = true;
+    },
+    release: () => {
+      held = false;
+      releasePart?.();
+    },
   };
 }
 test("reload resumes only missing parts, validates original bytes, and bypasses new-upload quota", async ({
@@ -162,9 +179,9 @@ test("reload resumes only missing parts, validates original bytes, and bypasses 
     mimeType: "audio/wav",
     buffer: different,
   });
-  await expect(page.locator(".space-sidebar-alert")).toContainText(
-    "同一个音频文件",
-  );
+  await expect(
+    page.locator(".library-drawer .space-sidebar-alert"),
+  ).toContainText("同一个音频文件");
   await page.locator(".audio-library-menu > summary").click();
   await expect(
     page.getByRole("button", { name: "继续上传", exact: true }),
@@ -219,4 +236,123 @@ test("explicit cancellation clears the saved resume after the server confirms ca
       ),
     ),
   ).toEqual([]);
+});
+
+test("empty Space uploads in one click and keeps a visible path through analysis to listening", async ({
+  page,
+}) => {
+  const f = await setup(page);
+  f.recover();
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/space");
+  const stage = page.locator(".space-stage-empty");
+  await expect(
+    stage.getByRole("button", { name: "选择音频", exact: true }),
+  ).toBeEnabled();
+  await page.screenshot({ path: "test-results/upload-after-desktop.png" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: "test-results/upload-after-mobile.png" });
+  const chooser = page.waitForEvent("filechooser");
+  await stage.getByRole("button", { name: "选择音频", exact: true }).click();
+  await (
+    await chooser
+  ).setFiles({ name: "recording.wav", mimeType: "audio/wav", buffer: wav() });
+  await expect(stage).toContainText("音频已保存，正在自动分析");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.screenshot({ path: "test-results/upload-saved-mobile.png" });
+  f.ready();
+  await page.route("**/api/episodes/upload-1", (route) =>
+    route.fulfill({
+      json: { ...episodes[0], id: "upload-1", title: "recording" },
+    }),
+  );
+  await page.route("**/api/episodes/upload-1/checkpoint", (route) =>
+    route.fulfill({ json: { positionMs: 0, history: [] } }),
+  );
+  await expect(stage.getByRole("button", { name: "开始收听" })).toBeVisible({
+    timeout: 10000,
+  });
+  await expect(page).toHaveURL(/\/space$/);
+  await expect(stage).toContainText("分析完成，可以开始收听和对话了。");
+  expect(f.counts()).toEqual({ starts: 1, deletes: 0 });
+  await stage.getByRole("button", { name: "开始收听" }).click();
+  await expect(page).toHaveURL(/episode=upload-1/);
+  await expect(page.getByRole("region", { name: "文字稿" })).toContainText(
+    "First passage",
+  );
+});
+
+test("dropping audio uploads directly and a full quota explains why selection is disabled", async ({
+  page,
+}) => {
+  const f = await setup(page);
+  f.recover();
+  await page.goto("/space");
+  await expect(page.locator(".space-dropzone .btn")).toBeEnabled();
+  const data = await page.evaluateHandle(
+    (bytes) => {
+      const transfer = new DataTransfer();
+      transfer.items.add(
+        new File([new Uint8Array(bytes)], "recording.wav", {
+          type: "audio/wav",
+        }),
+      );
+      return transfer;
+    },
+    [...wav()],
+  );
+  await page
+    .locator(".space-dropzone")
+    .dispatchEvent("drop", { dataTransfer: data });
+  await expect(page.locator(".space-stage-feedback")).toContainText(
+    "音频已保存",
+  );
+  await expect(page.locator(".space-dropzone")).toContainText(
+    "本月上传额度已用完",
+  );
+  await expect(page.locator(".space-dropzone .btn")).toBeDisabled();
+  await data.dispose();
+});
+
+test("invalid files are explained beside the picker without reserving an upload", async ({
+  page,
+}) => {
+  const f = await setup(page);
+  await page.goto("/space");
+  await expect(page.locator(".space-dropzone .btn")).toBeEnabled();
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "notes.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.alloc(100),
+  });
+  await expect(
+    page.locator(".space-stage-feedback [role=alert]"),
+  ).toContainText("请选择音频文件");
+  await expect(page.locator(".space-dropzone .btn")).toBeEnabled();
+  expect(f.counts()).toEqual({ starts: 0, deletes: 0 });
+});
+
+test("cancelling an active upload restores the picker without an error alert", async ({
+  page,
+}) => {
+  const f = await setup(page);
+  f.hold();
+  await f.begin();
+  const library = page.locator(".library-drawer");
+  await expect(library.getByRole("button", { name: "取消上传" })).toBeVisible();
+  const progress = library.getByRole("progressbar", { name: "上传进度" });
+  await expect(progress).toHaveAttribute("aria-valuenow", "0");
+  await expect(progress.locator("span")).toHaveAttribute("style", "width: 0%;");
+  await library.getByRole("button", { name: "关闭音频库" }).click();
+  await page
+    .locator(".space-stage-feedback")
+    .getByRole("button", { name: "取消上传" })
+    .click();
+  await expect(page.locator(".space-stage-feedback")).toContainText(
+    "上传已取消",
+  );
+  f.release();
+  await expect(library.getByRole("alert")).toHaveCount(0);
+  await expect(library.locator("button.space-sidebar-upload")).toBeEnabled();
+  expect(f.counts()).toEqual({ starts: 1, deletes: 1 });
 });

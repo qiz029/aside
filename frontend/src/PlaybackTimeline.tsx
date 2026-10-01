@@ -10,7 +10,7 @@ import type { PlayerController } from "./usePlayerController";
 import { t } from "./i18n";
 const formatPlayerTime = (ms: number) =>
   `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, "0")}`;
-// Decorative bars behind the seek slider; the same episode always draws the same shape.
+// The visualizer sits above the seek slider; each episode has a stable resting shape.
 const WAVE_BARS = 64;
 function waveShape(seed: string) {
   let hash = 2166136261;
@@ -75,10 +75,6 @@ export function PlaybackTimeline({
       : agentPresent && !agentJoining
         ? "idle"
         : "rest";
-  const playheadBar =
-    episode && episode.durationMs > 0
-      ? (state.positionMs / episode.durationMs) * WAVE_BARS
-      : 0;
   const readLevels = useRef(player.audioLevels);
   readLevels.current = player.audioLevels;
   const readVoiceLevels = useRef(player.voiceLevels);
@@ -111,11 +107,14 @@ export function PlaybackTimeline({
         const current = scales[i];
         scales[i] += (target - current) * (target > current ? 0.45 : 0.14);
         if (Math.abs(scales[i] - target) > 0.005) settled = false;
-        (bars[i] as HTMLElement).style.transform =
-          `scaleY(${scales[i].toFixed(3)})`;
+        (bars[i] as HTMLElement).style.setProperty(
+          "--wave-level",
+          scales[i].toFixed(3),
+        );
       }
       if (settled) {
-        for (const bar of bars) (bar as HTMLElement).style.transform = "";
+        for (const bar of bars)
+          (bar as HTMLElement).style.removeProperty("--wave-level");
         return;
       }
       frame = requestAnimationFrame(draw);
@@ -135,17 +134,9 @@ export function PlaybackTimeline({
           {waveHeights.map((height, index) => (
             <i
               key={index}
-              className={
-                episode.durationMs > 0 &&
-                (index + 0.5) / waveHeights.length <=
-                  state.positionMs / episode.durationMs
-                  ? "on"
-                  : undefined
-              }
               style={
                 {
-                  height: `${Math.round(height * 100)}%`,
-                  "--handoff-delay": `${Math.round(Math.abs(index + 0.5 - playheadBar) * 14)}ms`,
+                  "--bar-height": `${Math.round(height * 100)}%`,
                 } as CSSProperties
               }
             />
@@ -158,6 +149,11 @@ export function PlaybackTimeline({
           min={0}
           max={episode.durationMs}
           value={state.positionMs}
+          style={
+            {
+              "--seek-position": `${episode.durationMs > 0 ? Math.min(100, Math.max(0, (state.positionMs / episode.durationMs) * 100)) : 0}%`,
+            } as CSSProperties
+          }
           onChange={(e) => seek(Number(e.target.value))}
         />
         {timelineAnchors.map((a) => (

@@ -92,9 +92,9 @@ test("volume slider and mute button control the audio and survive reload", async
       page
         .locator(".timeline-wave i")
         .first()
-        .evaluate((bar) => bar.style.transform),
+        .evaluate((bar) => bar.style.getPropertyValue("--wave-level")),
     )
-    .toBe("scaleY(0.28)");
+    .toBe("0.280");
   const volume = page.getByRole("slider", { name: "Podcast volume" });
   await volume.focus();
   await page.keyboard.press("Home");
@@ -123,7 +123,7 @@ test("volume slider and mute button control the audio and survive reload", async
       page
         .locator(".timeline-wave i")
         .first()
-        .evaluate((bar) => bar.style.transform),
+        .evaluate((bar) => bar.style.getPropertyValue("--wave-level")),
     )
     .toBe("");
   await page.goto("/?episode=remote-a");

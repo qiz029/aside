@@ -1,6 +1,12 @@
 import { readUpload, forgetUpload } from "./resumable-upload";
 import { LibraryDrawer } from "./LibraryDrawer";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type DragEvent,
+  type ReactNode,
+} from "react";
 import type { Episode } from "@aside/engine/core";
 import { MAX_AUDIO_DURATION_MS, MAX_UPLOAD_BYTES } from "@aside/engine/core";
 import { episodeLibrary, type SpacePage } from "./player-api";
@@ -20,7 +26,10 @@ const formatSize = (bytes: number) =>
 const fileTitle = (name: string) =>
   (name.replace(/\.[^.]+$/, "").trim() || name).slice(0, 200);
 
-function inspectDuration(file: File): Promise<number | null> {
+function inspectDuration(
+  file: File,
+  signal: AbortSignal,
+): Promise<number | null> {
   return new Promise((resolve) => {
     const audio = document.createElement("audio");
     const url = URL.createObjectURL(file);
@@ -29,12 +38,19 @@ function inspectDuration(file: File): Promise<number | null> {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal.removeEventListener("abort", aborted);
       audio.removeAttribute("src");
       audio.load();
       URL.revokeObjectURL(url);
       resolve(value);
     };
+    const aborted = () => finish(null);
     const timer = setTimeout(() => finish(null), 8000);
+    signal.addEventListener("abort", aborted, { once: true });
+    if (signal.aborted) {
+      finish(null);
+      return;
+    }
     audio.preload = "metadata";
     audio.onloadedmetadata = () =>
       finish(
@@ -72,8 +88,12 @@ export function Space({
   const [activeUploadId, setActiveUploadId] = useState("");
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState("");
-  const [uploadEnabled, setUploadEnabled] = useState(false);
+  const [uploadEnabled, setUploadEnabled] = useState<boolean | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [uploadedId, setUploadedId] = useState("");
   const uploadEpoch = useRef(0);
   const resumeTarget = useRef<string | undefined>(undefined);
   const lastFile = useRef<{ id: string; file: File } | null>(null);
@@ -105,11 +125,13 @@ export function Space({
     void episodeLibrary
       .health()
       .then((health) => setUploadEnabled(health.uploadsEnabled === true))
-      .catch(() => {});
+      .catch(() => setUploadEnabled(false));
   }, []);
   useEffect(() => {
     let active = true;
     setUser(undefined);
+    setUploadedId("");
+    setNotice("");
     setError("");
     setProgress(null);
     setChecking(false);
@@ -141,9 +163,11 @@ export function Space({
       resumeTarget.current = undefined;
     };
   }, [accountVersion]);
-  const processing = episodes.some(
-    (item) => item.status === "queued" || item.status === "analyzing",
-  );
+  const processing =
+    episodes.some(
+      (item) => item.status === "queued" || item.status === "analyzing",
+    ) ||
+    (!!uploadedId && !episodes.some((item) => item.id === uploadedId));
   useEffect(() => {
     if (!user) return;
     let polling = false;
@@ -173,6 +197,9 @@ export function Space({
       !user ||
       !page ||
       player ||
+      uploadedId ||
+      checking ||
+      progress !== null ||
       new URLSearchParams(location.search).has("episode")
     )
       return;
@@ -180,7 +207,7 @@ export function Space({
       (item) => item.durationMs > 0 && item.status !== "blocked",
     );
     if (first) onOpen(first.id, false);
-  }, [user?.id, page, episodes, player]);
+  }, [user?.id, page, episodes, player, uploadedId, checking, progress]);
 
   async function choose(file?: File, resumeId?: string) {
     if (!file || uploadBusy.current || !user) return;
@@ -192,19 +219,29 @@ export function Space({
     cancelRequested.current = false;
     uploadBusy.current = true;
     setError("");
+    setNotice("");
+    setUploadedId("");
     setUploadName(file.name);
     setChecking(true);
     setPhase("uploading");
     let uploadId = resumeId ?? "";
     try {
-      if (file.size < 44 || file.size > MAX_UPLOAD_BYTES)
-        throw Error(t("音频文件需小于 1 GiB"));
-      const length = await inspectDuration(file);
+      if (
+        !file.type.startsWith("audio/") &&
+        !/\.(mp3|m4a|mp4|wav|flac|ogg|oga|opus|aac|aiff|aif|webm)$/i.test(
+          file.name,
+        )
+      )
+        throw Error(t("请选择音频文件"));
+      if (file.size < 44) throw Error(t("文件为空或不完整，请重新选择"));
+      if (!resumeId && uploadUnavailable) throw Error(uploadUnavailable);
+      if (file.size > MAX_UPLOAD_BYTES) throw Error(t("音频文件需小于 1 GiB"));
+      const length = await inspectDuration(file, abort.signal);
       abort.signal.throwIfAborted();
       if (length !== null && length > MAX_AUDIO_DURATION_MS)
         throw Error(t("单个音频不能超过 5 小时"));
       setPhase("uploading");
-      await episodeLibrary.upload(file, {
+      const uploaded = await episodeLibrary.upload(file, {
         owner,
         resumeId,
         title: fileTitle(file.name),
@@ -225,21 +262,30 @@ export function Space({
       });
       if (current()) {
         lastFile.current = null;
-        await refresh();
+        setUploadedId(uploaded.id);
+        await refresh().catch(() => {
+          if (current()) setNotice(t("音频已保存，暂时无法刷新分析进度。"));
+        });
       }
     } catch (cause) {
       if (!current()) return;
-      if (abort.signal.aborted && cancelRequested.current && uploadId) {
+      let cancelled = abort.signal.aborted && cancelRequested.current;
+      if (cancelled && uploadId) {
         try {
           await episodeLibrary.cancelUpload(uploadId);
           forgetUpload(owner, uploadId);
           lastFile.current = null;
         } catch (cancelError) {
           cause = cancelError;
+          cancelled = false;
         }
       }
       if (!current()) return;
-      setError(message(cause instanceof Error ? cause.message : String(cause)));
+      if (cancelled) setNotice(t("上传已取消"));
+      else
+        setError(
+          message(cause instanceof Error ? cause.message : String(cause)),
+        );
       if (uploadId) await refresh().catch(() => {});
     } finally {
       if (current()) {
@@ -259,7 +305,8 @@ export function Space({
       return;
     }
     resumeTarget.current = id;
-    setError(t("请选择上次上传的同一个音频文件"));
+    setError("");
+    setNotice(t("请选择上次上传的同一个音频文件"));
     input.current?.click();
   }
   async function act(id: string, action: "retry" | "delete" | "cancel") {
@@ -282,6 +329,8 @@ export function Space({
         location.href = "/space";
         return;
       }
+      if ((action === "delete" || action === "cancel") && uploadedId === id)
+        setUploadedId("");
       await refresh();
     } catch (cause) {
       setError(message(cause instanceof Error ? cause.message : String(cause)));
@@ -303,6 +352,181 @@ export function Space({
     }
   }
 
+  const uploadUnavailable =
+    uploadEnabled === false
+      ? t("上传暂未开放，已保存的音频仍可收听。")
+      : page && page.usedThisMonth >= page.monthlyLimit
+        ? t("本月上传额度已用完，下个月可继续上传。")
+        : page && page.usedStorage >= page.storageLimit
+          ? t("存储空间已满，删除不需要的音频后可继续上传。")
+          : "";
+  const uploadDisabled =
+    !uploadEnabled ||
+    !!uploadUnavailable ||
+    !page ||
+    checking ||
+    progress !== null;
+  const uploaded = episodes.find((item) => item.id === uploadedId);
+  function pickFile() {
+    resumeTarget.current = undefined;
+    input.current?.click();
+  }
+  const dropHandlers = {
+    onDragOver(event: DragEvent<HTMLElement>) {
+      if (!event.dataTransfer.types.includes("Files")) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = uploadDisabled ? "none" : "copy";
+      if (!uploadDisabled) setDragging(true);
+    },
+    onDragLeave(event: DragEvent<HTMLElement>) {
+      if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+        setDragging(false);
+    },
+    onDrop(event: DragEvent<HTMLElement>) {
+      event.preventDefault();
+      setDragging(false);
+      if (uploadDisabled) return;
+      if (event.dataTransfer.files.length > 1) {
+        setError(t("请一次上传一个音频文件"));
+        return;
+      }
+      void choose(event.dataTransfer.files[0]);
+    },
+  };
+  const feedback = (
+    <>
+      {(checking || progress !== null) && (
+        <div className="space-upload-activity" role="status">
+          <strong>{uploadName}</strong>
+          <small>
+            {checking
+              ? t("正在检查音频")
+              : phase === "processing"
+                ? t("上传完成，正在启动自动分析…")
+                : `${t("正在上传")} · ${progress ?? 0}%`}
+          </small>
+          {progress !== null && (
+            <div
+              className="space-progress"
+              role="progressbar"
+              aria-label={t("上传进度")}
+              aria-valuenow={progress}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            >
+              <span style={{ width: `${progress}%` }} />
+            </div>
+          )}
+          {(checking || progress !== null) && phase === "uploading" && (
+            <button
+              type="button"
+              className="btn btn-quiet btn-sm"
+              onClick={() => {
+                cancelRequested.current = true;
+                controller.current?.abort(new Error(t("上传已取消")));
+              }}
+            >
+              {t("取消上传")}
+            </button>
+          )}
+        </div>
+      )}
+      {uploadedId && (
+        <div
+          className="space-upload-activity space-upload-result"
+          role="status"
+        >
+          {player && (
+            <button
+              type="button"
+              className="space-upload-dismiss btn btn-quiet btn-icon btn-sm"
+              aria-label={t("关闭")}
+              onClick={() => setUploadedId("")}
+            >
+              ×
+            </button>
+          )}
+          <strong>{uploaded?.title || t("音频已上传")}</strong>
+          <small>
+            {uploaded?.status === "ready"
+              ? t("分析完成，可以开始收听和对话了。")
+              : uploaded?.status === "failed" || uploaded?.status === "blocked"
+                ? message(uploaded.error || uploaded.stage)
+                : t("音频已保存，正在自动分析。你可以离开，稍后回来收听。")}
+          </small>
+          {uploaded?.status === "analyzing" && (
+            <progress
+              max={100}
+              value={Math.round(uploaded.progress * 100)}
+              aria-label={t("分析进度")}
+            />
+          )}
+          {uploaded && audioCard(uploaded).canOpen && (
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={(event) => {
+                event.currentTarget
+                  .closest<HTMLDialogElement>("dialog")
+                  ?.close();
+                setUploadedId("");
+                onOpen(uploaded.id);
+              }}
+            >
+              {t("开始收听")}
+            </button>
+          )}
+          {uploaded?.status === "failed" && (
+            <button
+              className="btn btn-secondary btn-sm"
+              disabled={busyId === uploaded.id}
+              onClick={() => void act(uploaded.id, "retry")}
+            >
+              {t("重试分析")}
+            </button>
+          )}
+        </div>
+      )}
+      {notice && (
+        <p className="space-upload-notice" role="status">
+          {notice}
+        </p>
+      )}
+      {error && (
+        <div role="alert" className="space-sidebar-alert">
+          <span>
+            {error}
+            {lastFile.current && (
+              <button
+                className="btn btn-secondary btn-sm"
+                disabled={checking || progress !== null}
+                onClick={() => resume(lastFile.current!.id)}
+              >
+                {t("继续上传")}
+              </button>
+            )}
+          </span>
+          <button
+            type="button"
+            className="btn btn-quiet btn-icon btn-sm"
+            onClick={() => setError("")}
+            aria-label={t("关闭")}
+          >
+            <svg
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              aria-hidden="true"
+            >
+              <path d="m4 4 8 8M12 4l-8 8" />
+            </svg>
+          </button>
+        </div>
+      )}
+    </>
+  );
+
   const navigation = (
     <>
       <a className="brand" href={homeHref()} aria-label="Aside">
@@ -317,6 +541,7 @@ export function Space({
       {user && (
         <LibraryDrawer
           collection="personal"
+          onOpenChange={setLibraryOpen}
           publicHref={publicHref}
           label={t("我的音频")}
           onOpen={onOpen}
@@ -399,41 +624,16 @@ export function Space({
             </>
           }
         >
-          <details className="space-upload-options">
-            <summary>＋ {t("上传音频")}</summary>
+          <div className="space-upload-options" {...dropHandlers}>
             <button
               type="button"
               className="space-sidebar-upload btn btn-primary"
-              disabled={
-                !uploadEnabled ||
-                !page ||
-                checking ||
-                progress !== null ||
-                page.usedThisMonth >= page.monthlyLimit ||
-                page.usedStorage >= page.storageLimit
-              }
-              onClick={() => {
-                resumeTarget.current = undefined;
-                input.current?.click();
-              }}
+              disabled={uploadDisabled}
+              onClick={pickFile}
               aria-describedby="space-upload-limit"
             >
-              {t("选择音频")}
+              ＋ {t("上传音频")}
             </button>
-            <input
-              ref={input}
-              type="file"
-              accept="audio/*,.mp4"
-              aria-label={t("选择音频")}
-              className="space-sidebar-file"
-              onChange={(event) => {
-                const file = event.currentTarget.files?.[0];
-                event.currentTarget.value = "";
-                const resumeId = resumeTarget.current;
-                resumeTarget.current = undefined;
-                void choose(file, resumeId);
-              }}
-            />
             <p id="space-upload-limit" className="space-sidebar-limit">
               {page
                 ? `${page.usedThisMonth} / ${page.monthlyLimit} ${t("篇本月已用")}`
@@ -442,69 +642,11 @@ export function Space({
                 {t("单个音频最长 5 小时 · 文件最大 1 GiB · 每月最多 100 篇")}
               </span>
             </p>
-            {!uploadEnabled && (
-              <p className="space-sidebar-note">
-                {t("上传暂未开放，已保存的音频仍可收听。")}
-              </p>
+            {uploadUnavailable && (
+              <p className="space-sidebar-note">{uploadUnavailable}</p>
             )}
-          </details>
-          {(checking || progress !== null) && (
-            <div className="space-upload-activity" role="status">
-              <strong>{uploadName}</strong>
-              <small>
-                {checking
-                  ? t("正在检查音频")
-                  : phase === "processing"
-                    ? t("上传完成，正在启动自动分析…")
-                    : `${progress}%`}
-              </small>
-              {progress !== null && (
-                <div
-                  className="space-progress"
-                  role="progressbar"
-                  aria-valuenow={progress}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                >
-                  <span style={{ width: `${progress}%` }} />
-                </div>
-              )}
-              {(checking || progress !== null) && phase === "uploading" && (
-                <button
-                  type="button"
-                  className="btn btn-quiet btn-sm"
-                  onClick={() => {
-                    cancelRequested.current = true;
-                    controller.current?.abort(new Error(t("上传已取消")));
-                  }}
-                >
-                  {t("取消上传")}
-                </button>
-              )}
-            </div>
-          )}
-          {error && (
-            <div role="alert" className="space-sidebar-alert">
-              {error}
-              <button
-                type="button"
-                className="btn btn-quiet btn-icon btn-sm"
-                onClick={() => setError("")}
-                aria-label={t("关闭")}
-              >
-                <svg
-                  viewBox="0 0 16 16"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  aria-hidden="true"
-                >
-                  <path d="m4 4 8 8M12 4l-8 8" />
-                </svg>
-              </button>
-            </div>
-          )}
+          </div>
+          {(player || libraryOpen) && feedback}
         </LibraryDrawer>
       )}
     </>
@@ -513,6 +655,25 @@ export function Space({
     <div
       className={`space-page without-sidebar${player ? " shell is-playing" : ""}`}
     >
+      <input
+        ref={input}
+        hidden
+        type="file"
+        accept="audio/*,.mp4,.m4a,.flac,.opus,.aiff,.webm"
+        aria-label={t("选择音频")}
+        className="space-sidebar-file"
+        tabIndex={-1}
+        onChange={(event) => {
+          const file = event.currentTarget.files?.[0];
+          event.currentTarget.value = "";
+          const resumeId = resumeTarget.current;
+          resumeTarget.current = undefined;
+          void choose(file, resumeId);
+        }}
+      />
+      {player && !libraryOpen && (
+        <div className="space-mobile-feedback">{feedback}</div>
+      )}
       {player ? (
         player(navigation)
       ) : (
@@ -556,7 +717,38 @@ export function Space({
             <section className="space-stage-empty">
               <h1>{t("我的空间")}</h1>
               <p>{t("你的音频，你可以加入的对话。")}</p>
-              <p>{t("从音频库上传一段，或先探索公共音频。")}</p>
+              <div
+                className={`space-dropzone${dragging ? " is-dragging" : ""}`}
+                {...dropHandlers}
+              >
+                <svg
+                  viewBox="0 0 32 32"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M16 21V5m-6 6 6-6 6 6M6 21v5a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5" />
+                </svg>
+                <h2>{t("拖入音频，或选择文件")}</h2>
+                <p>{t("上传后会自动分析，无需再点开始。")}</p>
+                <button
+                  className="btn btn-primary"
+                  disabled={uploadDisabled}
+                  onClick={pickFile}
+                >
+                  {t("选择音频")}
+                </button>
+                <small>{t("最长 5 小时 · 最大 1 GiB")}</small>
+                {uploadUnavailable && (
+                  <p className="space-sidebar-note">{uploadUnavailable}</p>
+                )}
+              </div>
+              {!libraryOpen && (
+                <div className="space-stage-feedback">{feedback}</div>
+              )}
               <a className="space-explore btn btn-secondary" href={publicHref}>
                 {t("探索公共音频")}
               </a>

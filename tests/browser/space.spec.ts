@@ -114,7 +114,6 @@ test("personal Space uploads into a private list and starts analysis automatical
   await expect(page.getByText("你的音频，你可以加入的对话。")).toBeVisible();
   await expect(page.locator(".space-profile, .space-upload")).toHaveCount(0);
   await page.getByRole("button", { name: "音频库", exact: true }).click();
-  await page.locator(".space-upload-options > summary").click();
   await expect(page.locator(".space-sidebar-limit")).toContainText(
     "0 / 100 篇本月已用",
   );
@@ -375,7 +374,6 @@ test("Space keeps the private library beside its player, transcript, and convers
     ),
   ).toBe(true);
   await page.getByRole("button", { name: "音频库", exact: true }).click();
-  await sidebar.locator(".space-upload-options > summary").click();
   const fileChooser = page.waitForEvent("filechooser");
   await sidebar.locator("button.space-sidebar-upload").click();
   await (
@@ -393,6 +391,10 @@ test("Space keeps the private library beside its player, transcript, and convers
   );
   await expect(page).toHaveURL(/\/space\?episode=44444444/);
   await sidebar.getByRole("button", { name: "关闭音频库" }).click();
+  await expect(page.locator(".space-mobile-feedback")).toContainText("音频已保存");
+  await page.screenshot({ path: "test-results/upload-player-mobile.png" });
+  await page.locator(".space-mobile-feedback").getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(page.locator(".space-mobile-feedback")).not.toBeVisible();
   await expect(page.getByRole("region", { name: "文字稿" })).toContainText(
     "A different transcript line",
   );
@@ -405,8 +407,7 @@ test("Space keeps the private library beside its player, transcript, and convers
   });
   await page.getByRole("button", { name: "音频库", exact: true }).click();
   await expect(sidebar.locator('.library-collections a[aria-current="page"]')).toHaveText("我的音频");
-  await sidebar.locator(".space-upload-options > summary").click();
-  await expect(sidebar.locator(".space-sidebar-limit")).not.toBeVisible();
+  await expect(sidebar.locator(".space-sidebar-limit")).toBeVisible();
   await page.screenshot({path: "test-results/private-library-mobile.png"});
   await page.setViewportSize({ width: 1440, height: 1000 });
   const desktopLibrary = page.locator(".persistent-library");

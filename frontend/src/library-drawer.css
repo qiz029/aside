@@ -505,8 +505,7 @@
   border-radius: var(--r-full);
   font-size: 20px;
 }
-.audio-library-menu summary::-webkit-details-marker,
-.space-upload-options summary::-webkit-details-marker {
+.audio-library-menu summary::-webkit-details-marker {
   display: none;
 }
 .audio-library-menu summary:hover,
@@ -552,25 +551,6 @@ summary:focus-visible {
 .space-upload-options {
   margin: 0 0 12px;
   letter-spacing: 0;
-}
-.space-upload-options > summary {
-  list-style: none;
-  padding: 9px 12px;
-  border-radius: var(--r-full);
-  cursor: pointer;
-  color: var(--ink-2);
-  font-size: 12px;
-}
-.space-upload-options > summary:hover {
-  background: var(--fill);
-  color: var(--ink);
-}
-.space-upload-options[open] {
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--line);
-}
-.space-upload-options .space-sidebar-limit {
-  padding-inline: 10px;
 }
 .space-stage-empty p + p {
   margin-top: 12px;

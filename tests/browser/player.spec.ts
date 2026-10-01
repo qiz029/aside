@@ -647,9 +647,7 @@ for (const manual of [false]) {
             Math.max(
               ...bars.map((bar) =>
                 Number(
-                  /scaleY\(([\d.]+)\)/.exec(
-                    (bar as HTMLElement).style.transform,
-                  )?.[1] ?? 0,
+                  (bar as HTMLElement).style.getPropertyValue("--wave-level") || 0,
                 ),
               ),
             ),

@@ -1741,7 +1741,7 @@ progress {
   font-size: 13px;
   font-weight: 500;
 }
-/* Desktop: play sits beside the waveform on one line; narrow layouts regroup via grid areas. */
+/* Desktop: play sits beside the visualizer and progress track; narrow layouts regroup. */
 .dock-transport {
   grid-area: transport;
   display: flex;
@@ -1758,49 +1758,42 @@ progress {
 .dock-progress {
   display: grid;
   grid-template-columns: 48px minmax(0, 1fr) 48px;
-  align-items: center;
+  align-items: end;
   gap: 10px;
   color: var(--ink-2);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
-.dock-progress span:last-child {
+.dock-progress > span {
+  line-height: 24px;
+}
+.dock-progress > span:last-child {
   text-align: right;
 }
-/* Waveform seek bar: decorative bars, with the real range input layered on top for keyboard and AT. */
+/* The wave shares one height-based palette; only the track below it seeks. */
 .timeline-wrap {
+  --wave-height: 40px;
   position: relative;
   display: flex;
-  align-items: center;
+  flex-direction: column;
   min-width: 0;
-  height: 30px;
-  border-radius: 6px;
 }
 .timeline-wave {
-  position: absolute;
-  inset: 0;
+  position: relative;
   display: flex;
-  align-items: center;
-  gap: 2px;
+  align-items: flex-end;
+  gap: 1.5px;
+  height: var(--wave-height);
   pointer-events: none;
 }
 .timeline-wave i {
   flex: 1;
-  min-width: 1px;
-  border-radius: 2px;
-  background: var(--line-strong);
-  transition: background-color 420ms ease var(--handoff-delay, 0ms);
-  will-change: transform;
-}
-.timeline-wave i.on {
-  background: var(--olive);
-}
-/* Aside's turn: the wave takes the answer voice's colour, spreading out from the playhead. */
-.timeline-wave.is-agent i {
-  background: color-mix(in srgb, var(--wave-b) 60%, var(--line-strong));
-}
-.timeline-wave.is-agent i.on {
-  background: var(--wave-b);
+  min-width: 0;
+  height: 100%;
+  background: linear-gradient(to top, var(--olive) 0%, var(--wave-a) 32%, #c8b578 65%, var(--wave-b) 100%);
+  /* Clip a full-height gradient so a short bar only shows the low green band. */
+  clip-path: inset(calc(100% - var(--bar-height) * var(--wave-level, 1)) 0 0 round 2px 2px 0 0);
+  will-change: clip-path;
 }
 .timeline-wave.is-joining::after {
   content: "";
@@ -1829,22 +1822,56 @@ progress {
   animation: voice-halo 1.8s ease-in-out infinite;
 }
 .timeline-wrap .timeline {
-  position: absolute;
-  inset: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  display: block;
+  flex: none;
   width: 100%;
-  height: 100%;
+  height: 24px;
   margin: 0;
-  opacity: 0;
+  background: transparent;
+  border-radius: 6px;
+  touch-action: pan-y;
 }
-.timeline-wrap:has(.timeline:focus-visible) {
+.timeline::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--olive) 0 var(--seek-position), var(--line-strong) var(--seek-position) 100%);
+}
+.timeline::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--olive) 0 var(--seek-position), var(--line-strong) var(--seek-position) 100%);
+}
+.timeline::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4px;
+  border: 2px solid var(--panel);
+  border-radius: 50%;
+  background: var(--olive);
+  box-shadow: 0 0 0 1px var(--olive);
+}
+.timeline::-moz-range-thumb {
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--panel);
+  border-radius: 50%;
+  background: var(--olive);
+  box-shadow: 0 0 0 1px var(--olive);
+}
+.timeline-wrap .timeline:focus-visible {
   outline: 2px solid var(--olive);
-  outline-offset: 4px;
+  outline-offset: 2px;
 }
 .timeline-anchor {
   position: absolute;
-  top: -4px;
+  top: calc(var(--wave-height) + 10px);
   width: 2px;
-  height: 5px;
+  height: 4px;
   border-radius: 1px;
   background: var(--ring-grad);
   transform: translateX(-50%);
@@ -1852,7 +1879,7 @@ progress {
 }
 .timeline-resume {
   position: absolute;
-  top: 50%;
+  top: calc(var(--wave-height) + 12px);
   width: 9px;
   height: 9px;
   border-radius: 50%;
@@ -2081,7 +2108,7 @@ progress {
 }
 @media (max-width: 1000px) {
   .shell .player-main {
-    padding-bottom: 180px;
+    padding-bottom: 220px;
   }
   .shell .player-main .player-card,
   .shell .player-main .player-card.compact {

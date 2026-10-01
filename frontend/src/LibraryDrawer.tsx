@@ -88,6 +88,7 @@ export function LibraryDrawer({
   children,
   footer,
   collection,
+  onOpenChange,
   publicHref = homeHref(),
 }: {
   items: AudioLibraryItem[];
@@ -96,6 +97,7 @@ export function LibraryDrawer({
   children?: ReactNode;
   footer?: ReactNode;
   collection?: "public" | "personal";
+  onOpenChange?: (open: boolean) => void;
   publicHref?: string;
 }) {
   const sidebar = useRef<HTMLElement>(null);
@@ -117,6 +119,7 @@ export function LibraryDrawer({
     const update = () => {
       dialog.current?.close();
       setOpened(false);
+      onOpenChange?.(false);
       setDesktop(media.matches);
     };
     media.addEventListener("change", update);
@@ -359,6 +362,7 @@ export function LibraryDrawer({
         onClick={() => {
           dialog.current?.showModal();
           setOpened(true);
+          onOpenChange?.(true);
         }}
       >
         <svg
@@ -400,6 +404,7 @@ export function LibraryDrawer({
         }}
         onClose={() => {
           setOpened(false);
+          onOpenChange?.(false);
           trigger.current?.focus();
         }}
         onClick={(event) => {
