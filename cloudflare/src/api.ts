@@ -630,6 +630,14 @@ export default {
       if (error instanceof z.ZodError)
         return json({ error: "请求格式无效" }, 400);
       // Never expose SDK headers, keys, transcripts or internal exception messages.
+      if (/^\/api\/podcasts\/(?:search|shows\/\d+)$/.test(path)) {
+        const detail = error instanceof Error ? error.message : "";
+        console.error("Podcast catalog failure", {
+          reason: /^(?:Podcast host returned HTTP \d{3}|Cannot resolve podcast host|Podcast host is not public|Podcast resource is too large|Too many podcast redirects|Invalid podcast redirect)$/.test(detail)
+            ? detail
+            : error instanceof Error ? error.name : "unknown",
+        });
+      }
       console.error("Aside API request failed", {
         path: new URL(request.url).pathname,
       });
