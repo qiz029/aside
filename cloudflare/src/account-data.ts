@@ -98,6 +98,9 @@ export async function cleanupAccount(env: Env, id: string) {
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);
   await env.DB.batch([
+    env.DB.prepare("DELETE FROM podcast_subscriptions WHERE owner_id=?").bind(id),
+    env.DB.prepare("DELETE FROM listening_events WHERE owner_id=?").bind(id),
+    env.DB.prepare("DELETE FROM conversations WHERE owner_id=?").bind(id),
     env.DB.prepare("DELETE FROM checkpoints WHERE owner_id=?").bind(id),
     env.DB.prepare("DELETE FROM voice_usage WHERE owner_id=?").bind(id),
     env.DB.prepare(

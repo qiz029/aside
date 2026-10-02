@@ -35,17 +35,20 @@ const TRIAL_OUTPUT_TOKENS = 6000;
  * on a voice turn. `low` is the tier OpenAI recommends for latency-sensitive
  * tool use; `none` is documented as unsuited to multi-step tool calls, which
  * this loop still makes. Omitting the field would not disable reasoning: the
- * gpt-5.6 family defaults to `medium`.
+ * GPT-6 Luna defaults to `medium`.
  */
 const REASONING_EFFORT = "low" as const;
 /**
  * Fast mode. `"fast"` and `"priority"` are documented as identical, and the
  * pinned SDK's union has only the latter, so this spelling is the one that type
- * checks. No subscription: it is pay-as-you-go at a per-token premium (twice
- * the standard rate for the GPT-5.6 family), which is why a listener waiting
+ * checks, and GPT-Live delegation documents this spelling. It is pay-as-you-go
+ * at a per-token premium, which is why a listener waiting
  * mid-episode justifies it and batch analysis does not. Support is not
  * guaranteed for every model, and ramp-rate limits downgrade a request
  * silently — the response's own `service_tier` says which tier served it.
+ * GPT-6 Luna can report `fast` even when the request specifies `priority`.
+ * https://developers.openai.com/api/docs/guides/fast-mode
+ * https://developers.openai.com/api/docs/guides/live-delegation
  */
 const SERVICE_TIER = "priority" as const;
 
@@ -54,7 +57,7 @@ export class InteractiveProvider implements QuestionModel {
   readonly client: OpenAI;
   constructor(
     key: string,
-    readonly model = "gpt-5.6-luna",
+    readonly model = "gpt-6-luna",
     readonly trial = false,
     private connectResponses?: ConnectResponses,
     /** Benchmarks compare tiers; production keeps the default. */

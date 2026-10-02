@@ -79,14 +79,14 @@ function App() {
               )
             : undefined
         }
-        onOpen={(id, userInitiated = true) => {
+        onOpen={(id, userInitiated = true, positionMs) => {
           window.history.replaceState(
             null,
             "",
             debugHref(`/space?episode=${encodeURIComponent(id)}`),
           );
-          void (userInitiated ? playEpisode(id) : load(id)).catch((cause) =>
-            setError(cause.message),
+          void (userInitiated ? playEpisode(id, positionMs) : load(id)).catch(
+            (cause) => setError(cause.message),
           );
         }}
       />
@@ -130,7 +130,11 @@ function App() {
               items={libraryCards(episodes, locale)}
               label={t("公共音频库")}
               onOpen={(id) => {
-                window.history.replaceState(null, "", debugHref(episodeHref(id)));
+                window.history.replaceState(
+                  null,
+                  "",
+                  debugHref(episodeHref(id)),
+                );
                 void playEpisode(id).catch((error) => setError(error.message));
               }}
             />

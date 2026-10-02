@@ -238,7 +238,7 @@ test("explicit cancellation clears the saved resume after the server confirms ca
   ).toEqual([]);
 });
 
-test("empty Space uploads in one click and keeps a visible path through analysis to listening", async ({
+test("empty Space offers secondary file upload and keeps a visible path through analysis to listening", async ({
   page,
 }) => {
   const f = await setup(page);
@@ -246,6 +246,7 @@ test("empty Space uploads in one click and keeps a visible path through analysis
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/space");
   const stage = page.locator(".space-stage-empty");
+  await stage.locator("summary").click();
   await expect(
     stage.getByRole("button", { name: "选择音频", exact: true }),
   ).toBeEnabled();
@@ -288,6 +289,7 @@ test("dropping audio uploads directly and a full quota explains why selection is
   const f = await setup(page);
   f.recover();
   await page.goto("/space");
+  if ((await page.locator(".space-stage-empty > details").getAttribute("open")) === null) await page.locator(".space-stage-empty > details > summary").click();
   await expect(page.locator(".space-dropzone .btn")).toBeEnabled();
   const data = await page.evaluateHandle(
     (bytes) => {
@@ -319,6 +321,7 @@ test("invalid files are explained beside the picker without reserving an upload"
 }) => {
   const f = await setup(page);
   await page.goto("/space");
+  if ((await page.locator(".space-stage-empty > details").getAttribute("open")) === null) await page.locator(".space-stage-empty > details > summary").click();
   await expect(page.locator(".space-dropzone .btn")).toBeEnabled();
   await page.locator('input[type="file"]').setInputFiles({
     name: "notes.txt",
@@ -328,6 +331,7 @@ test("invalid files are explained beside the picker without reserving an upload"
   await expect(
     page.locator(".space-stage-feedback [role=alert]"),
   ).toContainText("请选择音频文件");
+  if ((await page.locator(".space-stage-empty > details").getAttribute("open")) === null) await page.locator(".space-stage-empty > details > summary").click();
   await expect(page.locator(".space-dropzone .btn")).toBeEnabled();
   expect(f.counts()).toEqual({ starts: 0, deletes: 0 });
 });

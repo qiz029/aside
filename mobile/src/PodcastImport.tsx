@@ -105,7 +105,13 @@ export function PodcastImport({
       }}
     >
       <Text style={{ color: colors.text, fontWeight: "600" }}>
-        {tr("从 Apple Podcasts 导入", "Import from Apple Podcasts")}
+        {tr("粘贴链接，直接收听", "Paste a link and listen")}
+      </Text>
+      <Text style={{ color: colors.muted }}>
+        {tr(
+          "支持 Apple Podcasts 单集链接，也可以从系统分享菜单选择 Aside。",
+          "Use an Apple Podcasts episode link, or choose Aside from the share menu.",
+        )}
       </Text>
       <TextInput
         testID="podcast-link"
@@ -134,7 +140,7 @@ export function PodcastImport({
         >
           {busy
             ? tr("正在打开播客…", "Opening podcast…")
-            : tr("导入并收听", "Import and listen")}
+            : tr("直接收听", "Listen now")}
         </Text>
       </Pressable>
       {!!error && (

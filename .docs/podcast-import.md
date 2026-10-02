@@ -23,3 +23,46 @@ RSS 文字稿没有经过原有声音/语义分析，因此采用默认声音且
 - 音频下载上限 256 MiB，时长沿用 5 小时限制。云端要求音源返回 Content-Length；不满足时仍可听，后台转写显示失败。RSS / 字幕分别限制为 8 MiB。服务器检查公开域名、DNS 地址与每一跳重定向，不向发布者发送用户凭据。
 - `tests/progressive-transcript.test.ts`、`tests/live-delegation.test.ts` 覆盖动态读取与会话取消；`tests/podcast-import.test.ts` 覆盖 RSS 匹配、字幕和资源读取；Cloudflare 集成测试覆盖实际 API、账号隔离、去重、存储和发布者文字稿复用。
 - `tests/browser/progressive.spec.ts` 覆盖未完成分析时的播放/问答，以及文字稿更新后对话保留。iOS 的原生分享入口仍需真机分享、登录/授权、前后台切换与实际音源播放验收；模拟器编译不能替代这些验收。
+
+## Discovery and subscriptions (October 2026)
+
+Web Space and the mobile Discover tab accept Apple Podcasts single-episode links.
+Both clients also search the Apple podcast directory, browse public RSS episodes,
+and subscribe using an authenticated Aside account. Uploading a local file remains
+available as a secondary action. The existing iOS share extension opens imported
+links when the user returns to Aside; this change does not auto-launch the app.
+
+API (Cloudflare):
+- `GET /api/podcasts/search?q=...&country=US`: up to 20 shows, query 2–120 chars.
+- `GET /api/podcasts/shows/:id?country=US`: up to 100 public RSS episodes.
+- `GET /api/podcasts/subscriptions`: account's shows and latest 50 episodes.
+- `PUT /api/podcasts/subscriptions/:id` with `{ "country": "US" }`: subscribe,
+  maximum 100 shows/account, idempotent.
+- `DELETE /api/podcasts/subscriptions/:id`: unsubscribe without deleting listened audio.
+- `POST /api/podcasts/import`: accepts either `{ "url": "https://podcasts.apple.com/...?..." }`
+  or `{ "showId": "123", "country": "US", "guid": "exact-rss-guid" }`.
+  Selection is resolved against the server's cached feed; clients cannot supply an audio URL.
+  Playback uses known metadata without waiting for a stale feed to refresh.
+  Existing account episodes are reused without consuming another import allowance.
+
+Apple directory/search metadata is cached for an hour; shared directory lookups
+are limited to 18 per minute. The existing five-minute cron refreshes at most ten
+subscribed feeds per run, two concurrently, when at least an hour old. More than
+ten due feeds are processed oldest-first over subsequent runs. Feed failures
+preserve the previous snapshot and clients label it as stale. Reading subscriptions
+returns cached results without waiting for remote feeds. Opening a stale show
+refreshes its feed on demand, with a one-minute retry/refresh lease.
+
+Subscriptions fetch metadata only: no audio download, transcription, or model call.
+Those start when a listener imports/plays an episode. Podcast audio remains playable
+while its transcript is prepared. Import still awaits workflow acceptance to ensure
+analysis has been durably scheduled; it does not wait for analysis completion.
+
+Apply migration `0014_podcast_subscriptions.sql` before deploying the worker; account
+deletion removes subscriptions. The local Fastify server supports search/show/import
+for development; account subscriptions use Cloudflare/D1, like personal Space.
+Feeds without a usable duration currently require an Apple single-episode share link.
+Private, paywalled, Spotify-only, and arbitrary web page links are not supported.
+
+Directory request parameters and caching follow Apple's official Search API:
+https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/iTuneSearchAPI/Searching.html

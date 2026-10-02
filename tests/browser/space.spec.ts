@@ -35,6 +35,7 @@ test("personal Space uploads into a private list and starts analysis automatical
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
+    if(path === "/api/podcasts/subscriptions") return route.fulfill({json:{subscriptions:[],episodes:[]}});
     const method = route.request().method();
     const send = (value: unknown, status = 200) =>
       route.fulfill({
@@ -165,6 +166,7 @@ test("a guest sees the sign-in gate instead of a private library", async ({
 }) => {
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if(path === "/api/podcasts/subscriptions") return route.fulfill({json:{subscriptions:[],episodes:[]}});
     const data =
       path === "/api/auth/session"
         ? { user: null, emailEnabled: true, googleEnabled: true }
@@ -242,6 +244,7 @@ test("Space keeps the private library beside its player, transcript, and convers
   let uploaded = false;
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if(path === "/api/podcasts/subscriptions") return route.fulfill({json:{subscriptions:[],episodes:[]}});
     const method = route.request().method();
     if (path === "/api/uploads" && method === "POST")
       return route.fulfill({
@@ -443,6 +446,7 @@ test("loaded library pages remain visible after the automatic refresh", async ({
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
+    if(path === "/api/podcasts/subscriptions") return route.fulfill({json:{subscriptions:[],episodes:[]}});
     const data =
       path === "/api/auth/session"
         ? {
@@ -528,6 +532,7 @@ test("library drawer retains retry, upload cancellation, and analysis progress",
   ];
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if(path === "/api/podcasts/subscriptions") return route.fulfill({json:{subscriptions:[],episodes:[]}});
     const method = route.request().method();
     if (method === "DELETE" && path.includes("pending-upload")) pending = [];
     if (method === "POST" && path.includes("failed-audio")) retried = true;

@@ -1,3 +1,5 @@
+import { PodcastDiscovery } from "./PodcastDiscovery";
+import type { PodcastSelection } from "@aside/engine/contracts";
 import { PodcastImport, usePodcastImport } from "./PodcastImport";
 import React, {
   useEffect,
@@ -138,7 +140,9 @@ function Main() {
         : "serif",
     fontWeight: "400" as const,
   };
-  const [tab, setTab] = useState<"library" | "upload" | "account">("library");
+  const [tab, setTab] = useState<"library" | "discover" | "upload" | "account">(
+    "library",
+  );
   const [pane, setPane] = useState<"transcript" | "conversation">("transcript");
   const [collection, setCollection] = useState<"public" | "private">("public");
   const [user, setUser] = useState<User | null>(null),
@@ -153,7 +157,7 @@ function Main() {
   >("checking");
   const [startupFailed, setStartupFailed] = useState(false);
   const pendingAction = useRef<{
-    kind: "upload" | "text" | "handsfree" | "manual" | "library";
+    kind: "upload" | "text" | "handsfree" | "manual" | "library" | "discover";
     episodeId?: string;
     question?: string;
   } | null>(null);
@@ -639,7 +643,7 @@ function Main() {
     scrollToCurrentPassage();
   }, [passageIndex, pane, followTranscript, showQuestionTip]);
   function needLogin(
-    kind: "upload" | "text" | "handsfree" | "manual" | "library",
+    kind: "upload" | "text" | "handsfree" | "manual" | "library" | "discover",
   ) {
     pendingAction.current = {
       kind,
@@ -755,7 +759,13 @@ function Main() {
     setAccountState("ready");
     consentApproved.current = false;
     setCollection("private");
-    setTab(intent?.kind === "upload" ? "upload" : "library");
+    setTab(
+      intent?.kind === "upload"
+        ? "upload"
+        : intent?.kind === "discover"
+          ? "discover"
+          : "library",
+    );
     try {
       await recents.restore(next.id);
       await refreshPrivate();
@@ -1148,32 +1158,56 @@ function Main() {
           const row = shelves.rows.get(item.id)!;
           return row.heading || !foldedShelves.has(row.shelf);
         });
+  async function openPodcast(selection: string | PodcastSelection) {
+    const importingToken = api.token;
+    if (!user) {
+      needLogin("library");
+      throw Error(
+        tr("请先登录，链接会保留", "Sign in first; your link is kept"),
+      );
+    }
+    if (!(await ensureConsent()))
+      throw Error(
+        tr(
+          "授权后可导入，链接已保留",
+          "Review the consent notice to import; your link is kept",
+        ),
+      );
+    if (api.token !== importingToken)
+      throw Error(
+        tr(
+          "账号已变化，链接已保留，请重新打开。",
+          "Account changed; your link is kept. Open it again.",
+        ),
+      );
+    const result = await api.importPodcast(selection);
+    if (api.token !== importingToken)
+      throw Error(
+        tr(
+          "账号已变化，链接已保留，请重新打开。",
+          "Account changed; your link is kept. Open it again.",
+        ),
+      );
+    await load(result.episode.id, true);
+    if (api.token !== importingToken)
+      throw Error(
+        tr(
+          "账号已变化，链接已保留，请重新打开。",
+          "Account changed; your link is kept. Open it again.",
+        ),
+      );
+    if (current.current?.id !== result.episode.id) return;
+    if (result.positionMs > 0)
+      session.executePlayerCommand({
+        type: "seek",
+        atMs: result.positionMs,
+        playback: "play",
+      });
+    await refreshPrivate();
+  }
   const podcastImport = usePodcastImport({
     ready: !!user && !loading,
-    importEpisode: async (url) => {
-      if (!user) {
-        needLogin("library");
-        throw Error(
-          tr("请先登录，链接会保留", "Sign in first; your link is kept"),
-        );
-      }
-      if (!(await ensureConsent()))
-        throw Error(
-          tr(
-            "授权后可导入，链接已保留",
-            "Review the consent notice to import; your link is kept",
-          ),
-        );
-      const result = await api.importPodcast(url);
-      await load(result.episode.id, true);
-      if (result.positionMs > 0)
-        session.executePlayerCommand({
-          type: "seek",
-          atMs: result.positionMs,
-          playback: "play",
-        });
-      await refreshPrivate();
-    },
+    importEpisode: openPodcast,
   });
   useEffect(() => {
     if (podcastImport.error && episode) setError(podcastImport.error);
@@ -1564,6 +1598,25 @@ function Main() {
               tr("隐私与 AI 数据处理", "Privacy and AI data processing"),
               () => setPrivacyVisible(true),
               "privacy",
+              true,
+            )}
+          </ScrollView>
+        ) : tab === "discover" ? (
+          <ScrollView keyboardShouldPersistTaps="handled">
+            <PodcastImport controller={podcastImport} tr={tr} colors={colors} />
+            <PodcastDiscovery
+              key={user?.id ?? "guest"}
+              api={api}
+              signedIn={!!user}
+              onLogin={() => needLogin("discover")}
+              onPlay={openPodcast}
+              tr={tr}
+              colors={colors}
+            />
+            {button(
+              tr("上传本地文件", "Upload a local file"),
+              () => setTab("upload"),
+              "tab-upload",
               true,
             )}
           </ScrollView>
@@ -2516,11 +2569,21 @@ function Main() {
                       collection !== "public",
                     )}
                   </View>
-                  <PodcastImport
-                    controller={podcastImport}
-                    tr={tr}
-                    colors={colors}
-                  />
+                  {button(
+                    tr(
+                      "找播客 · 粘贴链接或搜索",
+                      "Find podcasts · Paste a link or search",
+                    ),
+                    () => setTab("discover"),
+                    "find-podcasts",
+                  )}
+                  {(podcastImport.url || podcastImport.error) && (
+                    <PodcastImport
+                      controller={podcastImport}
+                      tr={tr}
+                      colors={colors}
+                    />
+                  )}
                   {recentEpisodes.length ? (
                     <View style={{ marginHorizontal: 20 }}>
                       <RecentListeningCards
@@ -2574,13 +2637,13 @@ function Main() {
                       }}
                     >
                       {tr(
-                        "上传一篇音频，让好奇的地方都有回应。",
-                        "Bring an audio file. Leave room for questions.",
+                        "搜索节目或粘贴单集链接，开始收听。",
+                        "Search for a show or paste an episode link to listen.",
                       )}
                     </Text>
                     {button(
-                      tr("添加音频", "Add audio"),
-                      () => setTab("upload"),
+                      tr("找播客", "Find podcasts"),
+                      () => setTab("discover"),
                       "empty-upload",
                     )}
                   </View>
@@ -2783,7 +2846,7 @@ function Main() {
             },
           ]}
         >
-          {(["library", "upload", "account"] as const).map((key, i) => (
+          {(["library", "discover", "account"] as const).map((key, i) => (
             <Pressable
               key={key}
               testID={`tab-${key}`}
@@ -2791,7 +2854,7 @@ function Main() {
               accessibilityLabel={
                 [
                   tr("音频库", "Library"),
-                  tr("上传", "Upload"),
+                  tr("发现", "Discover"),
                   tr("我的", "Account"),
                 ][i]
               }
@@ -2803,14 +2866,14 @@ function Main() {
                 name={
                   (
                     (tab === key
-                      ? ["library", "add-circle", "person"]
+                      ? ["library", "search", "person"]
                       : [
                           "library-outline",
-                          "add-circle-outline",
+                          "search-outline",
                           "person-outline",
                         ]) as [
                       "library" | "library-outline",
-                      "add-circle" | "add-circle-outline",
+                      "search" | "search-outline",
                       "person" | "person-outline",
                     ]
                   )[i]
@@ -2829,7 +2892,7 @@ function Main() {
                 {
                   [
                     tr("音频库", "Library"),
-                    tr("上传", "Upload"),
+                    tr("发现", "Discover"),
                     tr("我的", "Account"),
                   ][i]
                 }

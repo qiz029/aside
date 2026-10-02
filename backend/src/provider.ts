@@ -14,7 +14,7 @@ export class OpenAIProvider extends AudioProvider implements AnalysisPort {
   }
   constructor(
     key: string,
-    model = process.env.ASIDE_BACKEND_MODEL || "gpt-5.6-luna",
+    model = process.env.ASIDE_BACKEND_MODEL || "gpt-6-luna",
   ) {
     super(key, model, false, (events) => connectResponsesNode(key, events));
   }

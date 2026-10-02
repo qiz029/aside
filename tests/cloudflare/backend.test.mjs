@@ -26,6 +26,8 @@ let appleKey, appleJwk;
 const appleCodes = new Map();
 let mf, db, bucket;
 let networkCalls = [];
+let podcastFeedFails = false;
+let podcastFeedExtra = "";
 const liveCreations = [];
 let acknowledgeClose = true;
 let attachGone = false;
@@ -67,6 +69,7 @@ before(async () => {
   mf = new Miniflare(
     convertV4MiniflareOptions({
       modules: true,
+      unsafeTriggerHandlers: true,
       script: bundle.outputFiles[0].text,
       compatibilityDate: "2026-09-12",
       compatibilityFlags: ["nodejs_compat"],
@@ -124,10 +127,10 @@ before(async () => {
         networkCalls.push(new URL(request.url).pathname);
         if (new URL(request.url).hostname === "cloudflare-dns.com") return Response.json({ Answer: [{ type: 1, data: "93.184.216.34" }] });
         if (new URL(request.url).hostname === "itunes.apple.com") return Response.json({ results: [
-          { collectionId: 123, feedUrl: "https://feeds.example.com/podcast.xml" },
+          { collectionId: 123, collectionName: "Test Podcast", artistName: "Test Host", feedUrl: "https://feeds.example.com/podcast.xml" },
           { trackId: 456, episodeGuid: "rss-episode-one", trackTimeMillis: 60000 },
         ] });
-        if (request.url === "https://feeds.example.com/podcast.xml") return new Response('<rss><channel><item><guid>rss-episode-one</guid><title>RSS episode</title><enclosure url="https://media.example.com/podcast.mp3" type="audio/mpeg"/></item></channel></rss>');
+        if (request.url === "https://feeds.example.com/podcast.xml") return podcastFeedFails ? new Response("unavailable", {status:503}) : new Response('<rss xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel>' + podcastFeedExtra + '<item><itunes:duration>60</itunes:duration><pubDate>2026-09-01</pubDate><guid>rss-episode-one</guid><title>RSS episode</title><enclosure url="https://media.example.com/podcast.mp3" type="audio/mpeg"/></item></channel></rss>');
         if (request.url === "https://media.example.com/podcast.mp3") {
           assert.equal(request.headers.get("authorization"), null);
           return new Response("audio", { status: 206, headers: { "content-range": "bytes 0-4/100", "content-type": "audio/mpeg" } });
@@ -371,6 +374,226 @@ async function seed(id, owner, shared = false, ready = true) {
     .run();
   await bucket.put(`episodes/${id}/original`, "0123456789");
 }
+
+function listeningSpan(episodeId, overrides = {}) {
+  const endedAt = Date.now() - 1000;
+  return { episodeId, sessionId: crypto.randomUUID(), startedAt: endedAt - 1000,
+    endedAt, startMs: 0, endMs: 1000, ...overrides };
+}
+const archiveEventPath = (id = crypto.randomUUID()) => `/api/space/listening/events/${id}`;
+const archiveConversationPath = (id = crypto.randomUUID()) => `/api/space/conversations/${id}`;
+function archivedTurn(sequence, overrides = {}) {
+  return { sequence, role: "user", text: "What could we build from this idea?", atMs: 1000,
+    source: "text", status: "completed", sources: [], ...overrides };
+}
+
+test("listening archive requires login and isolates both private and public episodes", async () => {
+  const guest = await visitor(false), a = await signedInAccount(), b = await signedInAccount();
+  const id = `archive-private-${crypto.randomUUID()}`;
+  await seed(id, a.id);
+  const path = archiveEventPath();
+  const span = listeningSpan(id);
+  assert.equal((await guest.request(path, "PUT", span)).status, 401);
+  assert.equal((await guest.request("/api/space/listening")).status, 401);
+  assert.equal((await guest.request("/api/space/conversations")).status, 401);
+  assert.equal((await b.request(path, "PUT", span)).status, 404);
+  assert.equal((await a.request(path, "PUT", {...span, ownerId: b.id})).status, 400);
+  assert.equal((await a.request(path, "PUT", span)).status, 201);
+  assert.equal((await b.request(`/api/space/listening/${id}/context`)).status, 404);
+  await seed(id + "-public", "curator", true);
+  assert.equal((await a.request(archiveEventPath(), "PUT", listeningSpan(id + "-public"))).status, 201);
+  assert.deepEqual((await (await b.request("/api/space/listening")).json()).episodes, []);
+  assert.deepEqual((await (await b.request(`/api/space/listening/${id}-public/context`)).json()).heardRanges, []);
+  const conv = archiveConversationPath();
+  assert.equal((await a.request(conv, "PUT", {episodeId: id + "-public", atMs: 1000})).status, 201);
+  for (const method of ["GET", "DELETE"])
+    assert.equal((await b.request(conv, method)).status, 404);
+  assert.equal((await b.request(conv + `/turns/${crypto.randomUUID()}`, "PUT", archivedTurn(0))).status, 404);
+});
+
+test("listening archive deduplicates concurrent retries and sorts by listening time rather than upload time", async () => {
+  const account = await signedInAccount(), id = `archive-retry-${crypto.randomUUID()}`;
+  await seed(id, account.id);
+  const path = archiveEventPath(), span = listeningSpan(id);
+  const responses = await Promise.all(Array.from({length: 4}, () => account.request(path, "PUT", span)));
+  assert.deepEqual(responses.map(r => r.status).sort(), [200, 200, 200, 201]);
+  assert.equal((await account.request(path, "PUT", {...span, endMs: 2000})).status, 409);
+  const older = {...span, startedAt: span.startedAt - 5000, endedAt: span.endedAt - 5000,
+    startMs: 2000, endMs: 3000};
+  assert.equal((await account.request(archiveEventPath(), "PUT", older)).status, 201);
+  const episodes = (await (await account.request("/api/space/listening")).json()).episodes;
+  assert.equal(episodes.length, 1);
+  assert.equal(episodes[0].listenedMs, 2000);
+  assert.equal(episodes[0].sessions, 1);
+  assert.equal(episodes[0].lastListenedAt, span.endedAt);
+  assert.equal(episodes[0].firstListenedAt, older.startedAt);
+  const page = await (await account.request(`/api/space/listening/${id}?limit=1`)).json();
+  assert.equal(page.events.length, 1);
+  assert.ok(page.nextBefore);
+  const next = await (await account.request(`/api/space/listening/${id}?limit=1&before=${page.nextBefore}`)).json();
+  assert.equal(next.events[0].id, path.split("/").at(-1));
+  assert.equal(next.nextBefore, null);
+});
+
+test("listening archive paginates equal-time episodes without losing or repeating entries", async () => {
+  const account = await signedInAccount();
+  const endedAt = Date.now() - 1000;
+  for (const suffix of ["a", "b", "c"]) {
+    const id = `archive-pages-${account.id}-${suffix}`;
+    await seed(id, account.id);
+    assert.equal((await account.request(archiveEventPath(), "PUT", listeningSpan(id, {startedAt: endedAt - 1000, endedAt}))).status, 201);
+  }
+  const first = await (await account.request("/api/space/listening?limit=2")).json();
+  const second = await (await account.request(`/api/space/listening?limit=2&cursor=${encodeURIComponent(first.nextCursor)}`)).json();
+  assert.equal(new Set([...first.episodes, ...second.episodes].map(e => e.episode.id)).size, 3);
+  assert.equal(second.nextCursor, null);
+  for (const query of ["limit=0", "limit=101", "cursor=invalid", "cursor=999999999999999999999%7Ca"])
+    assert.equal((await account.request(`/api/space/listening?${query}`)).status, 400);
+});
+
+test("listening archive rejects seeks, invalid spans, future times and unavailable episodes", async () => {
+  const account = await signedInAccount(), id = `archive-validation-${crypto.randomUUID()}`;
+  await seed(id, account.id);
+  const span = listeningSpan(id);
+  for (const patch of [
+    {endMs: 0}, {startMs: -1}, {endMs: 10001}, {endMs: 1.5},
+    {endedAt: span.startedAt}, {startedAt: span.endedAt - 300001},
+    {startedAt: Date.now() + 100000, endedAt: Date.now() + 101000}, {sessionId: "bad"},
+  ]) assert.equal((await account.request(archiveEventPath(), "PUT", {...span, ...patch})).status, 400);
+  assert.equal((await account.request(archiveEventPath(), "PUT", {...span, episodeId: "missing"})).status, 404);
+  await db.prepare("UPDATE episodes SET deleted_at=? WHERE id=?").bind(Date.now(), id).run();
+  assert.equal((await account.request(archiveEventPath(), "PUT", span)).status, 404);
+  assert.equal((await account.request(`/api/space/listening/${id}/context`)).status, 404);
+});
+
+test("conversation archive retains distinct conversations and immutable ordered turns across checkpoint resets", async () => {
+  const account = await signedInAccount(), id = `archive-chat-${crypto.randomUUID()}`;
+  await seed(id, account.id);
+  const path = archiveConversationPath(), data = {episodeId: id, atMs: 1000};
+  assert.equal((await account.request(path, "PUT", data)).status, 201);
+  assert.equal((await account.request(path, "PUT", data)).status, 200);
+  assert.equal((await account.request(path, "PUT", {...data, atMs: 2000})).status, 409);
+  const turnPath = path + `/turns/${crypto.randomUUID()}`;
+  for (const patch of [{text: " "}, {status: "streaming"}, {atMs: 10001}, {sequence: -1},
+    {sources: [{text: "Wrong position", startMs: 10001}]}])
+    assert.equal((await account.request(turnPath, "PUT", archivedTurn(0, patch))).status, 400);
+  const answer = archivedTurn(1, {role: "assistant", text: "Try a small prototype.", source: "voice",
+    status: "interrupted", sources: [{text: "Source", startMs: 500}]});
+  assert.equal((await account.request(turnPath, "PUT", answer)).status, 201);
+  assert.equal((await account.request(turnPath, "PUT", answer)).status, 200);
+  assert.equal((await account.request(turnPath, "PUT", {...answer, text: "Different"})).status, 409);
+  assert.equal((await account.request(path + `/turns/${crypto.randomUUID()}`, "PUT", answer)).status, 409);
+  assert.equal((await account.request(path + `/turns/${crypto.randomUUID()}`, "PUT", archivedTurn(0))).status, 201);
+  const first = await (await account.request(path + "?limit=1")).json();
+  assert.equal(first.turns[0].sequence, 0);
+  assert.equal(first.nextAfterSequence, 0);
+  const next = await (await account.request(path + "?afterSequence=0")).json();
+  assert.equal(next.turns[0].status, "interrupted");
+  assert.deepEqual(next.turns[0].sources, answer.sources);
+  const second = archiveConversationPath();
+  assert.equal((await account.request(second, "PUT", data)).status, 201);
+  assert.equal((await account.request(`/api/episodes/${id}/checkpoint`, "PUT", {positionMs: 0, history: []})).status, 200);
+  assert.equal((await (await account.request(path)).json()).turns.length, 2);
+  const conversations = await (await account.request(`/api/space/conversations?episodeId=${id}&limit=1`)).json();
+  assert.equal(conversations.conversations[0].id, second.split("/").at(-1));
+  assert.ok(conversations.nextBefore);
+  assert.equal((await (await account.request(`/api/space/conversations?episodeId=${id}&before=${conversations.nextBefore}`)).json()).conversations.length, 1);
+  assert.equal((await account.request(path, "DELETE")).status, 200);
+  assert.equal((await account.request(path)).status, 404);
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM conversation_turns WHERE owner_id=?").bind(account.id).first()).n, 0);
+  assert.equal((await account.request(second)).status, 200);
+});
+
+test("idea context unions heard ranges, excludes unheard passages and labels partial sentences", async () => {
+  const account = await signedInAccount(), id = `archive-context-${crypto.randomUUID()}`;
+  await seed(id, account.id);
+  await new CloudStore(db, bucket).records.put(`episodes/${id}/analysis.json`, {...analysis, passages: [
+    {id: "heard", startMs: 0, endMs: 2000, text: "A useful idea", speaker: "host"},
+    {id: "skipped", startMs: 2000, endMs: 4000, text: "Unheard content", speaker: "host"},
+    {id: "partial", startMs: 4000, endMs: 6000, text: "A partially heard idea", speaker: "host"},
+  ]});
+  for (const [startMs, endMs] of [[0, 1000], [500, 2000], [4500, 5000]])
+    assert.equal((await account.request(archiveEventPath(), "PUT", listeningSpan(id, {startMs, endMs}))).status, 201);
+  const path = archiveConversationPath();
+  await account.request(path, "PUT", {episodeId: id, atMs: 1000});
+  for (const sequence of [0, 1]) await account.request(path + `/turns/${crypto.randomUUID()}`, "PUT", archivedTurn(sequence));
+  const result = await account.request(`/api/space/listening/${id}/context?limit=1`);
+  assert.equal(result.status, 200, await result.clone().text());
+  assert.equal(result.headers.get("cache-control"), "no-store");
+  const context = await result.json();
+  assert.deepEqual(context.heardRanges, [{startMs: 0, endMs: 2000}, {startMs: 4500, endMs: 5000}]);
+  assert.deepEqual(context.passages.map(p => [p.id, p.fullyHeard]), [["heard", true], ["partial", false]]);
+  assert.deepEqual(context.passages[1].heardRanges, [{startMs: 4500, endMs: 5000}]);
+  assert.ok(context.nextAfter);
+  const next = await (await account.request(`/api/space/listening/${id}/context?after=${context.nextAfter}`)).json();
+  assert.equal(next.turns.length, 1);
+  assert.notEqual(next.turns[0].id, context.turns[0].id);
+  const unheard = await (await account.request(`/api/space/listening/${id}/context?startMs=2000&endMs=4000`)).json();
+  assert.deepEqual(unheard.passages, []);
+  assert.deepEqual(unheard.turns, []);
+  await account.request(path + `/turns/${crypto.randomUUID()}`, "PUT", archivedTurn(2, {atMs: 10000}));
+  const ending = await (await account.request(`/api/space/listening/${id}/context?startMs=9000`)).json();
+  assert.equal(ending.turns[0].atMs, 10000, "a discussion at the end of the episode remains retrievable");
+  for (const query of ["startMs=1000&endMs=1000", "endMs=10001", "startMs=-1", "after=NaN"])
+    assert.equal((await account.request(`/api/space/listening/${id}/context?${query}`)).status, 400);
+  assert.equal((await account.request(`/api/space/listening/${id}`, "DELETE")).status, 200);
+  assert.deepEqual((await (await account.request("/api/space/listening")).json()).episodes, []);
+  assert.deepEqual((await (await account.request("/api/space/conversations")).json()).conversations, []);
+  assert.equal((await account.request(`/api/episodes/${id}`)).status, 200);
+});
+
+test("archive cleanup removes account data on public episodes and episode data on deletion", async () => {
+  const a = await signedInAccount(), b = await signedInAccount();
+  const shared = `archive-delete-${crypto.randomUUID()}`;
+  await seed(shared, "curator", true);
+  for (const account of [a, b]) {
+    await account.request(archiveEventPath(), "PUT", listeningSpan(shared));
+    const path = archiveConversationPath();
+    await account.request(path, "PUT", {episodeId: shared, atMs: 1000});
+    await account.request(path + `/turns/${crypto.randomUUID()}`, "PUT", archivedTurn(0));
+  }
+  assert.equal((await a.request("/api/auth/account", "DELETE", {confirmation: "DELETE"})).status, 202);
+  await eventually(async () => (await db.prepare("SELECT id FROM users WHERE id=?").bind(a.id).first()) === null);
+  for (const table of ["listening_events", "conversations", "conversation_turns"]) {
+    assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE owner_id=?`).bind(a.id).first()).n, 0);
+    assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE owner_id=?`).bind(b.id).first()).n, 1);
+  }
+  const own = crypto.randomUUID();
+  await seed(own, b.id);
+  await b.request(archiveEventPath(), "PUT", listeningSpan(own));
+  const path = archiveConversationPath();
+  await b.request(path, "PUT", {episodeId: own, atMs: 1000});
+  await b.request(path + `/turns/${crypto.randomUUID()}`, "PUT", archivedTurn(0));
+  assert.equal((await b.request(`/api/space/episodes/${own}`, "DELETE")).status, 200);
+  assert.equal((await b.request(path)).status, 404);
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM listening_events WHERE episode_id=?").bind(own).first()).n, 0);
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM conversation_turns WHERE owner_id=?").bind(b.id).first()).n, 1);
+});
+
+test("mobile bearer authentication can archive and read its history without invoking AI", async () => {
+  const account = await mobileAccountForTest(), id = `archive-mobile-${crypto.randomUUID()}`;
+  await seed(id, account.user.id);
+  const before = networkCalls.length;
+  assert.equal((await account.request(archiveEventPath(), "PUT", listeningSpan(id))).status, 201);
+  const path = archiveConversationPath();
+  assert.equal((await account.request(path, "PUT", {episodeId: id, atMs: 1000})).status, 201);
+  assert.equal((await account.request(path + `/turns/${crypto.randomUUID()}`, "PUT", archivedTurn(0))).status, 201);
+  assert.equal((await (await account.request("/api/space/listening")).json()).episodes.length, 1);
+  assert.equal(networkCalls.length, before);
+});
+
+test("archive context reports pending transcription without inventing source material", async () => {
+  const account = await signedInAccount(), id = `archive-pending-${crypto.randomUUID()}`;
+  await seed(id, account.id, false, false);
+  await account.request(archiveEventPath(), "PUT", listeningSpan(id));
+  const response = await account.request(`/api/space/listening/${id}/context`);
+  assert.equal(response.status, 200);
+  const context = await response.json();
+  assert.equal(context.transcriptState, "processing");
+  assert.deepEqual(context.passages, []);
+  assert.deepEqual(context.heardRanges, [{startMs: 0, endMs: 1000}]);
+});
+
 test("email login creates a stable owner, claims visitor episodes, and protects profile", async () => {
   const guest = await visitor(false);
   await seed("email-private", guest.id);
@@ -2900,7 +3123,7 @@ test(`${client ?? "Web"}: Live sideband executes tools and recovers a missing de
     assert.equal(live.control, true);
     const session = liveCreations[before].session;
     assert.equal(session.delegation.type, "responses", "server control runs Responses delegation");
-    assert.equal(session.delegation.responses.model, "gpt-5.6-luna");
+    assert.equal(session.delegation.responses.model, "gpt-6-luna");
     assert.deepEqual(session.delegation.responses.reasoning, { effort: "low" });
     assert.equal(session.delegation.responses.service_tier, "priority");
     assert.equal(session.delegation.responses.tools.some(t => t.type === "web_search"), false, "trial delegation has no web search");
@@ -3298,4 +3521,84 @@ test("publisher transcripts complete imports without downloading audio or invoki
   assert.equal(result.podcast.reservedBytes, 0);
   assert.equal(result.analysis.passages[0].text, "A publisher transcript.");
   assert.deepEqual(fetched, [episode.podcast.transcriptUrl]);
+});
+
+
+test("podcast directory caches search, scopes subscriptions, and imports exact selections only on play", async () => {
+  const guest = await visitor(false), a = await signedInAccount(), b = await signedInAccount();
+  await db.exec("DELETE FROM podcast_subscriptions; DELETE FROM podcast_catalog; DELETE FROM podcast_search_cache;");
+  let response = await guest.request("/api/podcasts/search?q=Test&country=US");
+  assert.equal(response.status,200,await response.clone().text());
+  assert.equal((await response.json()).shows[0].title,"Test Podcast");
+  const calls = networkCalls.filter(path=>path==="/search").length;
+  assert.equal((await guest.request("/api/podcasts/search?q=test&country=US")).status,200);
+  assert.equal(networkCalls.filter(path=>path==="/search").length,calls);
+  assert.equal((await guest.request("/api/podcasts/search?q=x")).status,400);
+  assert.equal((await guest.request("/api/podcasts/subscriptions")).status,401);
+  assert.equal((await guest.request("/api/podcasts/subscriptions/123","PUT",{country:"US"})).status,401);
+  const beforeJobs = await db.prepare("SELECT COUNT(*) AS n FROM test_jobs").first();
+  response=await a.request("/api/podcasts/subscriptions/123","PUT",{country:"US"});
+  assert.equal(response.status,201,await response.clone().text());
+  assert.equal((await a.request("/api/podcasts/subscriptions/123","PUT",{country:"US"})).status,200);
+  const subscriptions=await (await a.request("/api/podcasts/subscriptions")).json();
+  assert.equal(subscriptions.subscriptions.length,1);assert.equal(subscriptions.episodes[0].episode.guid,"rss-episode-one");
+  assert.equal((await (await b.request("/api/podcasts/subscriptions")).json()).subscriptions.length,0);
+  assert.deepEqual(await db.prepare("SELECT COUNT(*) AS n FROM test_jobs").first(),beforeJobs);
+  assert.equal((await a.request("/api/podcasts/import","POST",{showId:"123",country:"US",guid:"forged",audioUrl:"http://localhost/private"})).status,404);
+  response=await a.request("/api/podcasts/import","POST",{showId:"123",country:"US",guid:"rss-episode-one"});
+  assert.equal(response.status,201,await response.clone().text());
+  const imported=await response.json();assert.equal(imported.episode.durationMs,60000);
+  for(let i=0;i<6;i++) {
+    const repeat=await a.request("/api/podcasts/import","POST",{showId:"123",country:"US",guid:"rss-episode-one"});
+    assert.equal(repeat.status,200,await repeat.clone().text());assert.equal((await repeat.json()).episode.id,imported.episode.id);
+  }
+  await b.request("/api/podcasts/subscriptions/123","DELETE");
+  assert.equal((await (await a.request("/api/podcasts/subscriptions")).json()).subscriptions.length,1);
+  await a.request("/api/podcasts/subscriptions/123","DELETE");
+  assert.equal((await (await a.request("/api/podcasts/subscriptions")).json()).subscriptions.length,0);
+});
+test("podcast feed refresh preserves cached episodes during an upstream failure", async () => {
+  const a=await signedInAccount();
+  await a.request("/api/podcasts/shows/123");
+  await db.exec("UPDATE podcast_catalog SET checked_at=1,attempted_at=0 WHERE id='123'");
+  podcastFeedFails=true;
+  try {
+    const response=await a.request("/api/podcasts/shows/123");
+    assert.equal(response.status,200,await response.clone().text());
+    const cached=await response.json();assert.equal(cached.stale,true);assert.equal(cached.episodes[0].guid,"rss-episode-one");
+    await db.exec("UPDATE podcast_catalog SET attempted_at=0 WHERE id='123'");
+    const feedCalls=networkCalls.filter(path=>path==="/podcast.xml").length;
+    const playable=await a.request("/api/podcasts/import","POST",{showId:"123",country:"US",guid:"rss-episode-one"});
+    assert.equal(playable.status,201,await playable.clone().text());
+    assert.equal(networkCalls.filter(path=>path==="/podcast.xml").length,feedCalls,"playback never waits for a stale feed refresh");
+  } finally {podcastFeedFails=false;}
+  podcastFeedExtra='<item><guid>new-episode</guid><title>New episode</title><pubDate>2026-10-02</pubDate><itunes:duration>120</itunes:duration><enclosure url="https://media.example.com/new.mp3" type="audio/mpeg"/></item>';
+  try {
+    await db.exec("UPDATE podcast_catalog SET attempted_at=0 WHERE id='123'");
+    const updated=await (await a.request("/api/podcasts/shows/123")).json();
+    assert.equal(updated.stale,false);assert.equal(updated.episodes[0].guid,"new-episode");
+  } finally {podcastFeedExtra="";}
+});
+
+
+test("scheduled subscriptions discover new episodes without creating audio jobs and account deletion removes subscriptions", async () => {
+  const account=await signedInAccount();
+  assert.equal((await account.request("/api/podcasts/subscriptions/123","PUT",{country:"US"})).status,201);
+  await db.exec("UPDATE podcast_catalog SET checked_at=1,attempted_at=0 WHERE id='123'");
+  podcastFeedExtra='<item><guid>scheduled-new</guid><title>Scheduled episode</title><pubDate>2026-10-03</pubDate><itunes:duration>120</itunes:duration><enclosure url="https://media.example.com/scheduled.mp3" type="audio/mpeg"/></item>';
+  const beforeJobs=await db.prepare("SELECT COUNT(*) AS n FROM test_jobs").first();
+  try {
+    const scheduled=await mf.dispatchFetch(origin+"/cdn-cgi/local/scheduled");
+    assert.equal(scheduled.status,200,await scheduled.clone().text());
+    const result=await (await account.request("/api/podcasts/subscriptions")).json();
+    assert.equal(result.episodes[0].episode.guid,"scheduled-new");
+    assert.deepEqual(await db.prepare("SELECT COUNT(*) AS n FROM test_jobs").first(),beforeJobs);
+  } finally {podcastFeedExtra="";}
+  const deleted=await account.request("/api/auth/account","DELETE",{confirmation:"DELETE"});
+  assert.equal(deleted.status,202,await deleted.clone().text());
+  for(let i=0;i<100;i++) {
+    if (!(await db.prepare("SELECT 1 FROM users WHERE id=?").bind(account.id).first()))break;
+    await new Promise(resolve=>setTimeout(resolve,10));
+  }
+  assert.equal(await db.prepare("SELECT 1 FROM podcast_subscriptions WHERE owner_id=?").bind(account.id).first(),null);
 });

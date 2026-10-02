@@ -1,3 +1,12 @@
+import {
+  searchPodcasts,
+  lookupPodcast,
+  readPodcastFeed,
+  catalogEpisode,
+  podcastCountrySchema,
+  podcastIdSchema,
+  podcastSelectionSchema,
+} from "./podcast-catalog.js";
 import { PassThrough, Readable } from "node:stream";
 import Fastify from "fastify";
 import multipart from "@fastify/multipart";
@@ -88,11 +97,45 @@ export function createApp(store: Store, services?: BackendServices) {
       .list()
       .map(({ analysis, ...e }) => ({ ...e, voice: analysis?.voice })),
   );
+  app.get("/api/podcasts/search", async (req) => {
+    const query = z
+      .object({
+        q: z.string().trim().min(2).max(120),
+        country: podcastCountrySchema.default("US"),
+      })
+      .parse(req.query);
+    return {
+      shows: await searchPodcasts(query.q, query.country, nodePublicFetch),
+    };
+  });
+  app.get("/api/podcasts/shows/:id", async (req) => {
+    const { id } = z.object({ id: podcastIdSchema }).parse(req.params);
+    const { country } = z
+      .object({ country: podcastCountrySchema.default("US") })
+      .parse(req.query);
+    const show = await lookupPodcast(id, country, nodePublicFetch);
+    return {
+      show,
+      episodes: await readPodcastFeed(show, nodePublicFetch),
+      checkedAt: Date.now(),
+      stale: false,
+    };
+  });
   app.post("/api/podcasts/import", async (req) => {
-    const { url } = z
-      .object({ url: z.string().url().max(4096) })
-      .parse(req.body);
-    const imported = await resolveAppleEpisode(url, nodePublicFetch);
+    const selection = podcastSelectionSchema.parse(req.body);
+    const imported = await (async () => {
+      if ("url" in selection)
+        return resolveAppleEpisode(selection.url, nodePublicFetch);
+      const show = await lookupPodcast(
+        selection.showId,
+        selection.country,
+        nodePublicFetch,
+      );
+      const items = await readPodcastFeed(show, nodePublicFetch);
+      const item = items.find((item) => item.guid === selection.guid);
+      if (!item) throw new Error("Podcast episode not found");
+      return { episode: catalogEpisode(show, item), positionMs: 0 };
+    })();
     const existing = store
       .list()
       .find(

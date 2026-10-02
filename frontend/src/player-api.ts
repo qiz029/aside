@@ -1,3 +1,9 @@
+import type {
+  PodcastShow,
+  PodcastShowPage,
+  PodcastSubscriptions,
+  PodcastSelection,
+} from "@aside/engine/contracts";
 import { resumableUpload } from "./resumable-upload";
 import { CheckpointConflict } from "@aside/player-runtime/checkpoint-sync";
 import { configureTrial, trialFetch } from "./trial-access";
@@ -88,6 +94,7 @@ const json = (body: unknown, method = "POST"): RequestInit => ({
 });
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const paid =
+    path === "/podcasts/import" ||
     /\/(question|live|transcribe-question|retry)$/.test(path) ||
     (path.startsWith("/uploads") && init?.method === "POST");
   const response = await (paid ? trialFetch : fetch)("/api" + path, init);
@@ -236,4 +243,25 @@ export const episodeLibrary = {
       signal: options?.signal,
     });
   },
+};
+
+export const podcastDirectory = {
+  searchPodcasts: (query: string, country: string) =>
+    api<{ shows: PodcastShow[] }>(
+      `/podcasts/search?q=${encodeURIComponent(query)}&country=${country}`,
+    ),
+  podcastShow: (id: string, country: string) =>
+    api<PodcastShowPage>(`/podcasts/shows/${id}?country=${country}`),
+  podcastSubscriptions: () =>
+    api<PodcastSubscriptions>("/podcasts/subscriptions"),
+  subscribePodcast: (id: string, country: string, subscribed: boolean) =>
+    api(
+      `/podcasts/subscriptions/${id}`,
+      json({ country }, subscribed ? "PUT" : "DELETE"),
+    ),
+  importPodcast: (selection: PodcastSelection) =>
+    api<{ episode: Episode; positionMs: number }>(
+      "/podcasts/import",
+      json(selection),
+    ),
 };

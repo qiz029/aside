@@ -43,7 +43,7 @@ npm run dev
 
 打开 **http://127.0.0.1:5173**，上传音频，等待分析完成，开始播放并允许麦克风访问。API 默认运行在 `127.0.0.1:4310`。
 
-当前代码使用 `whisper-1` 转录、`gpt-audio-1.5` 分析、`gpt-live-1` 语音交互，以及默认 `gpt-5.6-luna`（reasoning effort `medium`、service tier `priority`）的后端工具调用。运行需要账号具有相应接口和模型权限；模型名称来自本项目配置，不代表所有账号均可使用。
+当前代码使用 `whisper-1` 转录、`gpt-audio-1.5` 分析、`gpt-live-1` 语音交互，以及默认 `gpt-6-luna`（reasoning effort `low`、service tier `priority`，即 Fast mode）的后端工具调用。`priority` 与 `fast` 等效，保留 `priority` 以兼容 GPT-Live 委派配置；实际返回的档位可能为 `fast`。参见 [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)、[Fast mode](https://developers.openai.com/api/docs/guides/fast-mode) 和 [Live 委派](https://developers.openai.com/api/docs/guides/live-delegation)。运行需要账号具有相应接口和模型权限。
 
 **不调用模型的播放演示（macOS）：**
 
@@ -59,7 +59,7 @@ npm run demo
 
 | 配置                       | 默认值          | 用途                               |
 | -------------------------- | --------------- | ---------------------------------- |
-| `ASIDE_BACKEND_MODEL`      | `gpt-5.6-luna`  | 后端问答模型                       |
+| `ASIDE_BACKEND_MODEL`      | `gpt-6-luna`    | 后端问答模型                       |
 | `ASIDE_MIC_VAD_THRESHOLD`  | `0.8`           | 本地人声概率阈值，越高越保守       |
 | `ASIDE_MIC_VAD_MIN_RMS`    | `0.003`         | VAD 模式的静音过滤底线             |
 | `ASIDE_MIC_MIN_SPEECH_MS`  | `120`           | 连续人声达到此时长才打断           |

@@ -69,6 +69,7 @@ export const episodes: Episode[] = ["a", "b"].map((id) => ({
 export async function mockPlayer(page: Page) {
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if(path === "/api/podcasts/subscriptions") return route.fulfill({json:{subscriptions:[],episodes:[]}});
     if (path === "/api/health")
       return route.fulfill({
         json: {

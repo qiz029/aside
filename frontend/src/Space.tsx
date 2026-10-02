@@ -1,3 +1,4 @@
+import { PodcastDiscovery } from "./PodcastDiscovery";
 import { readUpload, forgetUpload } from "./resumable-upload";
 import { LibraryDrawer } from "./LibraryDrawer";
 import {
@@ -10,7 +11,7 @@ import {
 import type { Episode } from "@aside/engine/core";
 import { MAX_AUDIO_DURATION_MS, MAX_UPLOAD_BYTES } from "@aside/engine/core";
 import { episodeLibrary, type SpacePage } from "./player-api";
-import { homeHref, message, t } from "./i18n";
+import { homeHref, message, t, useLocale } from "./i18n";
 import { LanguageSelect } from "./LanguageSelect";
 import "./space.css";
 import { audioCard } from "./library-item";
@@ -73,11 +74,12 @@ export function Space({
 }: {
   accountControl: ReactNode;
   accountVersion: number;
-  onOpen: (id: string, userInitiated?: boolean) => void;
+  onOpen: (id: string, userInitiated?: boolean, positionMs?: number) => void;
   activeEpisodeId?: string;
   player?: (navigation: ReactNode) => ReactNode;
   publicHref: string;
 }) {
+  const locale = useLocale();
   const [user, setUser] = useState<SpaceUser | null>();
   const [page, setPage] = useState<SpacePage>();
   const [episodes, setEpisodes] = useState<Episode[]>([]);
@@ -90,6 +92,8 @@ export function Space({
   const [busyId, setBusyId] = useState("");
   const [uploadEnabled, setUploadEnabled] = useState<boolean | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const discoveryDialog = useRef<HTMLDialogElement>(null);
+  const [discovering, setDiscovering] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [notice, setNotice] = useState("");
@@ -627,7 +631,7 @@ export function Space({
           <div className="space-upload-options" {...dropHandlers}>
             <button
               type="button"
-              className="space-sidebar-upload btn btn-primary"
+              className="space-sidebar-upload btn btn-secondary"
               disabled={uploadDisabled}
               onClick={pickFile}
               aria-describedby="space-upload-limit"
@@ -649,12 +653,53 @@ export function Space({
           {(player || libraryOpen) && feedback}
         </LibraryDrawer>
       )}
+      {user && (
+        <button
+          className="btn btn-quiet btn-sm"
+          onClick={() => {
+            setDiscovering(true);
+            discoveryDialog.current?.showModal();
+          }}
+        >
+          {locale === "zh" ? "找播客" : "Find podcasts"}
+        </button>
+      )}
     </>
   );
   return (
     <div
       className={`space-page without-sidebar${player ? " shell is-playing" : ""}`}
     >
+      {user && (
+        <dialog
+          ref={discoveryDialog}
+          className="podcast-dialog"
+          aria-label={locale === "zh" ? "找播客" : "Find podcasts"}
+          onClose={() => setDiscovering(false)}
+        >
+          <button
+            className="btn btn-quiet podcast-dialog-close"
+            onClick={() => discoveryDialog.current?.close()}
+            aria-label={t("关闭")}
+          >
+            ×
+          </button>
+          {discovering && (
+            <PodcastDiscovery
+              key={user.id}
+              onOpen={(id, play, position) => {
+                discoveryDialog.current?.close();
+                onOpen(id, play, position);
+                void refresh().catch((cause) =>
+                  setError(
+                    cause instanceof Error ? cause.message : String(cause),
+                  ),
+                );
+              }}
+            />
+          )}
+        </dialog>
+      )}
       <input
         ref={input}
         hidden
@@ -717,35 +762,49 @@ export function Space({
             <section className="space-stage-empty">
               <h1>{t("我的空间")}</h1>
               <p>{t("你的音频，你可以加入的对话。")}</p>
-              <div
-                className={`space-dropzone${dragging ? " is-dragging" : ""}`}
-                {...dropHandlers}
-              >
-                <svg
-                  viewBox="0 0 32 32"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
+              <PodcastDiscovery
+                key={user.id}
+                onOpen={(id, play, position) => {
+                  onOpen(id, play, position);
+                  void refresh().catch((cause) =>
+                    setError(
+                      cause instanceof Error ? cause.message : String(cause),
+                    ),
+                  );
+                }}
+              />
+              <details>
+                <summary>{t("上传音频")}</summary>
+                <div
+                  className={`space-dropzone${dragging ? " is-dragging" : ""}`}
+                  {...dropHandlers}
                 >
-                  <path d="M16 21V5m-6 6 6-6 6 6M6 21v5a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5" />
-                </svg>
-                <h2>{t("拖入音频，或选择文件")}</h2>
-                <p>{t("上传后会自动分析，无需再点开始。")}</p>
-                <button
-                  className="btn btn-primary"
-                  disabled={uploadDisabled}
-                  onClick={pickFile}
-                >
-                  {t("选择音频")}
-                </button>
-                <small>{t("最长 5 小时 · 最大 1 GiB")}</small>
-                {uploadUnavailable && (
-                  <p className="space-sidebar-note">{uploadUnavailable}</p>
-                )}
-              </div>
+                  <svg
+                    viewBox="0 0 32 32"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M16 21V5m-6 6 6-6 6 6M6 21v5a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5" />
+                  </svg>
+                  <h2>{t("拖入音频，或选择文件")}</h2>
+                  <p>{t("上传后会自动分析，无需再点开始。")}</p>
+                  <button
+                    className="btn btn-primary"
+                    disabled={uploadDisabled}
+                    onClick={pickFile}
+                  >
+                    {t("选择音频")}
+                  </button>
+                  <small>{t("最长 5 小时 · 最大 1 GiB")}</small>
+                  {uploadUnavailable && (
+                    <p className="space-sidebar-note">{uploadUnavailable}</p>
+                  )}
+                </div>
+              </details>
               {!libraryOpen && (
                 <div className="space-stage-feedback">{feedback}</div>
               )}

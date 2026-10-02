@@ -52,6 +52,8 @@ export function parseFeed(xml: string) {
   return list<Record<string, any>>(channel.item).map((item) => ({
     guid: text(item.guid),
     title: text(item.title),
+    description: text(item.description || item["itunes:summary"]),
+    publishedAt: text(item.pubDate),
     url: text(item.enclosure?.["@_url"]),
     mimeType: text(item.enclosure?.["@_type"]),
     durationMs:

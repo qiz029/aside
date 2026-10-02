@@ -1,3 +1,9 @@
+import type {
+  PodcastShow,
+  PodcastShowPage,
+  PodcastSubscriptions,
+  PodcastSelection,
+} from "@aside/engine/contracts";
 import { NativeModules, Platform, PermissionsAndroid } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { type UploadJournal } from "./upload-journal";
@@ -155,10 +161,30 @@ export class MobileApi implements PlayerBackend {
       body: JSON.stringify(value),
     });
   }
-  importPodcast(url: string) {
+  importPodcast(selection: string | PodcastSelection) {
     return this.json<{ episode: Episode; positionMs: number }>(
       "/podcasts/import",
-      { url },
+      typeof selection === "string" ? { url: selection } : selection,
+    );
+  }
+  searchPodcasts(query: string, country: string) {
+    return this.request<{ shows: PodcastShow[] }>(
+      `/podcasts/search?q=${encodeURIComponent(query)}&country=${country}`,
+    );
+  }
+  podcastShow(id: string, country: string) {
+    return this.request<PodcastShowPage>(
+      `/podcasts/shows/${id}?country=${country}`,
+    );
+  }
+  podcastSubscriptions() {
+    return this.request<PodcastSubscriptions>("/podcasts/subscriptions");
+  }
+  subscribePodcast(id: string, country: string, subscribed: boolean) {
+    return this.json(
+      `/podcasts/subscriptions/${id}`,
+      { country },
+      subscribed ? "PUT" : "DELETE",
     );
   }
   startLogin(email: string) {

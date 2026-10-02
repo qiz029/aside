@@ -137,7 +137,7 @@ export function usePlayerController() {
     session.executePlayerCommand({ type: "play" });
     void listen();
   }
-  async function load(id: string, autoplay = false) {
+  async function load(id: string, autoplay = false, positionMs?: number) {
     const version = ++loadVersion.current;
     autoplayVersion.current = null;
     microphoneAsked.current = false;
@@ -151,6 +151,7 @@ export function usePlayerController() {
     if (version !== loadVersion.current) return;
     selected.current = next;
     session.load(next, checkpoint);
+    if (positionMs !== undefined) session.seek(positionMs);
     autoplayVersion.current = autoplay ? version : null;
     setEpisode(next);
   }
@@ -332,9 +333,9 @@ export function usePlayerController() {
       setEpisode(undefined);
       await refresh();
     },
-    async playEpisode(id: string) {
+    async playEpisode(id: string, positionMs?: number) {
       session.setListeningMode("off");
-      await load(id, true);
+      await load(id, true, positionMs);
     },
     async enter(id: string) {
       session.setListeningMode("off");

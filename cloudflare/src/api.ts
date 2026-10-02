@@ -48,6 +48,8 @@ import {
 import { rollupDailyStats } from "./stats.js";
 import { isShellRoute, seoRoute } from "./seo.js";
 import { PodcastImportError, resolveAppleEpisode, streamPodcastAudio } from "../../backend/src/podcast-import.js";
+import { podcastRoute, podcastSelectionSchema, selectedPodcast, refreshSubscriptions } from "./podcasts.js";
+import { listeningArchiveRoute } from "./listening-archive.js";
 
 async function audio(request: Request, env: Env, id: string, mime: string) {
   const key = `episodes/${id}/original`;
@@ -116,18 +118,21 @@ async function route(
     await requireMobileConsent(request, env, accountId);
     await authorize(request, env, owner, accountId);
     if (env.ALLOW_UPLOADS !== "true") throw new HttpError(403, "当前未开放导入");
-    const { url } = z.object({ url: z.string().url().max(4096) }).parse(await readJson(request));
+    const selection = podcastSelectionSchema.parse(await readJson(request));
     const day = new Date().toISOString().slice(0, 10);
-    await store.reserve(`podcast-import:${day}:${owner}`, 5);
-    await store.reserve(`podcast-import:${day}:global`, 200);
-    const imported = await resolveAppleEpisode(url);
+    const imported = "url" in selection ? await resolveAppleEpisode(selection.url) : await selectedPodcast(env, selection);
     const existing = await store.findPodcast(owner, imported.episode.podcast!.feedUrl, imported.episode.podcast!.guid);
+    if (!existing) {
+      await store.reserve(`podcast-import:${day}:${owner}`, 5);
+      await store.reserve(`podcast-import:${day}:global`, 200);
+    }
     const episode = existing ?? await store.createPodcast(owner, imported.episode,
       positiveLimit(env.ACCOUNT_STORAGE_LIMIT_BYTES, 20 * 1024 ** 3),
       positiveLimit(env.GLOBAL_STORAGE_LIMIT_BYTES, 100 * 1024 ** 3));
     if (episode.status === "queued") await startAnalysis(env, episode.id);
     return json({ episode: await store.episode(await store.row(episode.id, owner)), positionMs: imported.positionMs }, episode.id === imported.episode.id ? 201 : 200);
   }
+  if (path.startsWith("/api/podcasts/")) return podcastRoute(request, env, accountId);
   if (path === "/api/trial") return trialRoute(request, env, owner, accountId);
   if (path === "/api/health" && method === "GET")
     return json({
@@ -148,6 +153,8 @@ async function route(
     return json(await store.list(owner));
   if (path.startsWith("/api/space/")) {
     if (!accountId) throw new HttpError(401, "请先登录");
+    if (/^\/api\/space\/(listening|conversations)(\/|$)/.test(path))
+      return listeningArchiveRoute(request, accountId, store);
     return spaceRoute(request, env, accountId, store);
   }
   if (path === "/api/episodes" && method === "POST")
@@ -679,6 +686,7 @@ export default {
     ).all<{ id: string }>();
     for (const account of accounts.results)
       await cleanupAccount(env, account.id).catch(() => {});
+    await refreshSubscriptions(env).catch(() => console.error("Podcast subscription refresh failed"));
     await cleanupStaleUploads(env);
     const deleted = await env.DB.prepare(
       "SELECT id FROM episodes WHERE deleted_at IS NOT NULL LIMIT 10",

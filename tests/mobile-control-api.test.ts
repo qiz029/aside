@@ -5,20 +5,24 @@ import { createHash } from "node:crypto";
 import type { PlayerBackend } from "@aside/player-runtime/ports";
 type MobileApi = Required<
   Pick<PlayerBackend, "control" | "updateControl" | "live" | "usage">
-> & {
-  token: string | null;
-  accountId: string | null;
-  cancelUpload(): Promise<void>;
-  upload(
-    file: { uri: string; name: string; mimeType: string; size: number },
-    signal: AbortSignal,
-    progress: (value: number, phase: "uploading" | "processing") => void,
-  ): Promise<unknown>;
-  request<T>(path: string, init?: RequestInit): Promise<T>;
-  onExpired?: () => void;
-  restore(): Promise<void>;
-  browserSignIn(provider: "google" | "apple"): Promise<{ id: string } | null>;
-};
+> &
+  import("@aside/player-runtime/podcast-discovery").PodcastDirectory & {
+    importPodcast(
+      selection: string | import("@aside/engine/contracts").PodcastSelection,
+    ): Promise<unknown>;
+    token: string | null;
+    accountId: string | null;
+    cancelUpload(): Promise<void>;
+    upload(
+      file: { uri: string; name: string; mimeType: string; size: number },
+      signal: AbortSignal,
+      progress: (value: number, phase: "uploading" | "processing") => void,
+    ): Promise<unknown>;
+    request<T>(path: string, init?: RequestInit): Promise<T>;
+    onExpired?: () => void;
+    restore(): Promise<void>;
+    browserSignIn(provider: "google" | "apple"): Promise<{ id: string } | null>;
+  };
 import type { LiveControlUpdate } from "@aside/engine/contracts";
 import { liveSchema } from "@aside/engine/contracts";
 import { createPlayerConfig } from "@aside/engine/player";
@@ -530,7 +534,10 @@ test("browser sign-in exchanges the returned code with the verifier behind its c
     undefined,
     async (url, redirect) => {
       const start = new URL(url);
-      assert.equal(start.origin + start.pathname, "https://api.example.com/api/auth/google");
+      assert.equal(
+        start.origin + start.pathname,
+        "https://api.example.com/api/auth/google",
+      );
       assert.equal(start.searchParams.get("scheme"), "aside");
       assert.equal(redirect, "aside://auth");
       challenge = start.searchParams.get("mobile")!;
@@ -540,10 +547,19 @@ test("browser sign-in exchanges the returned code with the verifier behind its c
   api.token = null;
   const original = globalThis.fetch;
   globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
-    assert.equal(String(url), "https://api.example.com/api/auth/mobile/exchange");
+    assert.equal(
+      String(url),
+      "https://api.example.com/api/auth/mobile/exchange",
+    );
     exchanged = JSON.parse(String(init?.body));
     return Response.json({
-      user: { id: "user-1", email: "a@example.com", alias: "a", description: "", avatarUrl: null },
+      user: {
+        id: "user-1",
+        email: "a@example.com",
+        alias: "a",
+        description: "",
+        avatarUrl: null,
+      },
       token: "b".repeat(64),
     });
   }) as typeof fetch;
@@ -570,4 +586,50 @@ test("browser sign-in treats a cancelled provider page as no sign-in", async () 
   api.token = null;
   assert.equal(await api.browserSignIn("apple"), null);
   assert.equal(api.token, null);
+});
+
+test("mobile podcast discovery uses account credentials and imports only the selected episode", async (t) => {
+  const requests: { path: string; method: string; body: unknown }[] = [];
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    assert.equal(
+      new Headers(init?.headers).get("Authorization"),
+      "Bearer a-long-lived-secret",
+    );
+    requests.push({
+      path: url.pathname + url.search,
+      method: init?.method ?? "GET",
+      body: init?.body ? JSON.parse(String(init.body)) : null,
+    });
+    return Response.json({});
+  };
+  t.mock.method(globalThis, "fetch", fetcher);
+  const api = await fixture(fetcher);
+  await api.searchPodcasts("AI & art", "US");
+  await api.podcastShow("123", "US");
+  await api.podcastSubscriptions();
+  await api.subscribePodcast("123", "US", true);
+  await api.subscribePodcast("123", "US", false);
+  await api.importPodcast({ showId: "123", country: "US", guid: "exact-guid" });
+  await api.importPodcast("https://podcasts.apple.com/id123?i=456&t=12");
+  assert.equal(
+    requests[0].path,
+    "/api/podcasts/search?q=AI%20%26%20art&country=US",
+  );
+  assert.equal(requests[1].path, "/api/podcasts/shows/123?country=US");
+  assert.equal(requests[2].path, "/api/podcasts/subscriptions");
+  assert.equal(requests[3].method, "PUT");
+  assert.equal(requests[4].method, "DELETE");
+  assert.deepEqual(requests[5].body, {
+    showId: "123",
+    country: "US",
+    guid: "exact-guid",
+  });
+  assert.deepEqual(requests[6].body, {
+    url: "https://podcasts.apple.com/id123?i=456&t=12",
+  });
+  assert.equal(
+    requests.some((r) => r.path.includes("uploads")),
+    false,
+  );
 });

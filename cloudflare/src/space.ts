@@ -54,6 +54,8 @@ export async function cleanupDeletedEpisode(env: Env, id: string) {
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);
   await env.DB.batch([
+    env.DB.prepare("DELETE FROM listening_events WHERE episode_id=?").bind(id),
+    env.DB.prepare("DELETE FROM conversations WHERE episode_id=?").bind(id),
     env.DB.prepare("DELETE FROM artifacts WHERE key LIKE ?").bind(`episodes/${id}/%`),
     env.DB.prepare("DELETE FROM checkpoints WHERE episode_id=?").bind(id),
     env.DB.prepare("DELETE FROM voice_usage WHERE episode_id=?").bind(id),

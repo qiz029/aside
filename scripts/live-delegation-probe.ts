@@ -2,14 +2,14 @@
  * Opt-in real-service probe of GPT-Live Responses delegation.
  *
  * Opens one GPT-Live session over WebSocket with `delegation.type =
- * "responses"` (backend gpt-5.6-luna), streams a prerecorded utterance at
+ * "responses"` (backend gpt-6-luna), streams a prerecorded utterance at
  * microphone pace, executes the backend's function calls locally against a
  * real episode analysis, and reports when each stage happened relative to the
  * end of speech. Nothing here touches the player or the production Worker.
  *
  *   OPENAI_API_KEY=… node --import tsx scripts/live-delegation-probe.ts \
  *     --analysis complete.json --audio utterance.pcm [--position 180000]
- *     [--effort low] [--backend gpt-5.6-luna] [--dump events.ndjson]
+ *     [--effort low] [--backend gpt-6-luna] [--dump events.ndjson]
  *     [--history turns.json]
  *
  * The PCM file is 16-bit mono at 24 kHz. Spends a Live session and backend calls.
@@ -35,7 +35,7 @@ const { values } = parseArgs({
     audio: { type: "string" },
     position: { type: "string", default: "180000" },
     effort: { type: "string", default: "low" },
-    backend: { type: "string", default: "gpt-5.6-luna" },
+    backend: { type: "string", default: "gpt-6-luna" },
     dump: { type: "string" },
     /** JSON file of earlier turns ({ role, text }[]), seeded as production seeds a session from its checkpoint. */
     history: { type: "string" },
