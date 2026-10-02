@@ -127,3 +127,38 @@ test("subscription loading does not get discarded when a listener starts searchi
   assert.equal(controller.state.results.length, 1);
   assert.equal(controller.state.busy, false);
 });
+
+test("large RSS archives stop after 100 complete items without reading the tail", async () => {
+  let canceled = false;
+  const head =
+    "<rss><channel>" +
+    Array.from(
+      { length: 100 },
+      (_, i) =>
+        `<item><guid>${i}</guid><title>Episode ${i}</title><description><![CDATA[Quoted </item> marker]]></description><!-- </item> --><enclosure url="https://media.example.com/${i}.mp3"/></item>`,
+    ).join("");
+  const bytes = new TextEncoder().encode(head);
+  let offset = 0;
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (offset < bytes.length) {
+          const next = Math.min(offset + 37, bytes.length);
+          controller.enqueue(bytes.slice(offset, next));
+          offset = next;
+        } else
+          controller.enqueue(
+            new TextEncoder().encode("tail that must never be parsed"),
+          );
+      },
+      cancel() {
+        canceled = true;
+      },
+    }),
+    { headers: { "Content-Length": String(32 * 1024 * 1024) } },
+  );
+  const episodes = await readPodcastFeed(show, async () => response);
+  assert.equal(episodes.length, 100);
+  assert.equal(episodes[99].guid, "99");
+  assert.equal(canceled, true);
+});

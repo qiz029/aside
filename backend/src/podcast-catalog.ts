@@ -105,9 +105,7 @@ export async function readPodcastFeed(
   request = publicFetch,
 ): Promise<PodcastEpisode[]> {
   const response = await request(show.feedUrl);
-  const items = parseFeed(
-    new TextDecoder().decode(await boundedBody(response, 8 * 1024 * 1024)),
-  );
+  const items = parseFeed(await readFeedWindow(response));
   const episodes = items.flatMap((item) => {
     const audioUrl = optionalUrl(item.url);
     if (!audioUrl || item.guid.length > 4096) return [];
@@ -141,6 +139,70 @@ export async function readPodcastFeed(
   return [...new Map(episodes.map((item) => [item.guid, item])).values()]
     .sort((a, b) => (b.publishedAt ?? "").localeCompare(a.publishedAt ?? ""))
     .slice(0, 100);
+}
+
+/** RSS publishers put recent entries first. Stop after 100 complete items,
+ * retaining the byte bound without downloading a show's entire archive. */
+async function readFeedWindow(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) throw new PodcastImportError("Public RSS feed unavailable");
+  const decoder = new TextDecoder();
+  let xml = "",
+    cursor = 0,
+    bytes = 0,
+    items = 0;
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) return xml + decoder.decode();
+      bytes += chunk.value.byteLength;
+      if (bytes > 8 * 1024 * 1024)
+        throw new PodcastImportError(
+          "节目单集信息过大，暂无法读取 / Podcast entries exceed the feed size limit",
+        );
+      xml += decoder.decode(chunk.value, { stream: true });
+      for (;;) {
+        const start = xml.indexOf("<", cursor);
+        if (start < 0) {
+          cursor = xml.length;
+          break;
+        }
+        cursor = start;
+        // Ignore apparent item tags in publisher descriptions and comments,
+        // including when their delimiters span network chunks.
+        const terminator = xml.startsWith("<![CDATA[", start)
+          ? "]]>"
+          : xml.startsWith("<!--", start)
+            ? "-->"
+            : null;
+        if (terminator) {
+          const end = xml.indexOf(terminator, start + 4);
+          if (end < 0) break;
+          cursor = end + terminator.length;
+          continue;
+        }
+        let quote = "",
+          end = start + 1;
+        for (; end < xml.length; end++) {
+          const char = xml[end];
+          if (quote) {
+            if (char === quote) quote = "";
+          } else if (char === '"' || char === "'") quote = char;
+          else if (char === ">") break;
+        }
+        if (end === xml.length) break;
+        const tag = xml.slice(start, end + 1);
+        if (/^<!(?:DOCTYPE|ENTITY)\b/i.test(tag))
+          throw new PodcastImportError("Unsupported RSS document");
+        cursor = end + 1;
+        if (/^<\/item\s*>$/.test(tag) && ++items === 100)
+          return xml.slice(0, cursor) + "</channel></rss>";
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
 }
 
 export function catalogEpisode(

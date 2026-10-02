@@ -45,6 +45,11 @@ API (Cloudflare):
   Playback uses known metadata without waiting for a stale feed to refresh.
   Existing account episodes are reused without consuming another import allowance.
 
+Search results supply trusted show/feed metadata when opening a show, avoiding a
+redundant Apple lookup. RSS reading stops after the first 100 complete feed entries
+(publishers normally list newest first), retaining an 8 MiB bound on that window.
+CDATA, comments and quoted attributes do not count as item boundaries.
+
 Apple directory/search metadata is cached for an hour; shared directory lookups
 are limited to 18 per minute. The existing five-minute cron refreshes at most ten
 subscribed feeds per run, two concurrently, when at least an hour old. More than
