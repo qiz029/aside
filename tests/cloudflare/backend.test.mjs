@@ -3537,8 +3537,10 @@ test("podcast directory caches search, scopes subscriptions, and imports exact s
   assert.equal((await guest.request("/api/podcasts/subscriptions")).status,401);
   assert.equal((await guest.request("/api/podcasts/subscriptions/123","PUT",{country:"US"})).status,401);
   const beforeJobs = await db.prepare("SELECT COUNT(*) AS n FROM test_jobs").first();
+  const beforeLookups = networkCalls.filter(path=>path==="/lookup").length;
   response=await a.request("/api/podcasts/subscriptions/123","PUT",{country:"US"});
   assert.equal(response.status,201,await response.clone().text());
+  assert.equal(networkCalls.filter(path=>path==="/lookup").length,beforeLookups,"opening a search result reuses trusted feed metadata without another Apple lookup");
   assert.equal((await a.request("/api/podcasts/subscriptions/123","PUT",{country:"US"})).status,200);
   const subscriptions=await (await a.request("/api/podcasts/subscriptions")).json();
   assert.equal(subscriptions.subscriptions.length,1);assert.equal(subscriptions.episodes[0].episode.guid,"rss-episode-one");

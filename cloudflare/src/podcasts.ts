@@ -83,12 +83,26 @@ export async function getPodcast(
     .bind(id)
     .first<Row>();
   if (!row) {
-    await directoryBudget(env);
-    const show = await lookupPodcast(id, country);
+    // Search already returned trusted feed metadata. Avoid a second Apple
+    // request: its lookup endpoint can reject a request even when search works.
+    const searched = await env.DB.prepare(
+      `SELECT item.value AS show_json FROM podcast_search_cache cache,
+       json_each(cache.results_json) item
+       WHERE cache.country=? AND cache.checked_at>?
+       AND json_extract(item.value,'$.id')=?
+       ORDER BY cache.checked_at DESC LIMIT 1`,
+    )
+      .bind(country, Date.now() - TTL, id)
+      .first<{ show_json: string }>();
+    let showJson = searched?.show_json;
+    if (!showJson) {
+      await directoryBudget(env);
+      showJson = JSON.stringify(await lookupPodcast(id, country));
+    }
     await env.DB.prepare(
       "INSERT OR IGNORE INTO podcast_catalog(id,show_json) VALUES(?,?)",
     )
-      .bind(id, JSON.stringify(show))
+      .bind(id, showJson)
       .run();
     row = (await env.DB.prepare("SELECT * FROM podcast_catalog WHERE id=?")
       .bind(id)
