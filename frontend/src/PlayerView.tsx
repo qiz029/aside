@@ -101,6 +101,9 @@ export function PlayerView({
   const showCover = !!episode?.cover && brokenCover !== episode.id;
   const panelId = useId();
   const audioPlaying = state.mode === "playing";
+  // A spoken pause keeps the microphone session active for a later resume.
+  // The transport must still offer Play while playback is explicitly paused.
+  const canPause = listeningActive && state.mode !== "paused";
   const agentSpeaking = state.mode === "answering";
   const [mobileTab, setMobileTab] = useState<"transcript" | "chat" | null>(
     "transcript",
@@ -170,14 +173,14 @@ export function PlayerView({
       }
       event.preventDefault();
       if (event.repeat) return;
-      if (listeningActive) stopListening();
+      if (canPause) stopListening();
       else startListening();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [
     episode,
-    listeningActive,
+    canPause,
     startListening,
     stopListening,
     state.interruption,
@@ -602,7 +605,7 @@ export function PlayerView({
             {listeningMode === "manual" && (
               <button
                 className={`push-to-talk${manualHeld ? " recording" : ""}`}
-                disabled={!configured || !episode.analysis}
+                disabled={!configured}
                 aria-label={t("按住说话")}
                 aria-pressed={manualHeld}
                 onPointerDown={(e) => {
@@ -657,7 +660,7 @@ export function PlayerView({
               />
               <button
                 className="btn btn-primary btn-icon"
-                disabled={!configured || !episode.analysis || !question.trim()}
+                disabled={!configured || !question.trim()}
                 aria-label={t("发送消息")}
               >
                 <svg
@@ -715,13 +718,13 @@ export function PlayerView({
           <PlaybackTimeline player={player} episode={episode} />
           <div className="controls">
             <button
-              className={`play btn btn-primary btn-icon${listeningActive ? " playing" : ""}`}
+              className={`play btn btn-primary btn-icon${canPause ? " playing" : ""}`}
               aria-keyshortcuts="Space"
               title={t("播放 / 暂停（空格）")}
-              aria-label={listeningActive ? t("暂停") : t("播放")}
-              onClick={listeningActive ? stopListening : startListening}
+              aria-label={canPause ? t("暂停") : t("播放")}
+              onClick={canPause ? stopListening : startListening}
             >
-              {listeningActive ? (
+              {canPause ? (
                 <svg
                   viewBox="0 0 16 16"
                   width="15"

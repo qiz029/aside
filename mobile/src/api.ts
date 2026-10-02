@@ -155,6 +155,12 @@ export class MobileApi implements PlayerBackend {
       body: JSON.stringify(value),
     });
   }
+  importPodcast(url: string) {
+    return this.json<{ episode: Episode; positionMs: number }>(
+      "/podcasts/import",
+      { url },
+    );
+  }
   startLogin(email: string) {
     return this.json("/auth/mobile/email/start", { email });
   }

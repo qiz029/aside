@@ -52,6 +52,7 @@ before(async () => {
     write: false,
     format: "esm",
     platform: "neutral",
+    mainFields: ["module", "main"],
     conditions: ["workerd", "worker", "browser"],
     external: ["cloudflare:*", "node:*"],
   });

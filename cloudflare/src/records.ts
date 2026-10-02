@@ -1,6 +1,14 @@
 /** Structured artifacts live in D1; R2 is reserved for audio bytes. */
 export class Records {
   constructor(private db: D1Database) {}
+  async list<T>(prefix: string): Promise<Map<string, T>> {
+    const { results } = await this.db.prepare(
+      "SELECT key,value FROM artifacts WHERE key>=? AND key<? ORDER BY key,part",
+    ).bind(prefix, prefix + "\uffff").all<{ key: string; value: string }>();
+    const records = new Map<string, string>();
+    for (const row of results) records.set(row.key, (records.get(row.key) ?? "") + row.value);
+    return new Map([...records].map(([key, value]) => [key, JSON.parse(value) as T]));
+  }
   async has(key: string) {
     return !!(await this.db
       .prepare("SELECT key FROM artifacts WHERE key=? LIMIT 1")

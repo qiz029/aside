@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { LiveDelegation } from "../backend/src/live-delegation.js";
+import type { TranscriptReader } from "../backend/src/transcript-reader.js";
 import { createPlayerConfig } from "@aside/engine/player";
 import type { Analysis } from "@aside/engine/core";
 import type {
@@ -36,7 +37,7 @@ const state = (patch: Partial<LivePlayerState> = {}): LivePlayerState => ({
   config: createPlayerConfig(),
   ...patch,
 });
-function setup(debug = false, limit = 30, mobile = false) {
+function setup(debug = false, limit = 30, mobile = false, transcript?: TranscriptReader) {
   let now = 0;
   const timers = new Map<number, { at: number; run: () => void }>();
   let next = 0;
@@ -54,6 +55,7 @@ function setup(debug = false, limit = 30, mobile = false) {
     state(),
     analysis,
     {
+      transcript,
       emit: (event) => events.push(event),
       send: (event) => sent.push(event),
       now: () => now,
@@ -933,4 +935,31 @@ test(`${mobile ? "mobile" : "Web"}: a fast pause or resume is applied once and i
   assert.equal(r.outputs()[0].accepted, true);
   s.delegation.close();
   r.delegation.close();
+});
+
+test("a live transcript tool reads newly committed passages and cancels when the voice session closes", async () => {
+  let snapshot: Analysis = { ...analysis, passages: [], transcript: { state: "processing", durationMs: 60000, ranges: [] } };
+  let prioritize = () => { snapshot = { ...analysis, passages: [{ ...analysis.passages[1], text: "Newly committed speech" }] }; };
+  const reader: TranscriptReader = { read: async () => snapshot, prioritize: async () => prioritize() };
+  const s = setup(false, 30, false, reader);
+  s.speak("Explain that passage");
+  s.delegate();
+  s.call("get_passage", { atMs: 45000 });
+  await flush();
+  assert.equal(s.engages().length, 1);
+  await new Promise(resolve => setTimeout(resolve, 280));
+  await flush();
+  assert.match(s.sent.find(e => e.item?.call_id === "call-1")?.item.output, /Newly committed speech/);
+  s.delegation.close();
+
+  snapshot = { ...analysis, passages: [], transcript: { state: "processing", durationMs: 60000, ranges: [] } };
+  prioritize = () => {};
+  const canceled = setup(false, 30, false, reader);
+  canceled.speak("Explain that passage");
+  canceled.delegate();
+  canceled.call("get_passage", { atMs: 45000 });
+  await flush();
+  canceled.delegation.close();
+  await flush();
+  assert.equal(canceled.sent.filter(e => e.item?.call_id === "call-1").length, 0);
 });

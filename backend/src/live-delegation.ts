@@ -1,4 +1,8 @@
 import {
+  readTranscriptTool,
+  type TranscriptReader,
+} from "./transcript-reader.js";
+import {
   backendAction,
   jevActConfidence,
   jevIgnoreMaxUnits,
@@ -7,7 +11,6 @@ import {
   type ShadowHandle,
 } from "./jev-shadow.js";
 import { utteranceUnits, type Analysis } from "@aside/engine/core";
-import { getPassage, searchPodcast } from "@aside/engine/server";
 import {
   playerCommandsSchema,
   type LiveControlEvent,
@@ -24,6 +27,7 @@ import { LiveResponseTrigger } from "./live-response-trigger.js";
 import { SpokenAnswerVariants } from "./spoken-answer-variants.js";
 
 interface Ports {
+  transcript?: TranscriptReader;
   /** Push to the browser's NDJSON control stream. */
   emit(event: LiveControlEvent): void;
   /** Send a client event to GPT-Live over the sideband. */
@@ -96,6 +100,7 @@ export class LiveDelegation {
     cancel: () => void;
   };
   private closed = false;
+  private transcriptAbort = new AbortController();
   private calls = 0;
   private contextAt = -1;
   private contextSentAt = Number.NEGATIVE_INFINITY;
@@ -701,8 +706,15 @@ export class LiveDelegation {
         output: JSON.stringify(output),
       },
     });
-    if (isCurrent())
-      this.ports.send({ type: "response.create", event_id: crypto.randomUUID() });
+    if (
+      isCurrent() &&
+      (!["get_passage", "search_podcast"].includes(name) ||
+        this.delegation === delegation)
+    )
+      this.ports.send({
+        type: "response.create",
+        event_id: crypto.randomUUID(),
+      });
   }
   private async execute(
     delegation: Delegation,
@@ -716,23 +728,41 @@ export class LiveDelegation {
       const { atMs: at } = z
         .object({ atMs: z.number().finite().nonnegative() })
         .parse(parsed);
-      const passages = getPassage(this.analysis, at, atMs);
+      if (!delegation.engaged && !delegation.ignored)
+        this.engage(delegation, delegation.text);
+      const read = await readTranscriptTool(
+        this.analysis,
+        this.ports.transcript,
+        { atMs: at },
+        atMs,
+        this.transcriptAbort.signal,
+        20000,
+        () => !this.closed && this.delegation === delegation && isCurrent(),
+      );
+      const passages = read.passages;
       delegation.sources.push(
         ...passages.map((p) => ({ text: p.text, startMs: p.startMs })),
       );
-      if (!delegation.engaged && !delegation.ignored)
-        this.engage(delegation, delegation.text);
-      return passages;
+      return read.value;
     }
     if (name === "search_podcast") {
       const { query } = z.object({ query: z.string().max(2000) }).parse(parsed);
-      const passages = searchPodcast(this.analysis, query, atMs);
+      if (!delegation.engaged && !delegation.ignored)
+        this.engage(delegation, delegation.text);
+      const read = await readTranscriptTool(
+        this.analysis,
+        this.ports.transcript,
+        { query },
+        atMs,
+        this.transcriptAbort.signal,
+        20000,
+        () => !this.closed && this.delegation === delegation && isCurrent(),
+      );
+      const passages = read.passages;
       delegation.sources.push(
         ...passages.map((p) => ({ text: p.text, startMs: p.startMs })),
       );
-      if (!delegation.engaged && !delegation.ignored)
-        this.engage(delegation, delegation.text);
-      return passages;
+      return read.value;
     }
     if (name === "control_podcast") {
       const { commands, followUpQuestion } = z
@@ -969,6 +999,7 @@ export class LiveDelegation {
   }
   close() {
     this.closed = true;
+    this.transcriptAbort.abort();
     this.delegation?.shadow?.close();
     this.responseTrigger.close();
     this.waiting?.cancel();

@@ -637,7 +637,7 @@ export class ListeningSession {
     };
   }
   private engageInput() {
-    if (!this.episode?.analysis) return;
+    if (!this.episode) return;
     const atMs = this.input?.positionMs ?? this.audio.positionMs;
     const quiet = this.settle();
     // Do not begin a new Conversation turn: this is the accepted result of the
@@ -646,7 +646,10 @@ export class ListeningSession {
       this.dispatch({
         type: "interrupt",
         atMs,
-        anchor: resumePoint(this.episode.analysis, atMs),
+        anchor: resumePoint(
+          this.episode.analysis ?? { anchors: [], passages: [] },
+          atMs,
+        ),
       });
     }
     if (!this.inputSpeaking) this.dispatch({ type: "user_end" });
@@ -693,8 +696,7 @@ export class ListeningSession {
     if (play) this.start();
   }
   submitQuestion(text: string, speak = false) {
-    if (!text.trim() || !this.episode?.analysis || !this.configured)
-      return false;
+    if (!text.trim() || !this.episode || !this.configured) return false;
     this.controlVersion++;
     this.cancelManual();
     if (this.spokenResume === "verified") {
@@ -837,7 +839,7 @@ export class ListeningSession {
     return this.audio.settle(attention.settleMs);
   }
   private interrupt() {
-    if (!this.episode?.analysis) return;
+    if (!this.episode) return;
     this.resumeTimer?.();
     this.conversation.beginTurn(!this.playback.interruption);
     const atMs = this.audio.positionMs;
@@ -846,7 +848,10 @@ export class ListeningSession {
     this.dispatch({
       type: "interrupt",
       atMs,
-      anchor: resumePoint(this.episode.analysis, atMs),
+      anchor: resumePoint(
+        this.episode.analysis ?? { anchors: [], passages: [] },
+        atMs,
+      ),
     });
     this.startHeartbeat();
     this.sendContext(true);
@@ -861,9 +866,9 @@ export class ListeningSession {
     // podcast text, the voice answers from it on its own instead of
     // delegating, in the language of whatever else it was handed.
     if (this.serverVoice) return;
-    if (!this.episode?.analysis) return;
+    if (!this.episode) return;
     const state = this.playback;
-    const passages = this.episode.analysis.passages;
+    const passages = this.episode.analysis?.passages ?? [];
     const current = passages.find(
       (p) => p.startMs <= state.positionMs && p.endMs > state.positionMs,
     );
@@ -1067,7 +1072,7 @@ export class ListeningSession {
       this.manualHeld ||
       this.mode !== "manual" ||
       !this.configured ||
-      !this.episode?.analysis
+      !this.episode
     )
       return;
     this.manualHeld = true;
@@ -1499,7 +1504,7 @@ export class ListeningSession {
     if (
       this.mode === "off" ||
       !this.configured ||
-      !this.episode?.analysis ||
+      !this.episode ||
       !this.microphone ||
       !this.lifecycle
     )

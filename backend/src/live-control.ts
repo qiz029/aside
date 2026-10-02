@@ -1,3 +1,4 @@
+import type { TranscriptReader } from "./transcript-reader.js";
 import type { Analysis } from "@aside/engine/core";
 import {
   liveControlEventSchema,
@@ -26,6 +27,7 @@ export class LiveControl {
     telemetry?: (totals: QuestionTelemetry) => void,
     callLimit = 30,
     shadow?: JevShadow,
+    transcript?: TranscriptReader,
   ) {
     this.delegation = new LiveDelegation(
       control.player,
@@ -40,6 +42,7 @@ export class LiveControl {
         },
         telemetry,
         shadow,
+        transcript,
       },
       control.debug,
       callLimit,

@@ -25,6 +25,12 @@ export interface Speaker {
   confidence: number;
 }
 export interface Analysis {
+  /** Absent on legacy complete analyses. Coverage describes processed audio, including silence. */
+  transcript?: {
+    state: "processing" | "complete" | "failed";
+    durationMs: number;
+    ranges: { startMs: number; endMs: number }[];
+  };
   version: string;
   passages: Passage[];
   anchors: Anchor[];
@@ -36,6 +42,15 @@ export interface Analysis {
   source: "provider" | "demo" | "synthesis";
 }
 export interface Episode {
+  podcast?: {
+    sourceUrl: string;
+    feedUrl: string;
+    guid: string;
+    audioUrl: string;
+    transcriptUrl?: string;
+    /** Server-side storage reservation while importing RSS audio. */
+    reservedBytes?: number;
+  };
   attribution?: {
     publisher: string;
     author: string;

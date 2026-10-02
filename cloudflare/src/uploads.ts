@@ -3,6 +3,7 @@ import { MAX_UPLOAD_BYTES, type Episode } from "@aside/engine/core";
 import type { Env } from "./env.js";
 import { CloudStore, positiveLimit } from "./store.js";
 import { HttpError, json, readBody, readJson } from "./http.js";
+import { storedAudio } from "./storage.js";
 export const PART_SIZE = 8 * 1024 * 1024;
 export const MAX_UPLOAD = MAX_UPLOAD_BYTES;
 interface Upload {
@@ -90,8 +91,8 @@ export async function uploadRoute(
          WHERE EXISTS(SELECT 1 FROM users WHERE id=? AND deleted_at IS NULL)
            AND (SELECT COUNT(*) FROM uploads WHERE owner_id=? AND substr(created_at,1,7)=? AND state NOT IN ('aborted','rejected'))<?
            AND (SELECT COUNT(*) FROM uploads WHERE substr(created_at,1,10)=? AND state NOT IN ('aborted','rejected'))<?
-           AND COALESCE((SELECT SUM(size) FROM uploads WHERE owner_id=? AND state IN ('pending','complete')),0)+?<=?
-           AND COALESCE((SELECT SUM(size) FROM uploads WHERE state IN ('pending','complete')),0)+?<=?
+           AND COALESCE((SELECT SUM(size) FROM ${storedAudio} WHERE owner_id=?),0)+?<=?
+           AND COALESCE((SELECT SUM(size) FROM ${storedAudio}),0)+?<=?
          RETURNING id`,
       )
         .bind(
@@ -117,7 +118,7 @@ export async function uploadRoute(
         .first<{ id: string }>();
       if (!inserted) {
         const stored = await env.DB.prepare(
-          "SELECT COALESCE(SUM(size),0) AS bytes FROM uploads WHERE owner_id=? AND state IN ('pending','complete')",
+          `SELECT COALESCE(SUM(size),0) AS bytes FROM ${storedAudio} WHERE owner_id=?`,
         )
           .bind(owner)
           .first<{ bytes: number }>();

@@ -88,6 +88,7 @@ const config: ExpoConfig = {
       : []),
     "expo-localization",
     "./plugins/with-aside.cjs",
+    "./plugins/with-podcast-share.cjs",
     ["@config-plugins/react-native-webrtc", { cameraPermission: false }],
   ],
   extra: {

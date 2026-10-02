@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { CloudStore } from "./store.js";
 import type { Env } from "./env.js";
 import type { Analysis, Turn } from "@aside/engine/core";
 import {
@@ -162,6 +163,7 @@ export class LiveSupervisor extends DurableObject<Env> {
                 },
               )
             : undefined,
+          new CloudStore(this.env.DB, this.env.AUDIO).transcriptReader(episode, owner),
         );
       }
       await this.ctx.storage.put("state", state);

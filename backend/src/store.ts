@@ -3,6 +3,8 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import type { Episode } from "@aside/engine/core";
+import type { Passage } from "@aside/engine/core";
+import { partialAnalysis, type TranscriptReader } from "./transcript-reader.js";
 export class Store {
   readonly db: DatabaseSync;
   readonly objects: SqliteObjects;
@@ -25,7 +27,33 @@ export class Store {
   }
   get(id: string): Episode | undefined {
     const r = this.db.prepare("SELECT json FROM episodes WHERE id=?").get(id);
-    return r ? JSON.parse(String(r.json)) : undefined;
+    if (!r) return undefined;
+    const episode: Episode = JSON.parse(String(r.json));
+    if (!episode.analysis || episode.analysis.transcript) {
+      const plan =
+        this.artifact<{ offsetMs: number; durationMs: number }[]>(
+          id,
+          "transcript-plan",
+        ) ?? [];
+      episode.analysis = partialAnalysis(
+        episode,
+        plan,
+        plan.map((_, i) => this.artifact<Passage[]>(id, `transcript-v1-${i}`)),
+      );
+    }
+    return episode;
+  }
+  transcriptReader(id: string): TranscriptReader {
+    return {
+      read: async () => {
+        const episode = this.get(id);
+        if (!episode) throw Error("节目不存在");
+        return episode.analysis!;
+      },
+      prioritize: async (atMs) => {
+        this.saveArtifact(id, "transcript-priority", atMs);
+      },
+    };
   }
   put(e: Episode) {
     this.db

@@ -4,12 +4,16 @@ import type { Passage } from "@aside/engine/core";
 import { Store } from "./store.js";
 import { planChunks } from "./media.js";
 import { withMedia } from "./local-media.js";
+import { publisherTranscript } from "./podcast-import.js";
+import { publicFetch } from "./public-fetch.js";
+import { nodePublicFetch } from "./public-fetch-node.js";
 export { probe, probeAudio } from "./local-media.js";
 export class Jobs {
   private running = false;
   constructor(
     private store: Store,
     private provider?: AnalysisPort,
+    private request: typeof publicFetch = nodePublicFetch,
   ) {}
   async start() {
     for (const e of this.store.list())
@@ -25,7 +29,7 @@ export class Jobs {
     this.running = true;
     try {
       for (const e of this.store.list().filter((e) => e.status === "queued")) {
-        if (!this.provider) {
+        if (!this.provider && !e.podcast?.transcriptUrl) {
           this.store.put({
             ...e,
             status: "blocked",
@@ -43,6 +47,58 @@ export class Jobs {
           this.store.put(e);
         };
         try {
+          if (e.podcast) {
+            const transcript = await publisherTranscript(e, this.request);
+            if (transcript) {
+              e.analysis = makeAnalysis(transcript, {
+                summary: "",
+                hostStyle: "",
+                speakers: [],
+                groups: [],
+              });
+              e.status = "ready";
+              e.stage = "文字稿已就绪";
+              e.progress = 1;
+              this.store.put(e);
+              continue;
+            }
+            if (!this.provider)
+              throw Error("服务端尚未配置 OPENAI_API_KEY，无法生成文字稿。");
+            if (!this.store.objects.head(`episodes/${e.id}/original`)) {
+              update("正在准备播客文字稿，可继续收听", 0.01);
+              const response = await this.request(
+                e.podcast.audioUrl,
+                {},
+                fetch,
+                10 * 60 * 1000,
+              );
+              const limit = 256 * 1024 * 1024;
+              if (Number(response.headers.get("content-length")) > limit) {
+                await response.body?.cancel();
+                throw Error("Podcast exceeds 256 MiB");
+              }
+              const bytes = async function* () {
+                let size = 0;
+                const reader = response.body!.getReader();
+                try {
+                  for (;;) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    size += value.byteLength;
+                    if (size > limit) throw Error("Podcast exceeds 256 MiB");
+                    yield value;
+                  }
+                } finally {
+                  await reader.cancel();
+                  reader.releaseLock();
+                }
+              };
+              await this.store.objects.put(
+                `episodes/${e.id}/original`,
+                bytes(),
+              );
+            }
+          }
           await withMedia(
             this.store.objects,
             `episodes/${e.id}/original`,
@@ -58,6 +114,7 @@ export class Jobs {
                 this.store.saveArtifact(e.id, "silences-v1", pauses);
               }
               const plan = planChunks(e.durationMs, pauses);
+              this.store.saveArtifact(e.id, "transcript-plan", plan);
               const chunks = plan.length;
               const all: Passage[] = [];
               const info: Awaited<ReturnType<AnalysisPort["enrich"]>> = {
@@ -66,7 +123,21 @@ export class Jobs {
                 speakers: [],
                 groups: [],
               };
-              for (let i = 0; i < chunks; i++) {
+              const remaining = plan.map((_, i) => i);
+              while (remaining.length) {
+                const priority = this.store.artifact<number>(
+                  e.id,
+                  "transcript-priority",
+                );
+                const next =
+                  priority === undefined
+                    ? -1
+                    : remaining.findIndex(
+                        (i) =>
+                          priority >= plan[i].offsetMs &&
+                          priority <= plan[i].offsetMs + plan[i].durationMs,
+                      );
+                const i = remaining.splice(Math.max(0, next), 1)[0];
                 const offset = plan[i].offsetMs;
                 const checkpoint = `analysis-v1-${i}`;
                 let saved = this.store.artifact<{
@@ -76,7 +147,7 @@ export class Jobs {
                 if (!saved) {
                   update(
                     `转录第 ${i + 1}/${chunks} 段`,
-                    0.05 + (0.85 * i) / chunks,
+                    0.05 + (0.85 * (chunks - remaining.length - 1)) / chunks,
                   );
                   const audio = await media.chunk(offset, plan[i].durationMs);
                   let passages = this.store.artifact<Passage[]>(
@@ -93,7 +164,7 @@ export class Jobs {
                   }
                   update(
                     `分析语义与声音 ${i + 1}/${chunks}`,
-                    0.05 + (0.85 * (i + 0.5)) / chunks,
+                    0.05 + (0.85 * (chunks - remaining.length - 0.5)) / chunks,
                   );
                   saved = {
                     passages,

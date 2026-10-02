@@ -958,6 +958,38 @@ test("sideband alone pauses through pushed NDJSON without browser transcript, VA
   expect(s.errors).toEqual([]);
 });
 
+for (const resume of ["button", "keyboard", "voice"] as const) {
+  test(`spoken pause updates the transport and resumes through ${resume}`, async ({
+    page,
+  }) => {
+    const s = await setupRemote(page);
+    const transport = page.locator(".player-dock .play");
+    await s.speak(["Could you pause the podcast?"]);
+    await expect
+      .poll(() => s.audio.evaluate((a: HTMLAudioElement) => a.paused))
+      .toBe(true);
+    await expect(transport).toHaveAccessibleName("Play");
+    await expect(transport).not.toHaveClass(/playing/);
+    await expect(page.locator(".player-card .status")).toContainText("Paused");
+    await expect(
+      page.getByRole("group", { name: "Microphone activity" }),
+    ).toBeVisible();
+
+    if (resume === "button") await transport.click();
+    else if (resume === "keyboard") {
+      await page.locator(".player-header").click();
+      await page.keyboard.press("Space");
+    } else await s.speak(["Please resume the podcast"]);
+
+    await expect
+      .poll(() => s.audio.evaluate((a: HTMLAudioElement) => a.paused))
+      .toBe(false);
+    await expect(transport).toHaveAccessibleName("Pause");
+    await expect(transport).toHaveClass(/playing/);
+    expect(s.errors).toEqual([]);
+  });
+}
+
 test("one stream handles rate, bystander speech, pause and resume without frontend intent requests", async ({
   page,
 }) => {

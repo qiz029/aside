@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { buildContext, getPassage, searchPodcast } from "@aside/engine/server";
+import {
+  readTranscriptTool,
+  type TranscriptReader,
+} from "./transcript-reader.js";
+import { buildContext } from "@aside/engine/server";
 import { type Analysis } from "@aside/engine/core";
 import {
   playerCommandsSchema,
@@ -68,6 +72,7 @@ export interface QuestionAnswerer {
     telemetry?: (totals: QuestionTelemetry) => void,
     onAnswer?: (text: string) => void,
     onAccept?: () => boolean,
+    transcript?: TranscriptReader,
   ): Promise<QuestionResult>;
 }
 /** Application policy: intent, heard-only retrieval, tool budget and sources. */
@@ -114,6 +119,7 @@ export class QuestionService implements QuestionAnswerer {
     telemetry?: (totals: QuestionTelemetry) => void,
     onAnswer?: (text: string) => void,
     onAccept?: () => boolean,
+    transcript?: TranscriptReader,
   ): Promise<QuestionResult> {
     signal?.throwIfAborted();
     const resume = (): QuestionResult => ({
@@ -157,6 +163,7 @@ export class QuestionService implements QuestionAnswerer {
         progress,
         request.player?.source === "text" ? onAnswer : undefined,
         request.player?.source === "voice" ? onAccept : undefined,
+        transcript,
       );
     } finally {
       if (totals.rounds) telemetry?.(totals);
@@ -173,6 +180,7 @@ export class QuestionService implements QuestionAnswerer {
     progress?: (phase: QuestionPhase) => void,
     onAnswer?: (text: string) => void,
     onAccept?: () => boolean,
+    transcript?: TranscriptReader,
   ): Promise<QuestionResult> {
     let previousId: string | undefined;
     let toolResults: ToolResult[] = [];
@@ -318,16 +326,39 @@ export class QuestionService implements QuestionAnswerer {
             const { atMs } = z
               .object({ atMs: z.number().finite().nonnegative() })
               .parse(args);
-            result = getPassage(analysis, atMs, request.atMs);
+            const read = await readTranscriptTool(
+              analysis,
+              transcript,
+              { atMs },
+              request.atMs,
+              signal,
+            );
+            result = read.value;
+            sources.push(
+              ...read.passages.map((p) => ({
+                text: p.text,
+                startMs: p.startMs,
+              })),
+            );
           } else if (call.name === "search_podcast") {
             const { query } = z
               .object({ query: z.string().max(2000) })
               .parse(args);
-            result = searchPodcast(analysis, query, request.atMs);
+            const read = await readTranscriptTool(
+              analysis,
+              transcript,
+              { query },
+              request.atMs,
+              signal,
+            );
+            result = read.value;
+            sources.push(
+              ...read.passages.map((p) => ({
+                text: p.text,
+                startMs: p.startMs,
+              })),
+            );
           } else result = { error: "Unknown tool" };
-          if (Array.isArray(result))
-            for (const passage of result)
-              sources.push({ text: passage.text, startMs: passage.startMs });
         } catch (error) {
           if (error instanceof Error && error.name === "AbortError")
             throw error;

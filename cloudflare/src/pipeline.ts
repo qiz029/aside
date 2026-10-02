@@ -4,6 +4,9 @@ import type { Episode, Passage } from "@aside/engine/core";
 import { AudioProvider } from "../../backend/src/audio-provider.js";
 import { CloudStore, positiveLimit } from "./store.js";
 import type { Env } from "./env.js";
+import { publisherTranscript } from "../../backend/src/podcast-import.js";
+import { publicFetch } from "../../backend/src/public-fetch.js";
+import { PODCAST_DOWNLOAD_LIMIT } from "./storage.js";
 export interface Manifest {
   durationMs: number;
   mimeType: string;
@@ -59,6 +62,37 @@ export async function analyzeEpisode(
     return episode;
   }
   try {
+    const imported: Episode = JSON.parse((await store.row(id)).metadata);
+    if (imported.podcast) {
+      const key = await step.do("import-podcast", async () => {
+        const transcript = await publisherTranscript(imported);
+        if (transcript) {
+          const key = `${prefix}/complete.json`;
+          await write(key, makeAnalysis(transcript, { summary: "", hostStyle: "", speakers: [], groups: [] }));
+          await store.update({ ...imported, podcast: { ...imported.podcast!, reservedBytes: 0 }, status: "ready", stage: "文字稿已就绪", progress: 1 }, key);
+          return "ready";
+        }
+        const key = `episodes/${id}/original`;
+        if (!(await env.AUDIO.head(key))) {
+          await update("正在准备播客文字稿，可继续收听", 0.01);
+          const response = await publicFetch(imported.podcast!.audioUrl, {}, fetch, 10 * 60 * 1000);
+          const length = Number(response.headers.get("content-length"));
+          if (!Number.isSafeInteger(length) || length < 44 || length > PODCAST_DOWNLOAD_LIMIT) {
+            await response.body?.cancel();
+            throw Error("Podcast host must provide an audio file size up to 256 MiB");
+          }
+          await store.row(id);
+          await env.AUDIO.put(key, response.body!, { httpMetadata: { contentType: imported.mimeType ?? "audio/mpeg" } });
+        }
+        const object = await env.AUDIO.head(key);
+        if (object) {
+          const current: Episode = JSON.parse((await store.row(id)).metadata);
+          await store.update({ ...current, podcast: { ...current.podcast!, reservedBytes: object.size } });
+        }
+        return key;
+      });
+      if (key === "ready") return;
+    }
     if (!env.OPENAI_API_KEY && !suppliedProvider)
       throw Error("Analysis provider not configured");
     const provider = suppliedProvider ?? new AudioProvider(env.OPENAI_API_KEY!);
@@ -177,12 +211,15 @@ export async function analyzeEpisode(
       total,
       positiveLimit(env.ANALYSIS_CONCURRENCY, DEFAULT_CONCURRENCY),
     );
-    let next = 0;
+    const remaining = manifest.plan.map((_, i) => i);
     let failure: { error: unknown } | undefined;
     await Promise.all(
       Array.from({ length: workers }, async () => {
-        while (!failure && next < total) {
-          const index = next++;
+        while (!failure && remaining.length) {
+          const priority = await store.records.get<number>(`episodes/${id}/transcript-priority`);
+          if (failure || !remaining.length) break;
+          const next = priority === undefined ? -1 : remaining.findIndex((i) => priority >= manifest.plan[i].offsetMs && priority <= manifest.plan[i].offsetMs + manifest.plan[i].durationMs);
+          const index = remaining.splice(Math.max(0, next), 1)[0];
           try {
             await analyzeSegment(index);
           } catch (error) {

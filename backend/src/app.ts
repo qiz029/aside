@@ -22,6 +22,8 @@ import {
   liveSessionPolicy,
 } from "./live-session-policy.js";
 import type { LiveSideband } from "./live-sideband.js";
+import { resolveAppleEpisode, streamPodcastAudio } from "./podcast-import.js";
+import { nodePublicFetch } from "./public-fetch-node.js";
 export function createApp(store: Store, services?: BackendServices) {
   const microphone = readMicrophoneConfig();
   const voiceLifecycle = readVoiceLifecycleConfig();
@@ -86,6 +88,24 @@ export function createApp(store: Store, services?: BackendServices) {
       .list()
       .map(({ analysis, ...e }) => ({ ...e, voice: analysis?.voice })),
   );
+  app.post("/api/podcasts/import", async (req) => {
+    const { url } = z
+      .object({ url: z.string().url().max(4096) })
+      .parse(req.body);
+    const imported = await resolveAppleEpisode(url, nodePublicFetch);
+    const existing = store
+      .list()
+      .find(
+        (e) =>
+          e.podcast?.feedUrl === imported.episode.podcast!.feedUrl &&
+          e.podcast?.guid === imported.episode.podcast!.guid,
+      );
+    if (existing)
+      return { episode: get(existing.id), positionMs: imported.positionMs };
+    store.put(imported.episode);
+    void jobs.drain();
+    return { ...imported, episode: get(imported.episode.id) };
+  });
   app.get<{ Params: { id: string } }>("/api/episodes/:id", async (req) =>
     get(req.params.id),
   );
@@ -144,6 +164,24 @@ export function createApp(store: Store, services?: BackendServices) {
     "/api/episodes/:id/audio",
     async (req, reply) => {
       const episode = get(req.params.id);
+      if (episode.podcast) {
+        const upstream = await streamPodcastAudio(
+          episode.podcast.audioUrl,
+          req.method,
+          req.headers.range,
+          undefined,
+          nodePublicFetch,
+        );
+        upstream.headers.forEach((value, name) => reply.header(name, value));
+        reply.code(upstream.status);
+        return reply.send(
+          upstream.body
+            ? Readable.fromWeb(
+                upstream.body as import("node:stream/web").ReadableStream,
+              )
+            : undefined,
+        );
+      }
       const key = `episodes/${req.params.id}/original`;
       const object = store.objects.head(key);
       if (!object) throw Error("音频不存在");
@@ -275,6 +313,8 @@ export function createApp(store: Store, services?: BackendServices) {
             req.headers["x-aside-answer-stream"] === "1"
               ? (text) => send({ type: "answer", revision: q.revision, text })
               : undefined,
+            undefined,
+            store.transcriptReader(e.id),
           ),
         );
         store.saveArtifact(e.id, taskId, {
@@ -377,6 +417,8 @@ export function createApp(store: Store, services?: BackendServices) {
           (totals) =>
             console.log(`live delegation ${id} ${describeCost(totals)}`),
           sessionPolicy.intentCalls,
+          undefined,
+          store.transcriptReader(e.id),
         );
         const entry: {
           episode: string;

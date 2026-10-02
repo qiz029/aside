@@ -1,3 +1,4 @@
+import { PodcastImport, usePodcastImport } from "./PodcastImport";
 import React, {
   useEffect,
   useMemo,
@@ -494,8 +495,8 @@ function Main() {
       setInlineQuestion(null);
       initialSeek.current = null;
       audio.load(
-        api.base + `/api/episodes/${id}/audio`,
-        api.headers(),
+        next.podcast?.audioUrl ?? api.base + `/api/episodes/${id}/audio`,
+        next.podcast ? {} : api.headers(),
         next.title,
       );
       setLastId(id);
@@ -1147,6 +1148,36 @@ function Main() {
           const row = shelves.rows.get(item.id)!;
           return row.heading || !foldedShelves.has(row.shelf);
         });
+  const podcastImport = usePodcastImport({
+    ready: !!user && !loading,
+    importEpisode: async (url) => {
+      if (!user) {
+        needLogin("library");
+        throw Error(
+          tr("请先登录，链接会保留", "Sign in first; your link is kept"),
+        );
+      }
+      if (!(await ensureConsent()))
+        throw Error(
+          tr(
+            "授权后可导入，链接已保留",
+            "Review the consent notice to import; your link is kept",
+          ),
+        );
+      const result = await api.importPodcast(url);
+      await load(result.episode.id, true);
+      if (result.positionMs > 0)
+        session.executePlayerCommand({
+          type: "seek",
+          atMs: result.positionMs,
+          playback: "play",
+        });
+      await refreshPrivate();
+    },
+  });
+  useEffect(() => {
+    if (podcastImport.error && episode) setError(podcastImport.error);
+  }, [podcastImport.error]);
   return (
     <SafeAreaView
       edges={["top", "left", "right"]}
@@ -1643,7 +1674,7 @@ function Main() {
                     "back-library",
                     true,
                   )}
-                  {episode.status === "ready" ? (
+                  {episode.durationMs > 0 ? (
                     <View
                       style={[
                         styles.paneTabs,
@@ -1684,7 +1715,7 @@ function Main() {
                 ) : null}
               </View>
             </GestureDetector>
-            {episode.status !== "ready" ? (
+            {episode.durationMs <= 0 ? (
               <View style={styles.content}>
                 <Text style={textStyle}>
                   {episode.stage} · {Math.round(episode.progress * 100)}%
@@ -1708,6 +1739,24 @@ function Main() {
               </View>
             ) : (
               <>
+                {episode.status !== "ready" && (
+                  <Text style={{ color: colors.muted, paddingHorizontal: 20 }}>
+                    {episode.error ??
+                      tr(
+                        "可边听边问，文字稿正在补充",
+                        "Listen and ask now; transcript is updating",
+                      )}
+                  </Text>
+                )}
+                {episode.status === "failed" &&
+                  button(
+                    tr("重试分析", "Retry analysis"),
+                    () =>
+                      run(async () => {
+                        if (await ensureConsent()) await api.retry(episode.id);
+                      }),
+                    "retry-analysis",
+                  )}
                 <GestureDetector gesture={paneSwipe}>
                   <View style={{ flex: 1 }}>
                     {pane === "transcript" &&
@@ -2467,6 +2516,11 @@ function Main() {
                       collection !== "public",
                     )}
                   </View>
+                  <PodcastImport
+                    controller={podcastImport}
+                    tr={tr}
+                    colors={colors}
+                  />
                   {recentEpisodes.length ? (
                     <View style={{ marginHorizontal: 20 }}>
                       <RecentListeningCards

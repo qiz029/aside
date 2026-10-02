@@ -31,7 +31,7 @@ import {
 import { liveSessionPolicy } from "../../backend/src/live-session-policy.js";
 import type { Env } from "./env.js";
 import { session } from "./session.js";
-import { CloudStore } from "./store.js";
+import { CloudStore, positiveLimit } from "./store.js";
 import { HttpError, json, readBody, readJson } from "./http.js";
 import { startAnalysis, uploadRoute } from "./uploads.js";
 import { accountFromRequest, authRoute } from "./auth.js";
@@ -47,6 +47,7 @@ import {
 } from "./usage.js";
 import { rollupDailyStats } from "./stats.js";
 import { isShellRoute, seoRoute } from "./seo.js";
+import { PodcastImportError, resolveAppleEpisode, streamPodcastAudio } from "../../backend/src/podcast-import.js";
 
 async function audio(request: Request, env: Env, id: string, mime: string) {
   const key = `episodes/${id}/original`;
@@ -110,6 +111,23 @@ async function route(
     path = url.pathname,
     method = request.method;
   const store = new CloudStore(env.DB, env.AUDIO);
+  if (path === "/api/podcasts/import" && method === "POST") {
+    if (!accountId) throw new HttpError(401, "请先登录 / Sign in to import a podcast");
+    await requireMobileConsent(request, env, accountId);
+    await authorize(request, env, owner, accountId);
+    if (env.ALLOW_UPLOADS !== "true") throw new HttpError(403, "当前未开放导入");
+    const { url } = z.object({ url: z.string().url().max(4096) }).parse(await readJson(request));
+    const day = new Date().toISOString().slice(0, 10);
+    await store.reserve(`podcast-import:${day}:${owner}`, 5);
+    await store.reserve(`podcast-import:${day}:global`, 200);
+    const imported = await resolveAppleEpisode(url);
+    const existing = await store.findPodcast(owner, imported.episode.podcast!.feedUrl, imported.episode.podcast!.guid);
+    const episode = existing ?? await store.createPodcast(owner, imported.episode,
+      positiveLimit(env.ACCOUNT_STORAGE_LIMIT_BYTES, 20 * 1024 ** 3),
+      positiveLimit(env.GLOBAL_STORAGE_LIMIT_BYTES, 100 * 1024 ** 3));
+    if (episode.status === "queued") await startAnalysis(env, episode.id);
+    return json({ episode: await store.episode(await store.row(episode.id, owner)), positionMs: imported.positionMs }, episode.id === imported.episode.id ? 201 : 200);
+  }
   if (path === "/api/trial") return trialRoute(request, env, owner, accountId);
   if (path === "/api/health" && method === "GET")
     return json({
@@ -151,6 +169,7 @@ async function route(
   const metadata = JSON.parse(row.metadata);
   if (!action && method === "GET") return json(await store.episode(row));
   if (action === "audio" && ["GET", "HEAD"].includes(method)) {
+    if (metadata.podcast) return streamPodcastAudio(metadata.podcast.audioUrl, method, request.headers.get("range"), request.signal);
     if (
       row.public !== 1 &&
       (metadata.durationMs <= 0 || metadata.status === "blocked")
@@ -431,6 +450,9 @@ async function route(
             signal,
             undefined,
             cost,
+            undefined,
+            undefined,
+            store.transcriptReader(id, owner),
           ),
         ),
       );
@@ -464,6 +486,8 @@ async function route(
                   ? (text) =>
                       emit({ type: "answer", revision: data.revision, text })
                   : undefined,
+                undefined,
+                store.transcriptReader(id, owner),
               ),
             );
             emit({ type: "result", result });
@@ -594,6 +618,8 @@ export default {
     } catch (error) {
       if (error instanceof HttpError)
         return json({ error: error.message, code: error.code }, error.status);
+      if (error instanceof PodcastImportError)
+        return json({ error: error.message }, 422);
       if (error instanceof z.ZodError)
         return json({ error: "请求格式无效" }, 400);
       // Never expose SDK headers, keys, transcripts or internal exception messages.

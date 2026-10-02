@@ -125,6 +125,7 @@ export function buildContext(
   const current = a.passages.find((p) => p.startMs <= atMs && p.endMs > atMs);
   const context = {
     playheadMs: atMs,
+    ...(a.transcript ? { transcriptAvailability: a.transcript } : {}),
     currentPassage: current
       ? { ...modelPassage(current), partiallyHeard: true }
       : null,

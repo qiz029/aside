@@ -2,6 +2,7 @@ import type { Episode } from "@aside/engine/core";
 import type { Env } from "./env.js";
 import { HttpError, json } from "./http.js";
 import { CloudStore, positiveLimit } from "./store.js";
+import { storedAudio } from "./storage.js";
 
 const PAGE_SIZE = 20;
 const terminal = new Set(["complete", "errored", "terminated"]);
@@ -97,7 +98,7 @@ export async function spaceRoute(
       "SELECT COUNT(*) AS count FROM uploads WHERE owner_id=? AND substr(created_at,1,7)=? AND state NOT IN ('aborted','rejected')",
     ).bind(owner, month).first<{ count: number }>();
     const storage = await env.DB.prepare(
-      "SELECT COALESCE(SUM(size),0) AS bytes FROM uploads WHERE owner_id=? AND state IN ('pending','complete')",
+      `SELECT COALESCE(SUM(size),0) AS bytes FROM ${storedAudio} WHERE owner_id=?`,
     ).bind(owner).first<{ bytes: number }>();
     return json({
       episodes: page.map((row) => JSON.parse(row.metadata) as Episode),

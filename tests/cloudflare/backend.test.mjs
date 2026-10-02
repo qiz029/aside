@@ -14,6 +14,7 @@ import {
   Response as WorkerResponse,
 } from "miniflare";
 import { CloudStore } from "../../cloudflare/src/store.ts";
+import { PODCAST_DOWNLOAD_LIMIT } from "../../cloudflare/src/storage.ts";
 import { analyzeEpisode } from "../../cloudflare/src/pipeline.ts";
 import { admitAudio, mediaApp } from "../../backend/src/container/app.ts";
 import { rollupDailyStats } from "../../cloudflare/src/stats.ts";
@@ -59,6 +60,7 @@ before(async () => {
     write: false,
     format: "esm",
     platform: "neutral",
+    mainFields: ["module", "main"],
     conditions: ["workerd", "worker", "browser"],
     external: ["cloudflare:*", "node:*"],
   });
@@ -120,6 +122,16 @@ before(async () => {
       },
       outboundService: async (request) => {
         networkCalls.push(new URL(request.url).pathname);
+        if (new URL(request.url).hostname === "cloudflare-dns.com") return Response.json({ Answer: [{ type: 1, data: "93.184.216.34" }] });
+        if (new URL(request.url).hostname === "itunes.apple.com") return Response.json({ results: [
+          { collectionId: 123, feedUrl: "https://feeds.example.com/podcast.xml" },
+          { trackId: 456, episodeGuid: "rss-episode-one", trackTimeMillis: 60000 },
+        ] });
+        if (request.url === "https://feeds.example.com/podcast.xml") return new Response('<rss><channel><item><guid>rss-episode-one</guid><title>RSS episode</title><enclosure url="https://media.example.com/podcast.mp3" type="audio/mpeg"/></item></channel></rss>');
+        if (request.url === "https://media.example.com/podcast.mp3") {
+          assert.equal(request.headers.get("authorization"), null);
+          return new Response("audio", { status: 206, headers: { "content-range": "bytes 0-4/100", "content-type": "audio/mpeg" } });
+        }
         if (request.url === "https://appleid.apple.com/auth/keys") return Response.json({keys: [appleJwk]});
         if (request.url === "https://appleid.apple.com/auth/revoke") return new Response(null, {status: 200});
         if (request.url === "https://appleid.apple.com/auth/token") {
@@ -3172,4 +3184,118 @@ test("account cleanup can resume after aborting an upload and a later storage fa
   await cleanupAccount(env, account.id);
   assert.equal(aborted, 1);
   assert.equal(await db.prepare("SELECT id FROM users WHERE id=?").bind(account.id).first(), null);
+});
+
+test("partially transcribed D1 episodes expose completed chunks before enrichment and reread later chunks", async () => {
+  const id = "progressive-d1";
+  const store = new CloudStore(db, bucket);
+  await store.create("progressive-owner", { id, title: "Progressive", createdAt: new Date().toISOString(), durationMs: 20000, status: "analyzing", stage: "transcribing", progress: 0.1 });
+  await store.records.put(`episodes/${id}/analysis-v1/manifest.json`, { plan: [{ offsetMs: 0, durationMs: 10000 }, { offsetMs: 10000, durationMs: 10000 }] });
+  const reader = store.transcriptReader(id, "progressive-owner");
+  assert.equal((await reader.read()).passages.length, 0);
+  await store.records.put(`episodes/${id}/analysis-v1/transcript-1.json`, [{ id: "later", startMs: 11000, endMs: 12000, text: "Arrived out of order", speaker: "host" }]);
+  const later = await reader.read();
+  assert.equal(later.passages[0].text, "Arrived out of order");
+  assert.deepEqual(later.transcript.ranges, [{ startMs: 10000, endMs: 20000 }]);
+  await reader.prioritize(5000);
+  assert.equal(await store.records.get(`episodes/${id}/transcript-priority`), 5000);
+  await store.records.put(`episodes/${id}/analysis-v1/transcript-0.json`, []);
+  assert.equal((await reader.read()).transcript.state, "complete");
+  assert.equal((await store.episode(await store.row(id))).status, "analyzing");
+  await assert.rejects(store.transcriptReader(id, "different-owner").read());
+});
+
+test("transcription prioritizes the requested unprocessed segment without losing timeline order", async () => {
+  const id = "priority-d1";
+  const store = new CloudStore(db, bucket);
+  await store.create("priority-owner", { id, title: "Priority", createdAt: new Date().toISOString(), durationMs: 30000, status: "queued", stage: "queued", progress: 0 });
+  const order = [];
+  await analyzeEpisode({ DB: db, AUDIO: bucket, ANALYSIS_CONCURRENCY: "1" }, id, { do: (_name, run) => run() }, {
+    open: async () => ({
+      manifest: { durationMs: 30000, mimeType: "audio/mpeg", pauses: [], plan: [0, 10000, 20000].map(offsetMs => ({ offsetMs, durationMs: 10000 })) },
+      segment: async i => new Uint8Array([i]), cover: async () => undefined, close: async () => {},
+    }),
+  }, {
+    transcribeAudio: async (_bytes, offsetMs) => {
+      order.push(offsetMs);
+      if (offsetMs === 0) await store.transcriptReader(id).prioritize(25000);
+      return [{ id: String(offsetMs), startMs: offsetMs, endMs: offsetMs + 1000, text: "Chunk", speaker: "host" }];
+    },
+    enrichAudio: async () => {
+      const partial = await store.transcriptReader(id).read();
+      assert.ok(partial.passages.length > 0, "transcript is visible before enrichment finishes");
+      return { summary: "", hostStyle: "", speakers: [], groups: [] };
+    },
+  });
+  assert.deepEqual(order, [0, 20000, 10000]);
+  assert.deepEqual((await store.transcriptReader(id).read()).passages.map(p => p.startMs), [0, 10000, 20000]);
+});
+
+test("Apple imports are playable before analysis, retain timestamp and reuse an owner's episode", async () => {
+  const a = await signedInAccount();
+  const url = "https://podcasts.apple.com/us/podcast/example/id123?i=456&t=12";
+  const imported = await a.request("/api/podcasts/import", "POST", { url });
+  assert.equal(imported.status, 201, await imported.clone().text());
+  const { episode, positionMs } = await imported.json();
+  assert.equal(positionMs, 12000);
+  assert.equal(episode.status, "queued");
+  assert.equal(episode.analysis.transcript.state, "processing");
+  assert.equal(episode.podcast.reservedBytes, PODCAST_DOWNLOAD_LIMIT);
+  const audio = await a.request(`/api/episodes/${episode.id}/audio`, "GET", undefined, { range: "bytes=0-4" });
+  assert.equal(audio.status, 206);
+  assert.equal(audio.headers.get("content-range"), "bytes 0-4/100");
+  assert.equal(await audio.text(), "audio");
+  const repeated = await a.request("/api/podcasts/import", "POST", { url });
+  assert.equal(repeated.status, 200);
+  assert.equal((await repeated.json()).episode.id, episode.id);
+  const other = await signedInAccount();
+  assert.equal((await other.request(`/api/episodes/${episode.id}`)).status, 404);
+  const own = await other.request("/api/podcasts/import", "POST", { url });
+  assert.equal(own.status, 201);
+  assert.notEqual((await own.json()).episode.id, episode.id);
+  const invalid = await a.request("/api/podcasts/import", "POST", { url: "https://podcasts.apple.com/us/podcast/example/id123" });
+  assert.equal(invalid.status, 422);
+  assert.match((await invalid.json()).error, /单集/);
+});
+
+test("RSS imports atomically reserve storage shared with uploads and deduplicate concurrent requests", async () => {
+  const a = await signedInAccount();
+  const store = new CloudStore(db, bucket);
+  const make = (guid) => ({ id: crypto.randomUUID(), title: "RSS", createdAt: new Date().toISOString(), durationMs: 1000,
+    status: "queued", stage: "Preparing", progress: 0,
+    podcast: { sourceUrl: "https://podcasts.apple.com/id123?i=456", feedUrl: "https://feeds.example.com/one", guid, audioUrl: "https://media.example.com/one.mp3" } });
+  const same = await Promise.all(Array.from({ length: 4 }, () => store.createPodcast(a.id, make("same"), PODCAST_DOWNLOAD_LIMIT, 100 * 1024 ** 3)));
+  assert.equal(new Set(same.map(e => e.id)).size, 1);
+  await assert.rejects(store.createPodcast(a.id, make("another"), PODCAST_DOWNLOAD_LIMIT, 100 * 1024 ** 3), error => error.status === 429);
+  const page = await (await a.request("/api/space/episodes")).json();
+  assert.equal(page.usedStorage, PODCAST_DOWNLOAD_LIMIT);
+  await a.request(`/api/space/episodes/${same[0].id}`, "DELETE");
+  assert.equal((await (await a.request("/api/space/episodes")).json()).usedStorage, 0);
+  const competing = await Promise.allSettled(Array.from({ length: 3 }, (_, i) => store.createPodcast(a.id, make(`different-${i}`), PODCAST_DOWNLOAD_LIMIT, 100 * 1024 ** 3)));
+  assert.equal(competing.filter(r => r.status === "fulfilled").length, 1);
+});
+
+test("publisher transcripts complete imports without downloading audio or invoking a model", async (t) => {
+  const id = crypto.randomUUID();
+  await seed(id, "publisher-owner", false, false);
+  const store = new CloudStore(db, bucket);
+  const episode = JSON.parse((await store.row(id)).metadata);
+  episode.podcast = { sourceUrl: "https://podcasts.apple.com/id123?i=456", feedUrl: "https://feeds.example.com/one", guid: "one", audioUrl: "https://media.example.com/audio.mp3", transcriptUrl: "https://media.example.com/transcript.vtt", reservedBytes: PODCAST_DOWNLOAD_LIMIT };
+  await store.update(episode);
+  const fetched = [];
+  t.mock.method(globalThis, "fetch", async input => {
+    const url = String(input);
+    if (url.includes("dns-query")) return Response.json({ Answer: [{ type: 1, data: "93.184.216.34" }] });
+    fetched.push(url);
+    assert.equal(url, episode.podcast.transcriptUrl);
+    return new Response("WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nA publisher transcript.\n");
+  });
+  await analyzeEpisode({ DB: db, AUDIO: bucket }, id, { do: (_name, run) => run() }, {
+    open: async () => { throw Error("No audio should be prepared"); },
+  });
+  const result = await store.episode(await store.row(id));
+  assert.equal(result.status, "ready");
+  assert.equal(result.podcast.reservedBytes, 0);
+  assert.equal(result.analysis.passages[0].text, "A publisher transcript.");
+  assert.deepEqual(fetched, [episode.podcast.transcriptUrl]);
 });
