@@ -108,3 +108,5 @@ export class EpisodeAnalysis extends WorkflowEntrypoint<Env, AnalysisJob> {
 }
 
 export { LiveSupervisor } from "./live-supervisor.js";
+
+export { GeminiSupervisor } from "./gemini-supervisor.js";

@@ -8,7 +8,7 @@ import {
   validateApple,
   protectAppleToken,
 } from "./apple.js";
-import { AI_CONSENT_VERSION } from "./account-data.js";
+import { AI_CONSENT_VERSION, GEMINI_CONSENT_VERSION } from "./account-data.js";
 
 const authCookie = "aside_auth";
 const stateCookie = "aside_google_state";
@@ -317,7 +317,10 @@ async function challengeOf(verifier: string) {
   return btoa(
     String.fromCharCode(
       ...new Uint8Array(
-        await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)),
+        await crypto.subtle.digest(
+          "SHA-256",
+          new TextEncoder().encode(verifier),
+        ),
       ),
     ),
   )
@@ -345,7 +348,10 @@ async function oauthStart(
   const params = new URL(request.url).searchParams;
   const mobile = params.get("mobile");
   const scheme = params.get("scheme");
-  if (mobile !== null && (!base64url.test(mobile) || !mobileSchemes.includes(scheme ?? "")))
+  if (
+    mobile !== null &&
+    (!base64url.test(mobile) || !mobileSchemes.includes(scheme ?? ""))
+  )
     throw new HttpError(400, "Invalid app sign-in request");
   const state = randomHex(32);
   await env.DB.prepare(
@@ -376,7 +382,10 @@ async function oauthState(
     !/^[a-f0-9]{64}$/.test(state) ||
     state !== cookieValue(request, cookieName)
   )
-    throw new HttpError(400, "登录验证失败，请重试 / Sign-in could not be verified");
+    throw new HttpError(
+      400,
+      "登录验证失败，请重试 / Sign-in could not be verified",
+    );
   const used = await env.DB.prepare(
     "DELETE FROM auth_oauth_states WHERE state_hash=? AND expires>? RETURNING visitor_id,link_user_id,mobile_challenge,mobile_scheme",
   )
@@ -406,7 +415,12 @@ async function finishOAuth(
     await env.DB.prepare(
       "INSERT INTO auth_mobile_grants(code_hash,user_id,challenge,expires) VALUES(?,?,?,?)",
     )
-      .bind(await hash(code), user.id, used.mobile_challenge, Date.now() + 120000)
+      .bind(
+        await hash(code),
+        user.id,
+        used.mobile_challenge,
+        Date.now() + 120000,
+      )
       .run();
     return redirect(`${used.mobile_scheme}://auth?code=${code}`, [clearCookie]);
   }
@@ -425,7 +439,11 @@ async function finishOAuth(
   for (const value of cookies) response.headers.append("Set-Cookie", value);
   return response;
 }
-function oauthFailure(used: OAuthState | null, cause: unknown, clearCookie: string) {
+function oauthFailure(
+  used: OAuthState | null,
+  cause: unknown,
+  clearCookie: string,
+) {
   if (!used?.mobile_scheme) throw cause;
   const message = cause instanceof Error ? cause.message : "Sign-in failed";
   return redirect(
@@ -699,7 +717,10 @@ async function appleWebStart(
   user: UserRow | null,
 ) {
   if (!appleWebEnabled(env))
-    throw new HttpError(503, "Apple 登录尚未配置 / Apple sign-in is not configured");
+    throw new HttpError(
+      503,
+      "Apple 登录尚未配置 / Apple sign-in is not configured",
+    );
   // Apple returns with a cross-site form POST, which only carries SameSite=None.
   const { state, cookie: stateValue } = await oauthStart(
     request,
@@ -721,7 +742,10 @@ async function appleWebStart(
 }
 async function appleWebCallback(request: Request, env: Env) {
   if (!appleWebEnabled(env))
-    throw new HttpError(503, "Apple 登录尚未配置 / Apple sign-in is not configured");
+    throw new HttpError(
+      503,
+      "Apple 登录尚未配置 / Apple sign-in is not configured",
+    );
   const form = await request.formData();
   const field = (name: string) => {
     const value = form.get(name);
@@ -740,7 +764,10 @@ async function appleWebCallback(request: Request, env: Env) {
   try {
     const code = field("code");
     if (!code || code.length > 4096)
-      throw new HttpError(400, "Apple 登录未完成 / Apple sign-in did not complete");
+      throw new HttpError(
+        400,
+        "Apple 登录未完成 / Apple sign-in did not complete",
+      );
     const identity = await validateApple(
       env,
       env.APPLE_WEB_CLIENT_ID!,
@@ -841,15 +868,21 @@ export async function authRoute(
     )
       .bind(current.id)
       .first<{ version: string }>();
+    const version =
+      request.headers.get("X-Aside-Consent-Version") === GEMINI_CONSENT_VERSION
+        ? GEMINI_CONSENT_VERSION
+        : AI_CONSENT_VERSION;
     return json({
-      accepted: consent?.version === AI_CONSENT_VERSION,
-      version: AI_CONSENT_VERSION,
+      accepted:
+        consent?.version === GEMINI_CONSENT_VERSION ||
+        consent?.version === version,
+      version,
     });
   }
   if (path === "/api/auth/consent" && method === "POST") {
     const current = requireUser(user);
     const data = z
-      .object({ version: z.literal(AI_CONSENT_VERSION) })
+      .object({ version: z.enum([AI_CONSENT_VERSION, GEMINI_CONSENT_VERSION]) })
       .parse(await readJson(request));
     await env.DB.prepare(
       "INSERT INTO account_consents(user_id,version,accepted_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET version=excluded.version,accepted_at=excluded.accepted_at",
@@ -869,9 +902,11 @@ export async function authRoute(
       .bind(current.id)
       .all<{ session_id: string }>();
     for (const session of sessions.results)
-      await env.LIVE.get(env.LIVE.idFromName(current.id)).close(
-        session.session_id,
-      );
+      await (
+        session.session_id.startsWith("gemini_")
+          ? env.GEMINI_LIVE.get(env.GEMINI_LIVE.idFromName(current.id))
+          : env.LIVE.get(env.LIVE.idFromName(current.id))
+      ).close(session.session_id);
     return json({ ok: true });
   }
   if (path === "/api/auth/account" && method === "DELETE") {

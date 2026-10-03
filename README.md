@@ -88,6 +88,7 @@ tests/        单元/API 测试与浏览器集成测试
 
 - [架构说明](.docs/architecture.md)：模块边界、分析与问答链路、会话生命周期、存储与限制。
 - [Cloudflare 后端](.docs/cloudflare.md)：Workers、D1、R2、Workflows、音频容器与部署步骤。
+- [功能开关](.docs/feature-flags.md)：Flagship 多维灰度、实时语音开关和 provider 配置。
 - [用户账号与个人资料](.docs/accounts.md)：邮件/Google 登录、profile、配置与上线边界。
 - [个人 Space](.docs/personal-space.md)：上传、私人音频库、额度与删除清理。
 - [开发与验证](.docs/development.md)：运行命令、测试前提、配置和故障定位。

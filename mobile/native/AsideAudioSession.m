@@ -102,4 +102,22 @@ RCT_EXPORT_METHOD(outputCommand:(double)generation epoch:(double)epoch mode:(NSI
 RCT_EXPORT_METHOD(audioStatus:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject) {
   resolve([[AsideSilentAudioDevice shared] audioStatus]);
 }
+RCT_EXPORT_METHOD(startPcm:(double)generation resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject) {
+  NSError *error;
+  if (![[AsideSilentAudioDevice shared] startPcm:(uint64_t)generation error:&error]) {
+    reject(@"pcm_audio", @"Couldn't start PCM audio", error); return;
+  }
+  resolve(nil);
+}
+RCT_EXPORT_METHOD(stopPcm:(double)generation resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject) {
+  [[AsideSilentAudioDevice shared] stopPcm:(uint64_t)generation]; resolve(nil);
+}
+RCT_EXPORT_METHOD(appendPcm:(double)generation epoch:(double)epoch data:(NSString *)data resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject) {
+  [[AsideSilentAudioDevice shared] appendPcm:data generation:(uint64_t)generation epoch:(uint64_t)epoch]; resolve(nil);
+}
+RCT_EXPORT_METHOD(takePcmInput:(double)generation resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject) {
+  NSString *data = [[AsideSilentAudioDevice shared] takePcmInput:(uint64_t)generation];
+  if (!data) { reject(@"pcm_overflow", @"Microphone transport stalled", nil); return; }
+  resolve(data);
+}
 @end

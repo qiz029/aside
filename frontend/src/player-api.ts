@@ -7,6 +7,7 @@ import type {
 import { resumableUpload } from "./resumable-upload";
 import { CheckpointConflict } from "@aside/player-runtime/checkpoint-sync";
 import { configureTrial, trialFetch } from "./trial-access";
+import { getLocale } from "./i18n";
 import type {
   Episode,
   MicrophoneConfig,
@@ -23,6 +24,7 @@ import {
   type QuestionPhase,
   type LiveControlEvent,
   type LiveControlUpdate,
+  type VoiceFeatures,
 } from "@aside/engine/contracts";
 import { readQuestion } from "./question-stream";
 import { readLiveControl } from "./live-control-stream";
@@ -80,6 +82,7 @@ export interface PlayerBackend {
   ): Promise<void>;
 }
 export interface PlayerHealth {
+  features?: VoiceFeatures;
   liveConfigured: boolean;
   trial?: boolean;
   uploadMode?: "multipart";
@@ -97,7 +100,10 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     path === "/podcasts/import" ||
     /\/(question|live|transcribe-question|retry)$/.test(path) ||
     (path.startsWith("/uploads") && init?.method === "POST");
-  const response = await (paid ? trialFetch : fetch)("/api" + path, init);
+  const headers = new Headers(init?.headers);
+  headers.set("X-Aside-Platform", "web");
+  headers.set("X-Aside-Locale", getLocale());
+  const response = await (paid ? trialFetch : fetch)("/api" + path, { ...init, headers });
   if (response.status === 409 && path.endsWith("/checkpoint"))
     throw new CheckpointConflict();
   if (!response.ok) {

@@ -3,6 +3,20 @@ import { cleanupDeletedEpisode } from "./space.js";
 import { revokeApple } from "./apple.js";
 import { HttpError } from "./http.js";
 export const AI_CONSENT_VERSION = "2026-09-21";
+export const GEMINI_CONSENT_VERSION = "2026-10-03";
+export async function hasGeminiConsent(
+  request: Request,
+  env: Env,
+  user: string,
+) {
+  if (!request.headers.has("authorization")) return true;
+  const consent = await env.DB.prepare(
+    "SELECT version FROM account_consents WHERE user_id=?",
+  )
+    .bind(user)
+    .first<{ version: string }>();
+  return consent?.version === GEMINI_CONSENT_VERSION;
+}
 export async function requireMobileConsent(
   request: Request,
   env: Env,
@@ -14,7 +28,11 @@ export async function requireMobileConsent(
   )
     .bind(user)
     .first<{ version: string }>();
-  if (consent?.version !== AI_CONSENT_VERSION)
+  if (
+    ![AI_CONSENT_VERSION, GEMINI_CONSENT_VERSION].includes(
+      consent?.version ?? "",
+    )
+  )
     throw new HttpError(
       403,
       "请先同意 AI 数据处理说明 / Please review AI data processing first",
@@ -34,7 +52,11 @@ export async function cleanupAccount(env: Env, id: string) {
     .bind(id)
     .all<{ session_id: string }>();
   for (const session of sessions.results)
-    await env.LIVE.get(env.LIVE.idFromName(id)).close(session.session_id);
+    await (
+      session.session_id.startsWith("gemini_")
+        ? env.GEMINI_LIVE.get(env.GEMINI_LIVE.idFromName(id))
+        : env.LIVE.get(env.LIVE.idFromName(id))
+    ).close(session.session_id);
   const identities = await env.DB.prepare(
     "SELECT refresh_token,client_id FROM auth_identities WHERE user_id=? AND provider='apple'",
   )
@@ -98,7 +120,9 @@ export async function cleanupAccount(env: Env, id: string) {
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);
   await env.DB.batch([
-    env.DB.prepare("DELETE FROM podcast_subscriptions WHERE owner_id=?").bind(id),
+    env.DB.prepare("DELETE FROM podcast_subscriptions WHERE owner_id=?").bind(
+      id,
+    ),
     env.DB.prepare("DELETE FROM listening_events WHERE owner_id=?").bind(id),
     env.DB.prepare("DELETE FROM conversations WHERE owner_id=?").bind(id),
     env.DB.prepare("DELETE FROM checkpoints WHERE owner_id=?").bind(id),

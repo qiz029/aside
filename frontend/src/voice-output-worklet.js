@@ -82,18 +82,86 @@ export class VoiceOutputQueue {
   }
 }
 
+/** Stateful linear conversion keeps packet boundaries continuous. */
+export class PcmResampler {
+  constructor(from, to) {
+    this.step = from / to;
+    this.phase = 0;
+    this.previous = undefined;
+  }
+  process(input) {
+    const result = [];
+    for (const sample of input) {
+      if (this.previous !== undefined) {
+        while (this.phase < 1) {
+          result.push(this.previous + (sample - this.previous) * this.phase);
+          this.phase += this.step;
+        }
+        this.phase -= 1;
+      }
+      this.previous = sample;
+    }
+    return Float32Array.from(result);
+  }
+}
 if (typeof registerProcessor === "function") {
+  registerProcessor(
+    "aside-voice-input",
+    class extends AudioWorkletProcessor {
+      constructor() {
+        super();
+        this.enabled = false;
+        this.packet = new Int16Array(640);
+        this.offset = 0;
+        this.resampler = new PcmResampler(sampleRate, 16000);
+        this.port.onmessage = ({ data }) => {
+          this.enabled = data.enabled;
+          this.offset = 0;
+          this.resampler = new PcmResampler(sampleRate, 16000);
+        };
+      }
+      process(inputs) {
+        const input = inputs[0]?.[0];
+        if (!this.enabled || !input) return true;
+        for (const sample of this.resampler.process(input)) {
+          this.packet[this.offset++] = Math.round(
+            Math.max(-1, Math.min(1, sample)) * 32767,
+          );
+          if (this.offset === this.packet.length) {
+            this.port.postMessage(this.packet.buffer, [this.packet.buffer]);
+            this.packet = new Int16Array(640);
+            this.offset = 0;
+          }
+        }
+        return true;
+      }
+    },
+  );
   registerProcessor(
     "aside-voice-output",
     class extends AudioWorkletProcessor {
       constructor() {
         super();
         this.queue = new VoiceOutputQueue(sampleRate);
+        this.resampler = new PcmResampler(24000, sampleRate);
         this.epoch = 0;
         this.active = false;
         this.quiet = 0;
         this.ticks = 0;
         this.port.onmessage = ({ data }) => {
+          if (data.audio) {
+            if (data.epoch !== this.epoch) return;
+            const view = new DataView(data.audio),
+              input = new Float32Array(view.byteLength / 2);
+            for (let i = 0; i < input.length; i++)
+              input[i] = view.getInt16(i * 2, true) / 32768;
+            this.queue.process(
+              this.resampler.process(input),
+              new Float32Array(0),
+            );
+            this.report();
+            return;
+          }
           this.epoch = data.epoch;
           this.queue.command(data.command);
           if (this.queue.mode !== "play") this.active = false;

@@ -20,6 +20,7 @@ import {
   questionResultSchema,
   type QuestionEvent,
   liveControlUpdateSchema,
+  defaultVoiceFeatures,
 } from "@aside/engine/contracts";
 import { Jobs } from "./jobs.js";
 import { describeCost, type QuestionTelemetry } from "./question-service.js";
@@ -88,6 +89,7 @@ export function createApp(store: Store, services?: BackendServices) {
   app.get("/api/health", async () => ({
     ok: true,
     liveConfigured: !!services,
+    features: defaultVoiceFeatures(),
     model: "gpt-live-1",
     microphone,
     voiceLifecycle,

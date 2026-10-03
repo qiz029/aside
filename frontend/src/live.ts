@@ -1,5 +1,5 @@
 import type { Turn } from "@aside/engine/core";
-import type { TranscriptTiming } from "@aside/engine/contracts";
+import type { LiveResult, TranscriptTiming } from "@aside/engine/contracts";
 import { readSpeechLevels } from "./audio-levels";
 import type {
   OutputBufferState,
@@ -23,6 +23,8 @@ export interface LiveCallbacks {
 }
 export class LiveConnection {
   private peer?: RTCPeerConnection;
+  private socket?: WebSocket;
+  private capture?: AudioWorkletNode;
   private channel?: RTCDataChannel;
   private mic?: MediaStream;
   private ctx?: AudioContext;
@@ -55,7 +57,10 @@ export class LiveConnection {
   constructor(private callbacks: LiveCallbacks) {}
   async connect(
     source: MediaStream,
-    create: (sdp: string) => Promise<{ transport: { sdp: string } }>,
+    create: (
+      sdp: string,
+      pcm?: boolean,
+    ) => Promise<Pick<LiveResult, "transport">>,
   ) {
     try {
       this.mic = source.clone();
@@ -130,13 +135,26 @@ export class LiveConnection {
       for (const track of this.mic.getTracks())
         this.peer.addTrack(track, this.mic);
       this.channel = this.peer.createDataChannel("oai-events");
-      this.channel.onmessage = (e) => {
+      const onMessage = (e: { data: string }) => {
         try {
           const m = JSON.parse(e.data);
           if (typeof m.type === "string" && m.type !== "session.usage.updated")
             this.callbacks.onDiagnostic?.(
               `Live event: ${m.type.slice(0, 100)}`,
             );
+          if (m.type === "session.output.started") this.prepareOutput();
+          if (m.type === "session.audio.delta" && typeof m.data === "string") {
+            const raw = atob(m.data);
+            const bytes = Uint8Array.from(raw, (c) => c.charCodeAt(0));
+            this.outputQueue?.port.postMessage(
+              { audio: bytes.buffer, epoch: this.outputEpoch },
+              [bytes.buffer],
+            );
+          }
+          if (m.type === "session.output.interrupted") {
+            this.setOutput("discard");
+            this.prepareOutput();
+          }
           if (m.type === "session.started") {
             this.ready = true;
             clearTimeout(this.startTimer);
@@ -186,6 +204,7 @@ export class LiveConnection {
           this.callbacks.onError("无法读取 Live 事件");
         }
       };
+      this.channel.onmessage = onMessage;
       this.peer.onconnectionstatechange = () => {
         this.callbacks.onDiagnostic?.(`WebRTC: ${this.peer?.connectionState}`);
         if (this.peer?.connectionState === "failed") {
@@ -195,12 +214,59 @@ export class LiveConnection {
       };
       const offer = await this.peer.createOffer();
       await this.peer.setLocalDescription(offer);
-      const result = await create(offer.sdp!);
+      const result = await create(offer.sdp!, true);
       if (this.finished) throw Error("语音连接已取消");
-      await this.peer.setRemoteDescription({
-        type: "answer",
-        sdp: result.transport.sdp,
-      });
+      if (result.transport.websocketUrl) {
+        this.channel.close();
+        this.peer.close();
+        this.channel = undefined;
+        this.peer = undefined;
+        this.capture = new AudioWorkletNode(this.ctx, "aside-voice-input", {
+          numberOfInputs: 1,
+          numberOfOutputs: 1,
+          outputChannelCount: [1],
+        });
+        this.ctx
+          .createMediaStreamSource(this.mic)
+          .connect(this.capture)
+          .connect(this.ctx.destination);
+        const socket = (this.socket = new WebSocket(
+          result.transport.websocketUrl,
+        ));
+        socket.onmessage = onMessage;
+        socket.onerror = () => {
+          this.callbacks.onError("语音连接中断");
+          this.finish(false);
+        };
+        socket.onclose = () => this.finish(false);
+        this.capture.port.onmessage = ({ data }: { data: ArrayBuffer }) => {
+          if (
+            !this.ready ||
+            this.closing ||
+            socket.readyState !== WebSocket.OPEN
+          )
+            return;
+          if (socket.bufferedAmount > 256000) {
+            this.callbacks.onError("Voice connection is too slow");
+            void this.close();
+            return;
+          }
+          const bytes = new Uint8Array(data);
+          let raw = "";
+          for (const byte of bytes) raw += String.fromCharCode(byte);
+          socket.send(
+            JSON.stringify({
+              type: "session.audio.append",
+              data: btoa(raw),
+              rate: 16000,
+            }),
+          );
+        };
+      } else
+        await this.peer.setRemoteDescription({
+          type: "answer",
+          sdp: result.transport.sdp,
+        });
       await started;
     } catch (err) {
       this.rejectStart?.(err instanceof Error ? err : Error(String(err)));
@@ -225,6 +291,20 @@ export class LiveConnection {
     content: string,
     delegationId: string | null = null,
   ) {
+    if (
+      this.ready &&
+      !this.closing &&
+      this.socket?.readyState === WebSocket.OPEN
+    ) {
+      this.socket.send(
+        JSON.stringify({
+          type: `session.${type}.append`,
+          content,
+          delegation_id: delegationId,
+        }),
+      );
+      return;
+    }
     if (this.ready && !this.closing && this.channel?.readyState === "open")
       for (const part of content.match(/[^]{1,220}/gu) ?? [])
         this.channel.send(
@@ -301,6 +381,9 @@ export class LiveConnection {
     );
   }
   input(enabled: boolean) {
+    this.capture?.port.postMessage({ enabled: enabled && !this.closing });
+    if (!enabled && this.ready && this.socket?.readyState === WebSocket.OPEN)
+      this.socket.send(JSON.stringify({ type: "session.audio.end" }));
     this.mic
       ?.getTracks()
       .forEach((t) => (t.enabled = enabled && !this.closing));
@@ -366,6 +449,8 @@ export class LiveConnection {
     return this.closedPromise;
   }
   private sendClose() {
+    if (this.socket?.readyState === WebSocket.OPEN)
+      this.socket.send(JSON.stringify({ type: "session.close" }));
     if (this.channel?.readyState === "open")
       this.channel.send(JSON.stringify({ type: "session.close" }));
   }
@@ -382,6 +467,9 @@ export class LiveConnection {
     clearTimeout(this.closeTimer);
     this.ready = false;
     this.channel?.close();
+    this.socket?.close();
+    this.capture?.disconnect();
+    this.capture?.port.close();
     this.peer?.close();
     this.mic?.getTracks().forEach((t) => t.stop());
     void this.ctx?.close();

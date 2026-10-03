@@ -21,6 +21,55 @@ export class NativeAudioOutput {
   private epoch = 0;
   private mode = 0;
   private timer?: ReturnType<typeof setInterval>;
+  private inputTimer?: ReturnType<typeof setInterval>;
+  private networkPcm = false;
+  static get supportsPcm() {
+    const native = NativeModules.AsideAudioSession;
+    return ["startPcm", "stopPcm", "appendPcm", "takePcmInput"].every(
+      (key) => typeof native?.[key] === "function",
+    );
+  }
+  async startPcm(send: (data: string) => void) {
+    if (this.closed) throw Error("Voice closed");
+    this.networkPcm = true;
+    await NativeModules.AsideAudioSession.startPcm(this.owner);
+    if (this.closed) {
+      await NativeModules.AsideAudioSession.stopPcm(this.owner);
+      return;
+    }
+    let pending = false;
+    this.inputTimer = setInterval(() => {
+      if (pending || this.closed) return;
+      pending = true;
+      void NativeModules.AsideAudioSession.takePcmInput(this.owner)
+        .then((data: string) => {
+          if (!this.closed && data) send(data);
+        })
+        .catch((error: unknown) => {
+          if (!this.closed) this.cb.onError(String(error));
+        })
+        .finally(() => {
+          pending = false;
+        });
+    }, 40);
+  }
+  appendPcm(data: string) {
+    if (this.closed || !this.networkPcm) return;
+    const epoch = this.epoch;
+    // Keep output commands and packets ordered across the asynchronous bridge.
+    this.operation = this.operation
+      .then(() => {
+        if (!this.closed && epoch === this.epoch)
+          return NativeModules.AsideAudioSession.appendPcm(
+            this.owner,
+            epoch,
+            data,
+          );
+      })
+      .catch((error: unknown) => {
+        if (!this.closed) this.cb.onError(String(error));
+      });
+  }
   private active = false;
   private transcriptOpen = false;
   private drained = false;
@@ -186,6 +235,9 @@ export class NativeAudioOutput {
   close() {
     this.closed = true;
     clearInterval(this.timer);
+    clearInterval(this.inputTimer);
+    if (this.networkPcm)
+      void NativeModules.AsideAudioSession.stopPcm(this.owner).catch(() => {});
     void this.command(0);
   }
 }

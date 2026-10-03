@@ -15,3 +15,8 @@ export class VoiceOutputQueue {
   process(input: Float32Array, output?: Float32Array): Float32Array;
   snapshot(): OutputBufferState;
 }
+
+export class PcmResampler {
+  constructor(from: number, to: number);
+  process(input: Float32Array): Float32Array;
+}

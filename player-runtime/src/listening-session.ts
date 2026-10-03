@@ -1778,9 +1778,10 @@ export class ListeningSession {
         },
       },
       {
-        create: async (sdp) => {
+        create: async (sdp, pcm) => {
           const result = await this.backend.live(episodeId, {
             sdp,
+            ...(pcm ? { pcm: true } : {}),
             atMs: this.playback.interruption?.atMs ?? this.playback.positionMs,
             history: this.conversation.snapshot.history,
             ...(this.serverVoice

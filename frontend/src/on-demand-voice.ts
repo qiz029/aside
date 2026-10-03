@@ -1,3 +1,4 @@
+import type { LiveResult } from "@aside/engine/contracts";
 import type {
   MicrophoneConfig,
   VoiceLifecycleConfig,
@@ -9,9 +10,7 @@ export type VoiceStatus =
 export interface CloudPort {
   connect(
     source: MediaStream,
-    create: (
-      sdp: string,
-    ) => Promise<{ session: { id: string }; transport: { sdp: string } }>,
+    create: (sdp: string, pcm?: boolean) => Promise<LiveResult>,
   ): Promise<void>;
   append(
     type: "thinking" | "commentary" | "instructions",
@@ -48,9 +47,7 @@ export interface VoiceDependencies {
     error: (message: string) => void,
   ) => MicrophonePort;
   cloud: (callbacks: LiveCallbacks) => CloudPort;
-  create: (
-    sdp: string,
-  ) => Promise<{ session: { id: string }; transport: { sdp: string } }>;
+  create: (sdp: string, pcm?: boolean) => Promise<LiveResult>;
   transcribe: (audio: Blob, signal: AbortSignal) => Promise<string>;
 }
 /** Owns cloud lifecycle, separately from the durable podcast playback state. */
@@ -269,8 +266,8 @@ export class OnDemandVoice {
         },
       });
       this.cloud = cloud;
-      await cloud.connect(this.mic.stream, async (sdp) => {
-        const result = await this.deps.create(sdp);
+      await cloud.connect(this.mic.stream, async (sdp, pcm) => {
+        const result = await this.deps.create(sdp, pcm);
         sessionId = result.session.id;
         return result;
       });

@@ -12,6 +12,7 @@ import type {
   LiveControlEvent,
   LiveControlUpdate,
   TranscriptTiming,
+  VoiceFeatures,
 } from "@aside/engine/contracts";
 import type { PlayerConfig } from "@aside/engine/player";
 export interface PodcastAudio {
@@ -61,6 +62,7 @@ export interface PlayerBackend {
   ): Promise<void>;
 }
 export interface PlayerHealth {
+  features?: VoiceFeatures;
   liveConfigured: boolean;
   microphone: MicrophoneConfig;
   voiceLifecycle: VoiceLifecycleConfig;
@@ -128,7 +130,7 @@ export type VoiceFactory = (
   config: VoiceLifecycleConfig,
   callbacks: VoiceCallbacks,
   remote: {
-    create(sdp: string): Promise<LiveResult>;
+    create(sdp: string, pcm?: boolean): Promise<LiveResult>;
     transcribe(audio: unknown, signal: AbortSignal): Promise<string>;
   },
   manual?: boolean,

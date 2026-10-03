@@ -1,3 +1,4 @@
+import { CONSENT_VERSION } from "./privacy-policy";
 import type {
   PodcastShow,
   PodcastShowPage,
@@ -124,9 +125,17 @@ export class MobileApi implements PlayerBackend {
     );
   }
   headers() {
-    return this.token
-      ? { Authorization: `Bearer ${this.token}` }
-      : ({} as Record<string, string>);
+    return {
+      "X-Aside-Platform": Platform.OS,
+      "X-Aside-Consent-Version": CONSENT_VERSION,
+      "X-Aside-App-Version": Constants.expoConfig?.version ?? "",
+      "X-Aside-App-Build":
+        Platform.OS === "ios"
+          ? (Constants.expoConfig?.ios?.buildNumber ?? "")
+          : String(Constants.expoConfig?.android?.versionCode ?? ""),
+      "X-Aside-Locale": Intl.DateTimeFormat().resolvedOptions().locale,
+      ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
+    } as Record<string, string>;
   }
   async request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const requestToken = this.token;

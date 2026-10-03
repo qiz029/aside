@@ -36,11 +36,10 @@ static inline void AsidePcmCommand(AsidePcmQueue *q, enum AsidePcmMode mode) {
   if (mode == AsideDiscard) AsidePcmClear(q);
   if (mode != AsideHold || q->mode == AsideDiscard) q->mode = mode;
 }
-static inline void AsidePcmProcess(AsidePcmQueue *q, int16_t *pcm, uint32_t count) {
+static inline void AsidePcmEnqueue(AsidePcmQueue *q, const int16_t *pcm, uint32_t count) {
   q->received += count;
   if (q->mode == AsideDiscard || q->mode == AsideOverflow) {
     q->discarded += count;
-    memset(pcm, 0, count * sizeof(int16_t));
     return;
   }
   for (uint32_t i = 0; i < count; i++) {
@@ -51,11 +50,13 @@ static inline void AsidePcmProcess(AsidePcmQueue *q, int16_t *pcm, uint32_t coun
     }
     if (q->size == q->capacity) {
       AsidePcmClear(q); q->mode = AsideOverflow; q->overflows++;
-      memset(pcm, 0, count * sizeof(int16_t)); return;
+      return;
     }
     q->data[(q->head + q->size++) % q->capacity] = value;
     if (abs(value) > 32) q->audible++;
   }
+}
+static inline void AsidePcmRender(AsidePcmQueue *q, int16_t *pcm, uint32_t count) {
   memset(pcm, 0, count * sizeof(int16_t));
   double energy = 0;
   if (q->mode == AsidePlay) {
@@ -72,6 +73,10 @@ static inline void AsidePcmProcess(AsidePcmQueue *q, int16_t *pcm, uint32_t coun
   int loud = count && energy / count > (32768.0 * 0.008) * (32768.0 * 0.008);
   q->quiet = loud ? 0 : q->quiet + count;
   q->active = q->mode == AsidePlay && (loud || (q->active && q->quiet < q->rate * 0.9));
+}
+static inline void AsidePcmProcess(AsidePcmQueue *q, int16_t *pcm, uint32_t count) {
+  AsidePcmEnqueue(q, pcm, count);
+  AsidePcmRender(q, pcm, count);
 }
 static inline int AsidePcmDrained(AsidePcmQueue *q) {
   return q->mode == AsidePlay && q->played > 0 && !q->active &&

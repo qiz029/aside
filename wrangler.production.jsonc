@@ -5,6 +5,7 @@
   "main": "cloudflare/src/index.ts",
   "compatibility_date": "2026-09-12",
   "compatibility_flags": ["nodejs_compat"],
+  "flagship": [{ "binding": "FLAGS", "app_id": "ba3d496d-db21-488f-997a-9721386fb03b" }],
   "assets": {
     "directory": "./frontend/dist",
     "binding": "ASSETS",
@@ -13,6 +14,7 @@
   },
   "vars": {
     "APP_ORIGIN": "https://asidefm.com",
+    "FEATURE_ENVIRONMENT": "production",
     "ALLOW_UPLOADS": "true",
     "AI_ENABLED": "true",
     "TRIAL_DAILY_LIMITS": "false",
@@ -64,6 +66,7 @@
   ],
   "durable_objects": {
     "bindings": [
+      { "name": "GEMINI_LIVE", "class_name": "GeminiSupervisor" },
       {
         "name": "MEDIA",
         "class_name": "MediaContainer",
@@ -83,6 +86,7 @@
       "tag": "v2",
       "new_sqlite_classes": ["LiveSupervisor"],
     },
+    { "tag": "v3", "new_sqlite_classes": ["GeminiSupervisor"] },
   ],
   "triggers": {
     "crons": ["*/5 * * * *"],

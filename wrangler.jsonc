@@ -51,6 +51,7 @@
   ],
   "durable_objects": {
     "bindings": [
+      { "name": "GEMINI_LIVE", "class_name": "GeminiSupervisor" },
       { "name": "MEDIA", "class_name": "MediaContainer" },
       { "name": "LIVE", "class_name": "LiveSupervisor" },
     ],
@@ -58,6 +59,7 @@
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["MediaContainer"] },
     { "tag": "v2", "new_sqlite_classes": ["LiveSupervisor"] },
+    { "tag": "v3", "new_sqlite_classes": ["GeminiSupervisor"] },
   ],
   "triggers": { "crons": ["*/5 * * * *"] },
   "observability": { "enabled": true, "logs": { "invocation_logs": false } },

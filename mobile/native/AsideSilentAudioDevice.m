@@ -12,6 +12,7 @@
 @property(nonatomic, strong) id configurationObserver;
 @property(nonatomic, strong) NSMutableArray *interruptObservers;
 @property(atomic) BOOL allowed;
+@property(atomic) BOOL pcmMode;
 @property(atomic) BOOL playing;
 @property(atomic) BOOL recording;
 @property(atomic) BOOL inputEnabled;
@@ -25,6 +26,9 @@
   AsidePcmQueue _pcmQueue;
   os_unfair_lock _pcmLock;
   uint64_t _generation, _epoch;
+  NSMutableData *_pcmInput;
+  BOOL _inputOverflow;
+  int16_t _lastPcmSample;
 }
 - (instancetype)init {
   if ((self = [super init])) {
@@ -75,18 +79,19 @@
         .mBuffers = {{ .mNumberChannels = 1, .mDataByteSize = count * sizeof(SInt16), .mData = pcm }} };
       AudioUnitRenderActionFlags flags = 0;
       id<RTCAudioDeviceDelegate> target = device.delegate;
-      if (device.allowed && device.recording && !device.inputEnabled && target)
+      if (device.allowed && !device.pcmMode && device.recording && !device.inputEnabled && target)
         target.deliverRecordedData(&flags, timestamp, 0, count, &buffer, NULL, nil);
-      if (device.allowed && device.playing && target)
+      if (device.allowed && !device.pcmMode && device.playing && target)
         target.getPlayoutData(&flags, timestamp, 0, count, &buffer);
       os_unfair_lock_lock(&device->_pcmLock);
-      AsidePcmProcess(&device->_pcmQueue, pcm, count);
+      if (device.pcmMode) AsidePcmRender(&device->_pcmQueue, pcm, count);
+      else AsidePcmProcess(&device->_pcmQueue, pcm, count);
       os_unfair_lock_unlock(&device->_pcmLock);
       for (UInt32 channel = 0; channel < output->mNumberBuffers; channel++) {
         float *samples = output->mBuffers[channel].mData;
         for (UInt32 i = 0; i < count; i++) samples[i] = pcm[i] / 32768.0f;
       }
-      *silence = !device.playing;
+      *silence = !(device.playing || device.pcmMode);
       return noErr;
     }];
   [self.engine attachNode:self.source];
@@ -95,7 +100,7 @@
     addObserverForName:AVAudioEngineConfigurationChangeNotification object:self.engine queue:nil
     usingBlock:^(NSNotification *note) {
       AsideSilentAudioDevice *device = weakSelf;
-      [device.delegate dispatchAsync:^{
+      dispatch_block_t changed = ^{
         [device.delegate notifyAudioInputInterrupted];
         [device.delegate notifyAudioOutputInterrupted];
         // A tap keeps the format it was installed with; a new route can change it.
@@ -105,9 +110,11 @@
           });
           return;
         }
-        if (device.allowed && (device.playing || device.recording))
+        if (device.allowed && (device.playing || device.recording || device.pcmMode))
           [device.engine startAndReturnError:nil];
-      }];
+      };
+      if (device.delegate) [device.delegate dispatchAsync:changed];
+      else dispatch_async(dispatch_get_main_queue(), changed);
     }];
   self.interruptObservers = [NSMutableArray new];
   for (NSString *name in @[AVAudioSessionInterruptionNotification,
@@ -137,7 +144,7 @@
   return YES;
 }
 - (BOOL)updateEngine:(NSError **)error {
-  if (self.allowed && (self.playing || self.recording)) {
+  if (self.allowed && (self.playing || self.recording || self.pcmMode)) {
     if (!self.engine.isRunning) return [self.engine startAndReturnError:error];
   } else {
     [self.engine stop];
@@ -154,7 +161,7 @@
       self.allowed = enabled;
       success = [self updateEngine:&failure];
     }];
-  } else self.allowed = enabled;
+  } else { self.allowed = enabled; success = [self updateEngine:&failure]; }
   if (error) *error = failure;
   return success;
 }
@@ -162,6 +169,7 @@
   BOOL hadInput = self.inputEnabled || self.inputTap;
   self.inputEnabled = NO;
   self.inputLevel = 0;
+  os_unfair_lock_lock(&_pcmLock); [_pcmInput setLength:0]; os_unfair_lock_unlock(&_pcmLock);
   if (!self.engine) { self.inputEnabled = enabled; return YES; }
   [self.engine stop];
   [self.delegate notifyAudioInputInterrupted];
@@ -191,7 +199,7 @@
   __weak AsideSilentAudioDevice *weakSelf = self;
   [input installTapOnBus:0 bufferSize:480 format:format block:^(AVAudioPCMBuffer *buffer, AVAudioTime *when) {
     AsideSilentAudioDevice *device = weakSelf;
-    if (!device.allowed || !device.inputEnabled || !device.recording) return;
+    if (!device.allowed || !device.inputEnabled || !(device.recording || device.pcmMode)) return;
     __block BOOL supplied = NO;
     NSError *failure;
     AVAudioConverterOutputStatus status = [device.inputConverter convertToBuffer:device.inputBuffer
@@ -208,7 +216,16 @@
     device.inputLevel = count ? sqrt(energy / count) / 32768.0 : 0;
     AudioUnitRenderActionFlags flags = 0;
     AudioTimeStamp timestamp = when.audioTimeStamp;
-    if (count && device.allowed && device.inputEnabled)
+    if (count && device.allowed && device.inputEnabled && device.pcmMode) {
+      os_unfair_lock_lock(&device->_pcmLock);
+      // Revocation drops queued input too; a JS stall must never replay old speech.
+      if (device.inputEnabled && device.allowed) {
+        if (device->_pcmInput.length + count * 2 > 96000) {
+          [device->_pcmInput setLength:0]; device->_inputOverflow = YES;
+        } else [device->_pcmInput appendBytes:samples length:count * 2];
+      }
+      os_unfair_lock_unlock(&device->_pcmLock);
+    } else if (count && device.allowed && device.inputEnabled && device.delegate)
       device.delegate.deliverRecordedData(&flags, &timestamp, 0, count,
         device.inputBuffer.audioBufferList, NULL, nil);
   }];
@@ -219,7 +236,7 @@
   __block BOOL success = YES;
   __block NSError *failure;
   if (self.delegate) [self.delegate dispatchSync:^{ success = [self configureInput:enabled error:&failure]; }];
-  else self.inputEnabled = enabled;
+  else { success = [self configureInput:enabled error:&failure]; }
   if (error) *error = failure;
   return success;
 }
@@ -249,11 +266,63 @@
   os_unfair_lock_unlock(&_pcmLock);
   return status;
 }
+- (BOOL)startPcm:(uint64_t)generation error:(NSError **)error {
+  if (generation != _generation) return NO;
+  if (!self.engine && ![self initializeWithDelegate:self.delegate]) return NO;
+  __block BOOL success = YES; __block NSError *failure;
+  dispatch_block_t start = ^{
+    self.pcmMode = YES;
+    os_unfair_lock_lock(&self->_pcmLock);
+    self->_pcmInput = [NSMutableData new]; self->_inputOverflow = NO; self->_lastPcmSample = 0;
+    os_unfair_lock_unlock(&self->_pcmLock);
+    success = [self updateEngine:&failure];
+  };
+  if (self.delegate) [self.delegate dispatchSync:start]; else start();
+  if (error) *error = failure; return success;
+}
+- (void)stopPcm:(uint64_t)generation {
+  if (generation != _generation) return;
+  dispatch_block_t stop = ^{
+    self.pcmMode = NO;
+    os_unfair_lock_lock(&self->_pcmLock); [self->_pcmInput setLength:0]; os_unfair_lock_unlock(&self->_pcmLock);
+    [self updateEngine:nil];
+  };
+  if (self.delegate) [self.delegate dispatchSync:stop]; else stop();
+}
+- (void)appendPcm:(NSString *)base64 generation:(uint64_t)generation epoch:(uint64_t)epoch {
+  if (base64.length > 131072) return;
+  NSData *data = [[NSData alloc] initWithBase64EncodedString:base64 options:0];
+  if (!data || data.length % 2 || !data.length) return;
+  NSUInteger count = data.length / 2;
+  int16_t *samples = malloc(count * 2 * sizeof(int16_t));
+  if (!samples) return;
+  const int16_t *input = data.bytes;
+  os_unfair_lock_lock(&_pcmLock);
+  if (self.pcmMode && generation == _generation && epoch == _epoch) {
+    // Gemini produces 24 kHz mono; the native voice device renders at 48 kHz.
+    for (NSUInteger i = 0; i < count; i++) {
+      samples[i * 2] = (int16_t)(((int32_t)_lastPcmSample + input[i]) / 2);
+      samples[i * 2 + 1] = input[i]; _lastPcmSample = input[i];
+    }
+    AsidePcmEnqueue(&_pcmQueue, samples, (uint32_t)count * 2);
+  }
+  os_unfair_lock_unlock(&_pcmLock); free(samples);
+}
+- (NSString *)takePcmInput:(uint64_t)generation {
+  os_unfair_lock_lock(&_pcmLock);
+  NSString *result = @"";
+  if (generation == _generation && self.pcmMode && self.inputEnabled && self.allowed) {
+    result = _inputOverflow ? nil : [_pcmInput base64EncodedStringWithOptions:0];
+  }
+  if (generation == _generation) [_pcmInput setLength:0];
+  os_unfair_lock_unlock(&_pcmLock); return result;
+}
 - (BOOL)startPlayout { self.playing = YES; return [self updateEngine:nil]; }
 - (BOOL)stopPlayout { self.playing = NO; return [self updateEngine:nil]; }
 - (BOOL)startRecording { self.recording = YES; return [self updateEngine:nil]; }
 - (BOOL)stopRecording { self.recording = NO; return [self updateEngine:nil]; }
 - (BOOL)terminateDevice {
+  if (self.pcmMode) { self.delegate = nil; return YES; }
   self.playing = NO; self.recording = NO;
   [self.engine stop];
   if (self.configurationObserver) [[NSNotificationCenter defaultCenter] removeObserver:self.configurationObserver];

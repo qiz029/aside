@@ -3,7 +3,11 @@ export interface AnalysisJob {
   episodeId: string;
 }
 export interface Env {
+  FLAGS?: import("./feature-flags.js").FlagshipBinding;
+  FEATURE_ENVIRONMENT?: string;
   LIVE: DurableObjectNamespace<import("./live-supervisor.js").LiveSupervisor>;
+  GEMINI_LIVE: DurableObjectNamespace<import("./gemini-supervisor.js").GeminiSupervisor>;
+  GEMINI_API_KEY?: string;
   AI_ENABLED?: string;
   MOBILE_AUDIO_ENABLED?: string;
   TURNSTILE_SITE_KEY?: string;

@@ -76,3 +76,5 @@ export class TestLive extends LiveSupervisor {
     await this.alarm();
   }
 }
+
+export { GeminiSupervisor } from "../../cloudflare/src/gemini-supervisor.ts";

@@ -42,6 +42,7 @@ export class NativeVoice implements VoicePort {
       : recordingOptions.android),
   });
   private peer?: RTCPeerConnection;
+  private socket?: WebSocket;
   private connecting?: Promise<void>;
   private channel?: ReturnType<RTCPeerConnection["createDataChannel"]>;
   private tracks: MediaStreamTrack[] = [];
@@ -292,10 +293,17 @@ export class NativeVoice implements VoicePort {
       // answer's prefix survives a late server control event.
       track.enabled = true;
     };
-    channel.onmessage = (event: { data: unknown }) => {
+    const onMessage = (event: { data: unknown }) => {
       try {
         const m = JSON.parse(String(event.data));
         if (this.closed && m.type !== "session.closed") return;
+        if (m.type === "session.output.started") this.pcm.prepare();
+        if (m.type === "session.audio.delta" && typeof m.data === "string")
+          this.pcm.appendPcm(m.data);
+        if (m.type === "session.output.interrupted") {
+          this.pcm.mute(true);
+          this.pcm.prepare();
+        }
         if (m.type === "session.started") {
           this.ready = true;
           this.isCold = false;
@@ -358,6 +366,7 @@ export class NativeVoice implements VoicePort {
         this.cb.onError("无法读取语音事件 / Invalid voice event");
       }
     };
+    channel.onmessage = onMessage;
     peer.onconnectionstatechange = () => {
       if (peer.connectionState === "failed" && !this.closed) {
         reject(Error("Voice disconnected"));
@@ -372,16 +381,55 @@ export class NativeVoice implements VoicePort {
         (async () => {
           const offer = await peer.createOffer({});
           await peer.setLocalDescription(offer);
-          const result = await this.remote.create(offer.sdp!);
+          const result = await this.remote.create(
+            offer.sdp!,
+            NativeAudioOutput.supportsPcm,
+          );
           this.sessionId = result.session.id;
           if (this.closed) {
             this.cb.onClose(false, this.seconds, this.sessionId, true);
             throw Error("Voice closed");
           }
-          await peer.setRemoteDescription({
-            type: "answer",
-            sdp: result.transport.sdp,
-          });
+          if (result.transport.websocketUrl) {
+            channel.close();
+            this.channel = undefined;
+            // Retain the unused local peer until teardown: iOS may initialize
+            // the shared ADM with it, while PCM owns the actual audio clock.
+            const socket = (this.socket = new WebSocket(
+              result.transport.websocketUrl,
+            ));
+            socket.onmessage = onMessage;
+            socket.onerror = () => {
+              reject(Error("Voice disconnected"));
+              if (!this.closed) void this.close();
+            };
+            socket.onclose = () => {
+              reject(Error("Voice disconnected"));
+              this.closeWait?.();
+              if (!this.closed && !this.finalized) {
+                this.cb.onClose(false, this.seconds, this.sessionId, false);
+                void this.close();
+              }
+            };
+            await this.pcm.startPcm((data) => {
+              if (
+                !this.ready ||
+                this.closed ||
+                socket.readyState !== WebSocket.OPEN
+              )
+                return;
+              if (socket.bufferedAmount > 256000) {
+                this.cb.onError("Voice connection is too slow");
+                void this.close();
+                return;
+              }
+              this.send({ type: "session.audio.append", data, rate: 48000 });
+            });
+          } else
+            await peer.setRemoteDescription({
+              type: "answer",
+              sdp: result.transport.sdp,
+            });
           await started;
         })(),
         deadline,
@@ -391,6 +439,10 @@ export class NativeVoice implements VoicePort {
     }
   }
   private send(data: unknown) {
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify(data));
+      return;
+    }
     if (this.channel?.readyState === "open")
       this.channel.send(JSON.stringify(data));
   }
@@ -401,7 +453,9 @@ export class NativeVoice implements VoicePort {
   ) {
     if (!this.ready || this.closed) return;
     this.activity();
-    for (const part of content.match(/[^]{1,220}/gu) ?? [])
+    for (const part of this.socket
+      ? [content]
+      : (content.match(/[^]{1,220}/gu) ?? []))
       this.send({
         type: `session.${type}.append`,
         event_id: crypto.randomUUID(),
@@ -517,6 +571,7 @@ export class NativeVoice implements VoicePort {
     }
     this.ready = false;
     this.channel?.close();
+    this.socket?.close();
     this.peer?.close();
     this.tracks = [];
     await this.recording.catch(() => {});

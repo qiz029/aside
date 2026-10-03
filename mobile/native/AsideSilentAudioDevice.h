@@ -9,4 +9,8 @@
 - (void)resetOutput:(uint64_t)generation;
 - (void)outputCommand:(NSInteger)mode generation:(uint64_t)generation epoch:(uint64_t)epoch;
 - (NSDictionary *)audioStatus;
+- (BOOL)startPcm:(uint64_t)generation error:(NSError **)error;
+- (void)stopPcm:(uint64_t)generation;
+- (void)appendPcm:(NSString *)data generation:(uint64_t)generation epoch:(uint64_t)epoch;
+- (NSString *)takePcmInput:(uint64_t)generation;
 @end

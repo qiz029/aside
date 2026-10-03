@@ -136,6 +136,18 @@ export class LiveDelegation {
   receive(event: Record<string, unknown>) {
     if (this.closed) return;
     switch (event.type) {
+      case "session.turn.cancelled":
+        if (this.delegation) this.retire(this.delegation.id);
+        this.waiting?.cancel();
+        this.waiting = undefined;
+        this.delegation = undefined;
+        if (this.input) this.responseTrigger.finished(this.input.turnId, false);
+        this.resetUtterance();
+        return;
+      case "session.turn.ended":
+        if (this.input) this.responseTrigger.finished(this.input.turnId, false);
+        this.resetUtterance();
+        return;
       case "session.input_transcript.delta":
         this.transcript(event);
         return;

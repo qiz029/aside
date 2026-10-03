@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { playerCommandSchema, playerConfigSchema } from "./player.js";
 export * from "./listening-archive.js";
+export * from "./feature-flags.js";
 export type * from "./podcasts.js";
 
 export const turnSchema = z.object({
@@ -87,6 +88,8 @@ export const questionSchema = z.object({
   conversation: conversationContextSchema.optional(),
 });
 export const liveSchema = z.object({
+  /** Explicit transport capability; absent on installed legacy clients. */
+  pcm: z.boolean().optional(),
   history: historySchema.default([]),
   sdp: z.string().min(1).max(64000),
   atMs: positionSchema,
@@ -245,7 +248,8 @@ export const liveControlEventSchema = z.discriminatedUnion("type", [
 export type LiveControlEvent = z.infer<typeof liveControlEventSchema>;
 export interface LiveResult {
   session: { id: string };
-  transport: { sdp: string };
+  transport: { sdp: string; websocketUrl?: string };
+  provider?: "openai" | "gemini";
   control?: boolean;
   /** The session may be replaced by a new one when its time runs out (accounts). */
   renewable?: boolean;

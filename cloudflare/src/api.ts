@@ -1,4 +1,8 @@
-import { cleanupAccount, requireMobileConsent } from "./account-data.js";
+import {
+  cleanupAccount,
+  requireMobileConsent,
+  hasGeminiConsent,
+} from "./account-data.js";
 import { getContainer } from "@cloudflare/containers";
 import {
   authorize,
@@ -47,9 +51,19 @@ import {
 } from "./usage.js";
 import { rollupDailyStats } from "./stats.js";
 import { isShellRoute, seoRoute } from "./seo.js";
-import { PodcastImportError, resolveAppleEpisode, streamPodcastAudio } from "../../backend/src/podcast-import.js";
-import { podcastRoute, podcastSelectionSchema, selectedPodcast, refreshSubscriptions } from "./podcasts.js";
+import {
+  PodcastImportError,
+  resolveAppleEpisode,
+  streamPodcastAudio,
+} from "../../backend/src/podcast-import.js";
+import {
+  podcastRoute,
+  podcastSelectionSchema,
+  selectedPodcast,
+  refreshSubscriptions,
+} from "./podcasts.js";
 import { listeningArchiveRoute } from "./listening-archive.js";
+import { featureContext, voiceFeatures } from "./feature-flags.js";
 
 async function audio(request: Request, env: Env, id: string, mime: string) {
   const key = `episodes/${id}/original`;
@@ -114,34 +128,65 @@ async function route(
     method = request.method;
   const store = new CloudStore(env.DB, env.AUDIO);
   if (path === "/api/podcasts/import" && method === "POST") {
-    if (!accountId) throw new HttpError(401, "请先登录 / Sign in to import a podcast");
+    if (!accountId)
+      throw new HttpError(401, "请先登录 / Sign in to import a podcast");
     await requireMobileConsent(request, env, accountId);
     await authorize(request, env, owner, accountId);
-    if (env.ALLOW_UPLOADS !== "true") throw new HttpError(403, "当前未开放导入");
+    if (env.ALLOW_UPLOADS !== "true")
+      throw new HttpError(403, "当前未开放导入");
     const selection = podcastSelectionSchema.parse(await readJson(request));
     const day = new Date().toISOString().slice(0, 10);
-    const imported = "url" in selection ? await resolveAppleEpisode(selection.url) : await selectedPodcast(env, selection);
-    const existing = await store.findPodcast(owner, imported.episode.podcast!.feedUrl, imported.episode.podcast!.guid);
+    const imported =
+      "url" in selection
+        ? await resolveAppleEpisode(selection.url)
+        : await selectedPodcast(env, selection);
+    const existing = await store.findPodcast(
+      owner,
+      imported.episode.podcast!.feedUrl,
+      imported.episode.podcast!.guid,
+    );
     if (!existing) {
       await store.reserve(`podcast-import:${day}:${owner}`, 5);
       await store.reserve(`podcast-import:${day}:global`, 200);
     }
-    const episode = existing ?? await store.createPodcast(owner, imported.episode,
-      positiveLimit(env.ACCOUNT_STORAGE_LIMIT_BYTES, 20 * 1024 ** 3),
-      positiveLimit(env.GLOBAL_STORAGE_LIMIT_BYTES, 100 * 1024 ** 3));
+    const episode =
+      existing ??
+      (await store.createPodcast(
+        owner,
+        imported.episode,
+        positiveLimit(env.ACCOUNT_STORAGE_LIMIT_BYTES, 20 * 1024 ** 3),
+        positiveLimit(env.GLOBAL_STORAGE_LIMIT_BYTES, 100 * 1024 ** 3),
+      ));
     if (episode.status === "queued") await startAnalysis(env, episode.id);
-    return json({ episode: await store.episode(await store.row(episode.id, owner)), positionMs: imported.positionMs }, episode.id === imported.episode.id ? 201 : 200);
+    return json(
+      {
+        episode: await store.episode(await store.row(episode.id, owner)),
+        positionMs: imported.positionMs,
+      },
+      episode.id === imported.episode.id ? 201 : 200,
+    );
   }
-  if (path.startsWith("/api/podcasts/")) return podcastRoute(request, env, accountId);
+  if (path.startsWith("/api/podcasts/"))
+    return podcastRoute(request, env, accountId);
   if (path === "/api/trial") return trialRoute(request, env, owner, accountId);
-  if (path === "/api/health" && method === "GET")
+  if (path === "/api/health" && method === "GET") {
+    const features = await voiceFeatures(
+      env,
+      featureContext(
+        request,
+        owner,
+        accountId,
+        env.FEATURE_ENVIRONMENT ?? "development",
+      ),
+    );
     return json({
       ok: true,
       liveConfigured:
         !!env.OPENAI_API_KEY &&
         !!env.TURNSTILE_SITE_KEY &&
         !!env.TURNSTILE_SECRET_KEY &&
-        env.AI_ENABLED !== "false",
+        features.liveEnabled,
+      features,
       trial: true,
       model: "gpt-live-1",
       microphone: { ...readMicrophoneConfig({}), maxCaptureMs: 30000 },
@@ -149,6 +194,7 @@ async function route(
       uploadMode: "multipart",
       uploadsEnabled: env.ALLOW_UPLOADS === "true",
     });
+  }
   if (path === "/api/episodes" && method === "GET")
     return json(await store.list(owner));
   if (path.startsWith("/api/space/")) {
@@ -176,7 +222,13 @@ async function route(
   const metadata = JSON.parse(row.metadata);
   if (!action && method === "GET") return json(await store.episode(row));
   if (action === "audio" && ["GET", "HEAD"].includes(method)) {
-    if (metadata.podcast) return streamPodcastAudio(metadata.podcast.audioUrl, method, request.headers.get("range"), request.signal);
+    if (metadata.podcast)
+      return streamPodcastAudio(
+        metadata.podcast.audioUrl,
+        method,
+        request.headers.get("range"),
+        request.signal,
+      );
     if (
       row.public !== 1 &&
       (metadata.durationMs <= 0 || metadata.status === "blocked")
@@ -284,7 +336,11 @@ async function route(
         .first();
       if (!result) throw new HttpError(404, "语音会话不存在");
       if (data.finalized || data.closed)
-        await env.LIVE.get(env.LIVE.idFromName(owner)).close(data.sessionId);
+        await (
+          data.sessionId.startsWith("gemini_")
+            ? env.GEMINI_LIVE.get(env.GEMINI_LIVE.idFromName(owner))
+            : env.LIVE.get(env.LIVE.idFromName(owner))
+        ).close(data.sessionId);
       return json({ ok: true });
     }
   }
@@ -302,7 +358,11 @@ async function route(
     // This is an existing authenticated Live lease, not a billable request per
     // fragment. Updates carry playback state and execution acknowledgements,
     // never browser-selected speech or intent decisions.
-    return env.LIVE.get(env.LIVE.idFromName(owner)).fetch(
+    return (
+      sessionId.startsWith("gemini_")
+        ? env.GEMINI_LIVE.get(env.GEMINI_LIVE.idFromName(owner))
+        : env.LIVE.get(env.LIVE.idFromName(owner))
+    ).fetch(
       new Request(target, {
         method,
         ...(data
@@ -392,7 +452,28 @@ async function route(
   const episode = await store.episode(row);
   if (!episode.analysis) throw new HttpError(409, "节目尚未完成分析");
   if (action === "live") {
+    const features = await voiceFeatures(
+      env,
+      featureContext(
+        request,
+        owner,
+        accountId,
+        env.FEATURE_ENVIRONMENT ?? "development",
+        { episodeId: id },
+      ),
+    );
+    if (!features.liveEnabled)
+      throw new HttpError(
+        403,
+        "实时语音暂未开放 / Live voice is currently unavailable",
+        "feature_disabled",
+      );
     const data = liveSchema.parse(await readJson(request));
+    const useGemini =
+      !!accountId &&
+      data.pcm === true &&
+      features.provider === "gemini" &&
+      (await hasGeminiConsent(request, env, accountId));
     // Validate operator configuration before reserving a live lease.
     liveSessionPolicy(env, !!accountId);
     const token = await acquire(env, owner, "live");
@@ -403,6 +484,18 @@ async function route(
       await release(env, owner, "live", token);
       throw error;
     }
+    // Old installed clients cannot negotiate PCM even when their account is eligible.
+    if (accountId && useGemini)
+      return json(
+        await env.GEMINI_LIVE.get(env.GEMINI_LIVE.idFromName(owner)).start(
+          owner,
+          token,
+          id,
+          episode.analysis,
+          { ...data, atMs: Math.min(data.atMs, episode.durationMs) },
+          accountId,
+        ),
+      );
     // Once dispatched, only the supervisor can release the lease: network failure is ambiguous.
     return json(
       await env.LIVE.get(env.LIVE.idFromName(owner)).start(
@@ -600,6 +693,16 @@ export default {
         !appleCallback
       )
         throw new HttpError(403, "Origin required");
+      if (path === "/api/live-audio" && request.method === "GET") {
+        const url = new URL(request.url),
+          owner = url.searchParams.get("owner");
+        if (!owner || owner.length > 200)
+          throw new HttpError(400, "Invalid voice owner");
+        url.pathname = "/audio";
+        return env.GEMINI_LIVE.get(env.GEMINI_LIVE.idFromName(owner)).fetch(
+          new Request(url, request),
+        );
+      }
       const identity = await session(request, env.SESSION_SECRET);
       const result =
         path.startsWith("/api/auth/") || path.startsWith("/api/profile")
@@ -633,9 +736,14 @@ export default {
       if (/^\/api\/podcasts\/(?:search|shows\/\d+)$/.test(path)) {
         const detail = error instanceof Error ? error.message : "";
         console.error("Podcast catalog failure", {
-          reason: /^(?:Podcast host returned HTTP \d{3}|Cannot resolve podcast host|Podcast host is not public|Podcast resource is too large|Too many podcast redirects|Invalid podcast redirect)$/.test(detail)
-            ? detail
-            : error instanceof Error ? error.name : "unknown",
+          reason:
+            /^(?:Podcast host returned HTTP \d{3}|Cannot resolve podcast host|Podcast host is not public|Podcast resource is too large|Too many podcast redirects|Invalid podcast redirect)$/.test(
+              detail,
+            )
+              ? detail
+              : error instanceof Error
+                ? error.name
+                : "unknown",
         });
       }
       console.error("Aside API request failed", {
@@ -694,7 +802,9 @@ export default {
     ).all<{ id: string }>();
     for (const account of accounts.results)
       await cleanupAccount(env, account.id).catch(() => {});
-    await refreshSubscriptions(env).catch(() => console.error("Podcast subscription refresh failed"));
+    await refreshSubscriptions(env).catch(() =>
+      console.error("Podcast subscription refresh failed"),
+    );
     await cleanupStaleUploads(env);
     const deleted = await env.DB.prepare(
       "SELECT id FROM episodes WHERE deleted_at IS NOT NULL LIMIT 10",

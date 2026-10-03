@@ -45,6 +45,8 @@ const controlEvents = [];
 const sidebands = new Map();
 let liveReply;
 let responsesSocket;
+let geminiSocket;
+const geminiMessages = [];
 const usedProofs = new Set();
 const origin = "https://aside.test";
 const testerIp = "192.0.2.10";
@@ -75,6 +77,7 @@ before(async () => {
       compatibilityFlags: ["nodejs_compat"],
       d1Databases: ["DB"],
       r2Buckets: ["AUDIO"],
+      flagship: { FLAGS: { app_id: "aside-test-flags" } },
       email: {
         send_email: [
           {
@@ -86,6 +89,7 @@ before(async () => {
       durableObjects: {
         MEDIA: { className: "TestMedia", useSQLite: true },
         LIVE: { className: "TestLive", useSQLite: true },
+        GEMINI_LIVE: { className: "GeminiSupervisor", useSQLite: true },
       },
       workflows: {
         ANALYSIS: { name: "analysis-test", className: "TestAnalysis" },
@@ -101,6 +105,7 @@ before(async () => {
         SESSION_SECRET: "local-test-secret-at-least-32-characters",
         TRIAL_TEST_IP_HASHES: testerIpHash,
         OPENAI_API_KEY: "test-placeholder",
+        GEMINI_API_KEY: "gemini-test-placeholder",
         ASIDE_LIVE_ACCOUNT_SESSION_SECONDS: "1800",
         ALLOW_UPLOADS: "true",
         AUTH_EMAIL_FROM: "login@auth.asidefm.com",
@@ -125,6 +130,17 @@ before(async () => {
       },
       outboundService: async (request) => {
         networkCalls.push(new URL(request.url).pathname);
+        if (new URL(request.url).hostname === "generativelanguage.googleapis.com") {
+          assert.equal(new URL(request.url).searchParams.get("key"), "gemini-test-placeholder");
+          const pair = new WebSocketPair(); pair[1].accept(); geminiSocket = pair[1];
+          pair[1].addEventListener("message", event => {
+            const m = JSON.parse(event.data); geminiMessages.push(m);
+            // Google also sends binary JSON frames.
+            if (m.setup) pair[1].send(new TextEncoder().encode(JSON.stringify({ setupComplete: {} })));
+          });
+          pair[1].addEventListener("close", () => { try { pair[1].close(); } catch {} });
+          return new WorkerResponse(null, { status: 101, webSocket: pair[0] });
+        }
         if (new URL(request.url).hostname === "cloudflare-dns.com") return Response.json({ Answer: [{ type: 1, data: "93.184.216.34" }] });
         if (new URL(request.url).hostname === "itunes.apple.com") return Response.json({ results: [
           { collectionId: 123, collectionName: "Test Podcast", artistName: "Test Host", feedUrl: "https://feeds.example.com/podcast.xml" },
@@ -386,6 +402,35 @@ function archivedTurn(sequence, overrides = {}) {
   return { sequence, role: "user", text: "What could we build from this idea?", atMs: 1000,
     source: "text", status: "completed", sources: [], ...overrides };
 }
+
+test("Flagship targets health and blocks new Live sessions before supplier calls or leases", async () => {
+  const admin = (await mf.getFlagshipBindingAPI("FLAGS"))();
+  const user = await visitor();
+  await seed("flagged-episode", user.id);
+  await admin.putFlag({
+    key: "live_enabled", enabled: true, default_variation: "on",
+    variations: { on: true, off: false },
+    rules: [{ priority: 1, conditions: [{ attribute: "platform", operator: "equals", value: "ios" }], serve_variation: "off" }],
+  });
+  try {
+    const health = await user.request("/api/health", "GET", undefined, { "x-aside-platform": "ios" });
+    assert.equal(health.headers.get("cache-control"), "no-store");
+    const body = await health.json();
+    assert.equal(body.liveConfigured, false);
+    assert.equal(body.features.liveEnabled, false);
+    assert.equal((await (await user.request("/api/health", "GET", undefined, { "x-aside-platform": "web" })).json()).features.liveEnabled, true);
+    const before = liveCreations.length;
+    const rejected = await user.request("/api/episodes/flagged-episode/live", "POST", { sdp: "offer", atMs: 0 }, { "x-aside-platform": "ios" });
+    assert.equal(rejected.status, 403, await rejected.clone().text());
+    assert.equal((await rejected.json()).code, "feature_disabled");
+    assert.equal(liveCreations.length, before);
+    assert.equal(await db.prepare("SELECT token FROM trial_leases WHERE owner=? AND kind='live'").bind(user.id).first(), null);
+    await admin.patchFlag("live_enabled", { enabled: false, default_variation: "off" });
+    assert.equal((await (await user.request("/api/health")).json()).features.liveEnabled, false);
+  } finally {
+    await admin.deleteFlag("live_enabled");
+  }
+});
 
 test("listening archive requires login and isolates both private and public episodes", async () => {
   const guest = await visitor(false), a = await signedInAccount(), b = await signedInAccount();
@@ -3603,4 +3648,56 @@ test("scheduled subscriptions discover new episodes without creating audio jobs 
     await new Promise(resolve=>setTimeout(resolve,10));
   }
   assert.equal(await db.prepare("SELECT 1 FROM podcast_subscriptions WHERE owner_id=?").bind(account.id).first(),null);
+});
+
+
+test("Gemini account targeting, capability fallback, one-use transport ticket and teardown", async () => {
+  const admin = (await mf.getFlagshipBindingAPI("FLAGS"))();
+  const user = await signedInAccount(), other = await signedInAccount();
+  await seed("gemini-target", user.id); await seed("gemini-other", other.id);
+  const rules = [{ priority: 1, conditions: [{ attribute: "userId", operator: "equals", value: user.id }, { attribute: "authenticated", operator: "equals", value: true }], serve_variation: "on" }];
+  await admin.putFlag({ key: "gemini_live_enabled", enabled: true, default_variation: "off", variations: { on: true, off: false }, rules });
+  await admin.putFlag({ key: "voice_provider", enabled: true, default_variation: "off", variations: { on: "gemini", off: "openai" }, rules });
+  try {
+    const health = await (await user.request("/api/health")).json();
+    assert.equal(health.features.provider, "gemini");
+    assert.equal((await (await other.request("/api/health")).json()).features.provider, "openai");
+    // Existing installed clients still receive SDP, never an unsupported socket.
+    const legacyResponse = await user.request("/api/episodes/gemini-target/live", "POST", { sdp: "offer", atMs: 0 });
+    assert.equal(legacyResponse.status, 200, await legacyResponse.clone().text());
+    const legacy = await legacyResponse.json(); assert.ok(legacy.transport.sdp); assert.equal(legacy.transport.websocketUrl, undefined);
+    const live = await mf.getDurableObjectNamespace("LIVE");
+    await live.get(live.idFromName(user.id)).close(legacy.session.id);
+    for (let i = 0; i < 50; i++) {
+      if (!(await db.prepare("SELECT token FROM trial_leases WHERE owner=? AND kind='live'").bind(user.id).first())) break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    const response = await user.request("/api/episodes/gemini-target/live", "POST", { sdp: "offer", pcm: true, atMs: 0 });
+    assert.equal(response.status, 200, await response.clone().text());
+    const created = await response.json(); assert.equal(created.provider, "gemini");
+    const url = new URL(created.transport.websocketUrl); url.protocol = "https:";
+    assert.ok(!url.href.includes("gemini-test-placeholder"));
+    const wrong = new URL(url); wrong.searchParams.set("ticket", "wrong");
+    assert.equal((await mf.dispatchFetch(wrong, { headers: { Upgrade: "websocket", Origin: origin } })).status, 403);
+    const connected = await mf.dispatchFetch(url, { headers: { Upgrade: "websocket", Origin: origin } });
+    assert.equal(connected.status, 101);
+    const socket = connected.webSocket, events = [];
+    const started = new Promise(resolve => socket.addEventListener("message", e => { const m = JSON.parse(e.data); events.push(m); if (m.type === "session.started") resolve(); }));
+    socket.accept(); await Promise.race([started, new Promise((_, reject) => setTimeout(() => reject(Error("Gemini setup event missing: " + JSON.stringify({ messages: geminiMessages.map(m => Object.keys(m)), events }))), 5000))]);
+    assert.equal((await mf.dispatchFetch(url, { headers: { Upgrade: "websocket", Origin: origin } })).status, 403);
+    socket.send(JSON.stringify({ type: "session.audio.append", data: "AQACAA==", rate: 16000 }));
+    for (let i = 0; i < 50 && !geminiMessages.some(m => m.realtimeInput); i++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.ok(geminiMessages.some(m => m.realtimeInput?.audio?.mimeType === "audio/pcm;rate=16000"));
+    const ended = new Promise(resolve => socket.addEventListener("close", resolve));
+    socket.send(JSON.stringify({ type: "session.close" })); await Promise.race([ended, new Promise((_, reject) => setTimeout(() => reject(Error("Gemini close event missing")), 5000))]);
+    for (let i = 0; i < 50; i++) {
+      if (!(await db.prepare("SELECT token FROM trial_leases WHERE owner=? AND kind='live'").bind(user.id).first())) break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(await db.prepare("SELECT token FROM trial_leases WHERE owner=? AND kind='live'").bind(user.id).first(), null);
+    assert.equal((await db.prepare("SELECT finalized FROM voice_usage WHERE session_id=?").bind(created.session.id).first()).finalized, 1);
+  } finally {
+    await admin.deleteFlag("gemini_live_enabled"); await admin.deleteFlag("voice_provider");
+    try { geminiSocket?.close(); } catch {}
+  }
 });

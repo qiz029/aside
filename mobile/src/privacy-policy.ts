@@ -1,13 +1,13 @@
-export const CONSENT_VERSION = "2026-09-21";
+export const CONSENT_VERSION = "2026-10-03";
 export const privacyCopy = {
   zh: [
     [
       "隐私与 AI 数据处理",
-      "版本：2026-09-21。Aside 保存账号邮箱、昵称、上传的音频、转录、收听进度和问答记录，用于登录、播放、同步和回答问题。",
+      "版本：2026-10-03。Aside 保存账号邮箱、昵称、上传的音频、转录、收听进度和问答记录，用于登录、播放、同步和回答问题。",
     ],
     [
       "数据会交给谁",
-      "Cloudflare 托管服务和保存数据。上传音频进行分析时，音频片段会发送给 OpenAI 转录和分析；提问时，录音或问题文字，以及相关节目转录和对话上下文会发送给 OpenAI。启用语音意图识别时，转录的发言也可能通过 OpenRouter 发送给 TypeSafe，用于识别暂停、续播或提问意图。",
+      "Cloudflare 托管服务和保存数据。上传音频进行分析时，音频片段会发送给 OpenAI 转录和分析；提问时，录音或问题文字，以及相关节目转录和对话上下文会发送给 OpenAI。启用 Gemini 实时语音时，麦克风音频、相关节目转录和对话上下文会发送给 Google Gemini 生成语音回答。启用语音意图识别时，转录的发言也可能通过 OpenRouter 发送给 TypeSafe，用于识别暂停、续播或提问意图。",
     ],
     [
       "你的选择",
@@ -25,11 +25,11 @@ export const privacyCopy = {
   en: [
     [
       "Privacy and AI data processing",
-      "Version: 2026-09-21. Aside stores your account email, profile, uploaded audio, transcripts, listening progress and conversations to provide sign-in, playback, synchronization and answers.",
+      "Version: 2026-10-03. Aside stores your account email, profile, uploaded audio, transcripts, listening progress and conversations to provide sign-in, playback, synchronization and answers.",
     ],
     [
       "Who receives data",
-      "Cloudflare hosts the service and stores data. Audio segments are sent to OpenAI for transcription and analysis. Questions send your recording or text, relevant episode transcripts and conversation context to OpenAI. When voice-intent detection is enabled, transcribed speech may also be sent through OpenRouter to TypeSafe to recognize pause, resume or question intent.",
+      "Cloudflare hosts the service and stores data. Audio segments are sent to OpenAI for transcription and analysis. Questions send your recording or text, relevant episode transcripts and conversation context to OpenAI. When Gemini live voice is enabled, microphone audio, relevant episode transcripts and conversation context are sent to Google Gemini to generate spoken replies. When voice-intent detection is enabled, transcribed speech may also be sent through OpenRouter to TypeSafe to recognize pause, resume or question intent.",
     ],
     [
       "Your choices",
